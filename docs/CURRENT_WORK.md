@@ -42,12 +42,14 @@
 > さらに **アビリティ召喚** (`12231d0`)・**修理装置 Lv 別回復率** (`5f7b63f`)・**修理/補給 経験値** (`2597162`)。
 > テスト **1771 件**緑。
 
-> **2026-06-15 追記**: §「★ 残課題サマリ」B クイックウィンを 3 件消化。**MapWeapon を MapAttack の
+> **2026-06-15 追記**: §「★ 残課題サマリ」B クイックウィンを 4 件消化。**MapWeapon を MapAttack の
 > 別名として実装**（旧名称シナリオのマップ攻撃が無反応だったのを解消。`4dd53e6`）/ **マップコマンド
 > 「作戦目的」を配線**（dead API だった `fire_victory_condition_event` を `勝利条件:` ラベル定義時のみ
 > メニュー表示・選択で発火。`4ada399`）/ **移動不能/足止め/捕縛は対応済と確認**（`move_disabled()` が
-> 網羅・`unit_move_range` が読む。コード変更不要）。回帰テスト 2 件追加。`master` から feature ブランチ
-> `feat/quickwins-mapweapon` 上。test/clippy/wasm-check 全緑。
+> 網羅・`unit_move_range` が読む。コード変更不要）/ **`.eve CallIntermissionCommand データセーブ` 実体化**
+> （ログ stub →メニュー経路と共有。`ebabf15`）。回帰テスト 3 件追加。`master` から feature ブランチ
+> `feat/quickwins-mapweapon` 上。test/clippy/wasm-check 全緑。B 残りは「ステータスの単機詳細化」と
+> 「乗り換えの Option ゲーティング」（いずれも MVP 拡張で quick win ではない）。
 
 VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 本ドキュメントは作業継続のための要約。**解決済み課題は §9 に 1 行で要約**し、本文は
@@ -89,7 +91,9 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 - ✅ **移動不能/足止め/捕縛** — 確認の結果、対応済だった。`UnitInstance::move_disabled()` が
   捕縛/麻痺/移動不能/足止め/凍結/石化（`ConditionEffect::MoveDisabled` 保持）を網羅し、
   `db.rs::unit_move_range` が読んで空範囲にしている。コード変更不要。
-- `.eve CallIntermissionCommand データセーブ` はログ stub（メニュー経路のみ実装）。
+- ✅ **`.eve CallIntermissionCommand データセーブ`** — ログ stub だったのを実体化済（`ebabf15`）。
+  `intermission_data_save` を `pub(crate)` 化しメニュー経路と `.eve` 経路で共有（`to_save_json` →
+  `__quicksave`）。回帰テスト追加。
 - インターミッション**ステータスの単機詳細化**（現状は既存ロスター画面の再利用 MVP）・**乗り換えの Option ゲーティング**（`Option` コマンド未対応のため「2 機以上」で代替中）。
 
 ### C. 敵 AI の深掘り（中〜大）
