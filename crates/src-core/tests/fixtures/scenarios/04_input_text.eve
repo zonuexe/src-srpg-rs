@@ -1,0 +1,2 @@
+Input name パイロット名を入力 デフォルト
+Message $(name)

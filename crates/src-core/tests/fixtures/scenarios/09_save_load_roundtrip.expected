@@ -1,0 +1,30 @@
+== scene ==
+scene = Title
+stage = セーブ往復
+stage_state = Battle
+turn = 1 / Player
+money = 0
+briefing = 
+
+== modal ==
+modal_gate = Open
+pending_dialog = None
+pending_timer = None
+pending_audio = 0
+
+== messages (3) ==
+[0] saved
+[1] 出撃準備フェーズ
+[2] ターン 1 開始: 味方フェーズ
+
+== vars (3) ==
+chapter = 3
+hero = リオ
+選択 = 1
+
+== units (0) ==
+
+== hotpoints (0) ==
+
+== outcome ==
+Finished

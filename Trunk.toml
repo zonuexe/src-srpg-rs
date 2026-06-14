@@ -1,0 +1,13 @@
+# Trunk のエントリ HTML を src-web クレートに固定。
+# 開発時は `trunk serve` をワークスペースルートで実行する。
+[build]
+target = "crates/src-web/index.html"
+dist = "dist"
+
+[serve]
+addresses = ["127.0.0.1"]
+port = 8080
+open = false
+
+[watch]
+ignore = ["SRC_20121125", "dist", "target"]

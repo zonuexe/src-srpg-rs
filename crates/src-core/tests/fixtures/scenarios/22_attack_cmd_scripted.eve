@@ -1,0 +1,11 @@
+Stage "スクリプト戦闘"
+MapSize 6 6
+Pilot "リオ" リオ 男性 超能力者 AAAA 100 100 100 100 100 100 100
+Pilot "ガロ" ガロ 男性 一般 BBBC 50 100 100 100 100 100 100
+Unit ブレイバー リアル系 1 0 陸 5 M 1000 100 3500 120 1200 110 BBBC
+Weapon "ブレイバー" "ライフル" 2500 2 5 0 -1
+Unit ゾルダ Mass 1 0 陸 5 M 1000 100 2500 110 800 100 BBBC
+Place ブレイバー リオ Player 1 1
+Place ゾルダ ガロ Enemy 5 5
+Attack リオ ライフル ガロ 無抵抗
+Message damage_applied

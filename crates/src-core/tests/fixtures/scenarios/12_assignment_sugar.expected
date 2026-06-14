@@ -1,0 +1,28 @@
+== scene ==
+scene = Title
+stage = 
+stage_state = Briefing
+turn = 1 / Player
+money = 0
+briefing = 
+
+== modal ==
+modal_gate = Open
+pending_dialog = None
+pending_timer = None
+pending_audio = 0
+
+== messages (1) ==
+[0] 3000/1500/50
+
+== vars (3) ==
+hp = 1500
+maxhp = 3000
+percent = 50
+
+== units (0) ==
+
+== hotpoints (0) ==
+
+== outcome ==
+Finished

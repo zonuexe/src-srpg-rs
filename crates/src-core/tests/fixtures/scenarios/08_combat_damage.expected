@@ -1,0 +1,27 @@
+== scene ==
+scene = Title
+stage = テスト戦闘
+stage_state = Briefing
+turn = 1 / Player
+money = 0
+briefing = 
+
+== modal ==
+modal_gate = Open
+pending_dialog = None
+pending_timer = None
+pending_audio = 0
+
+== messages (1) ==
+[0] attacked
+
+== vars (0) ==
+
+== units (2) ==
+[0] ブレイバー/リオ Player @(1,1) HP=3500/3500 EN=120/120 morale=100
+[1] ゾルダII/ガロ Enemy @(4,1) HP=1900/2400 EN=100/100 morale=100
+
+== hotpoints (0) ==
+
+== outcome ==
+Finished

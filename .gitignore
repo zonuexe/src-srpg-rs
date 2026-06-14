@@ -1,0 +1,37 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Trunk
+/dist
+
+# Nix
+result
+result-*
+.direnv/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# エージェント / 作業用一時ディレクトリ
+.omo/
+
+# 実シナリオ検証用フィクスチャ (各自で取得; サイズが大きく追跡しない)
+crates/src-web/tests/fixtures/
+
+# 汎用素材パック (SRC_Graph / SRC_BA / SRC_Wave 等)。公式から各自取得して
+# ここへ置くと起動時に自動読込される。再配布規約のためリポジトリには含めない
+# (ディレクトリは .gitkeep で保持し trunk copy-dir を成立させる)。
+crates/src-web/vendor-assets/*
+!crates/src-web/vendor-assets/.gitkeep
+
+# .claude はグローバル ignore に入っていることが多いが、プロジェクトの dev
+# サーバ起動構成 (launch.json) はリポジトリで共有したい。
+!.claude/
+.claude/settings.local.json
+.claude/*.local.json

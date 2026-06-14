@@ -1,0 +1,3 @@
+# 全 Talk を自動 advance、Wait があれば tick で消化。
+# 3 話 × 数 Talk = 約 20 回程度の dialog があれば足りるが、念のため 200。
+drain 200

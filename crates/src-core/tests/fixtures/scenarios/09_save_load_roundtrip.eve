@@ -1,0 +1,7 @@
+Stage "セーブ往復"
+Set chapter 3
+Set hero リオ
+Confirm 続行しますか
+If $(選択) = 1 Then
+  Message saved
+EndIf

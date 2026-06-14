@@ -1,0 +1,27 @@
+== scene ==
+scene = Title
+stage = 
+stage_state = Victory
+turn = 1 / Player
+money = 0
+briefing = 
+
+== modal ==
+modal_gate = Open
+pending_dialog = None
+pending_timer = None
+pending_audio = 0
+
+== messages (2) ==
+[0] 【勝利】
+[1] victory_done
+
+== vars (1) ==
+ending_fired = 1
+
+== units (0) ==
+
+== hotpoints (0) ==
+
+== outcome ==
+Finished

@@ -1,0 +1,28 @@
+== scene ==
+scene = Title
+stage = 
+stage_state = Briefing
+turn = 1 / Player
+money = 0
+briefing = 
+
+== modal ==
+modal_gate = Open
+pending_dialog = None
+pending_timer = None
+pending_audio = 3
+  [0] StartBgm { name: "battle.mid" }
+  [1] PlaySound { name: "hit.wav" }
+  [2] StopBgm
+
+== messages (1) ==
+[0] done
+
+== vars (0) ==
+
+== units (0) ==
+
+== hotpoints (0) ==
+
+== outcome ==
+Finished

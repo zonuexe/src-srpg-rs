@@ -1,0 +1,47 @@
+# 18_total_annihilation_autofire.eve
+#
+# Destruction 後の全滅判定: 敵陣営のユニットを全滅させると `全滅 敵`
+# auto-fire が発火する (SRC.Sharp `Unit.attackmap.cs::HandleEvent("全滅", uparty)` 同等)。
+#
+# 検証ポイント:
+# - 1 機目を倒した時点では `全滅 敵` は発火しない
+# - 2 機目 (全滅) で 1 度だけ発火
+# - 同陣営に味方が残っていても trigger される (相手側だけの全滅判定)
+# - 発火タイミングは原典 EventQue 準拠: スクリプト実行中の Kill が積んだ
+#   イベントは現在のスクリプト完了後に実行される (after_second_kill →
+#   annihilation_fired の順)。旧実装の再入即時実行は ctx 上書きハザードがあった
+
+Pilot "鋼鉄1号" 鋼1 男性 一般 BBBC 50 100 120 110 110 100 100
+Pilot "鋼鉄2号" 鋼2 男性 一般 BBBC 50 100 120 110 110 100 100
+Pilot "味方A" 味A 男性 一般 BBBC 50 100 120 110 110 100 100
+Unit "敵A" リアル系 1 3 陸 5 M 1000 200 1200 100 800 80 BBBC
+Weapon "敵A" "適当" 500 1 3 10 -1
+Unit "敵B" リアル系 1 3 陸 5 M 1000 200 1200 100 800 80 BBBC
+Weapon "敵B" "適当" 500 1 3 10 -1
+Unit "味方ブレイバー" リアル系 1 4 陸 5 M 3000 400 3500 120 1200 110 AAAA
+Weapon "味方ブレイバー" "ライフル" 2500 2 5 15 -1
+
+MapSize 8 8
+
+Place "味方ブレイバー" "味方A"   Player 1 1
+Place "敵A"           "鋼鉄1号" Enemy  3 3
+Place "敵B"           "鋼鉄2号" Enemy  4 4
+
+# 敵 A だけ撃破: まだ全滅ではない
+Kill 鋼鉄1号
+Message after_first_kill
+
+# 敵 B も撃破: 全滅トリガ発火
+Kill 鋼鉄2号
+Message after_second_kill
+
+Exit
+
+全滅 敵:
+Incr enemy_wipeout_count
+Message annihilation_fired
+Return
+
+全滅 味方:
+Set ally_wipeout 1
+Return

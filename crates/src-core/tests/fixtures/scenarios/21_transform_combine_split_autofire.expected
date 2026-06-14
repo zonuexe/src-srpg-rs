@@ -1,0 +1,28 @@
+== scene ==
+scene = Title
+stage = 
+stage_state = Briefing
+turn = 1 / Player
+money = 0
+briefing = 
+
+== modal ==
+modal_gate = Open
+pending_dialog = None
+pending_timer = None
+pending_audio = 0
+
+== messages (1) ==
+[0] done
+
+== vars (2) ==
+combine_fired = 1
+xform_fired = 1
+
+== units (1) ==
+[0] オメガバスター/ジェイ Player @(1,1) HP=4500/4500 EN=130/130 morale=100
+
+== hotpoints (0) ==
+
+== outcome ==
+Finished

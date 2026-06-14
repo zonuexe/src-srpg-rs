@@ -1,0 +1,18 @@
+[package]
+name = "verify-archive"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Native CLI: walk a real SRC scenario .zip / .lzh and report what our parsers see"
+
+[[bin]]
+name = "verify-archive"
+path = "src/main.rs"
+
+[dependencies]
+src-core = { path = "../../crates/src-core" }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+delharc = "0.6"

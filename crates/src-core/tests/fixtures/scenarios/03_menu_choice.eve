@@ -1,0 +1,12 @@
+Menu 行動を選んでください
+攻撃
+防御
+逃走
+End
+If $(選択) = 2 Then
+  Message defend
+ElseIf $(選択) = 3 Then
+  Message flee
+Else
+  Message attack
+EndIf

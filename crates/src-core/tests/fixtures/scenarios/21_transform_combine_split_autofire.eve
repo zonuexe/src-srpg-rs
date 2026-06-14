@@ -1,0 +1,44 @@
+# ============================================================
+#  21_transform_combine_split_autofire.eve
+#
+#  `Transform` / `Combine` 命令完了後に同名 auto-fire ラベルが発火する
+#  ことを検証する合成 fixture。
+#  `Split` の分離先は UnitData.features に依存し、`.eve` 単独では feature を
+#  注入できないため、Split は `event_runtime.rs::tests` 側で別途検証する。
+#
+#  ラベル書式 (`変形イベント.md` / `合体イベント.md`):
+#  - `変形 <unit> <new_name>:`  unit→new_name へ変形した後
+#  - `合体 <unit> <new_name>:`  unit→new_name へ合体した後
+# ============================================================
+
+Pilot "ジェイ" ジェイ 男性 一般 BBBC 50 120 130 120 120 100 100
+
+Unit "ノーマル" リアル系 1 3 陸 5 M 2000 300 2500 110 1000 100 BBBC
+Weapon "ノーマル" "ガン" 1500 1 4 10 -1
+
+Unit "サイキックウィング" リアル系 1 4 陸空 6 M 2200 350 2700 120 1100 110 BBBC
+Weapon "サイキックウィング" "ガン" 1500 1 4 10 -1
+
+Unit "オメガバスター" スーパー系 1 5 陸 4 L 4500 500 4500 130 1500 130 BBBC
+Weapon "オメガバスター" "バスターキャノン" 3500 1 5 20 -1
+
+MapSize 8 8
+
+Place "ノーマル" "ジェイ" Player 1 1
+
+# 1) 変形: ノーマル → サイキックウィング
+Transform ジェイ サイキックウィング
+
+# 2) 合体: 現状 サイキックウィング → オメガバスター
+Combine ジェイ オメガバスター
+
+Message done
+Exit
+
+変形 ジェイ サイキックウィング:
+Incr xform_fired
+Return
+
+合体 ジェイ オメガバスター:
+Incr combine_fired
+Return

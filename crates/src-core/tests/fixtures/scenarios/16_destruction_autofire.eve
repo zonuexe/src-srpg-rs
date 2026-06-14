@@ -1,0 +1,64 @@
+# ============================================================
+#  16_destruction_autofire.eve
+#
+#  `Damage` / `Kill` でユニット撃破時に `Destruction <pilot>` 等の
+#  auto-fire ラベルが発火することを検証する合成 fixture。
+#
+#  検証ポイント:
+#  - Damage で HP を 0 以下にすると Destruction <pilot> が発火
+#  - Kill 命令でも同様
+#  - 日本語綴 (`破壊 <pilot>`) でも発火
+#  - pilot 名がマッチしない場合は unit 名 (UnitData.name) でフォールバック
+# ============================================================
+
+Pilot "鋼鉄1号" 鋼1 男性 一般 BBBC 50 100 120 110 110 100 100
+Pilot "鋼鉄2号" 鋼2 男性 一般 BBBC 50 100 120 110 110 100 100
+Pilot "鋼鉄3号" 鋼3 男性 一般 BBBC 50 100 120 110 110 100 100
+Pilot "鋼鉄4号" 鋼4 男性 一般 BBBC 50 100 120 110 110 100 100
+Unit "敵A" リアル系 1 3 陸 5 M 1000 200 1200 100 800 80 BBBC
+Weapon "敵A" "適当な武器" 500 1 3 10 -1
+Unit "敵B" リアル系 1 3 陸 5 M 1000 200 1200 100 800 80 BBBC
+Weapon "敵B" "適当な武器" 500 1 3 10 -1
+Unit "敵C" リアル系 1 3 陸 5 M 1000 200 1200 100 800 80 BBBC
+Weapon "敵C" "適当な武器" 500 1 3 10 -1
+Unit "敵D" リアル系 1 3 陸 5 M 1000 200 1200 100 800 80 BBBC
+Weapon "敵D" "適当な武器" 500 1 3 10 -1
+
+MapSize 8 8
+
+Place "敵A" "鋼鉄1号" Enemy 2 2
+Place "敵B" "鋼鉄2号" Enemy 3 3
+Place "敵C" "鋼鉄3号" Enemy 4 4
+Place "敵D" "鋼鉄4号" Enemy 5 5
+
+# 1) Damage で撃破: Destruction <pilot> が発火するはず
+Damage 鋼鉄1号 9999
+
+# 2) Kill で撃破: 同上
+Kill 鋼鉄2号
+
+# 3) pilot-keyed Destruction ラベルがある場合は pilot 優先
+Damage 敵C 9999
+
+# 4) pilot-keyed Destruction ラベルが無い場合は unit_data 名へフォールバック
+Damage 鋼鉄4号 9999
+
+Message all_damage_applied
+Exit
+
+Destruction 鋼鉄1号:
+Set d1_fired 1
+Return
+
+破壊 鋼鉄2号:
+Set d2_fired 1
+Return
+
+Destruction 鋼鉄3号:
+Set d3_fired 1
+Return
+
+# 鋼鉄4号 用のラベルは敢えて作らない。unit_data 「敵D」 のラベルだけ用意。
+Destruction 敵D:
+Set d4_unit_fallback 1
+Return

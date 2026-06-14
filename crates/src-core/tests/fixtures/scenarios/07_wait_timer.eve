@@ -1,0 +1,4 @@
+Set before 1
+Wait 1.0
+Set after 1
+Message done

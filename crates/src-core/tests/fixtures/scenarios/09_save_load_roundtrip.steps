@@ -1,0 +1,4 @@
+# モーダル中に save→load round-trip して、再開後に Yes 応答が同じ結果を返すことを確認。
+# pending_dialog / script_ctx の #[serde(skip)] 残漏れを検出する。
+saveload
+yes

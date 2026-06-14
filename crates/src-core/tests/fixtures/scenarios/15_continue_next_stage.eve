@@ -1,0 +1,24 @@
+# ============================================================
+#  15_continue_next_stage.eve
+#
+#  `Continue <filename>` の挙動を合成 fixture で検証する。
+#  著作権配慮のため SRC オリジナルシナリオの内容は一切含まない。
+#
+#  期待: プロローグ で `Continue stage_b.eve` → エピローグ にジャンプ
+#  → エピローグ で `epilogue_run` を立てて終了。
+#  最終状態で `次ステージ = stage_b.eve` と `epilogue_run = 1` が立つ。
+# ============================================================
+
+Goto プロローグ
+
+プロローグ:
+Set chapter 1
+Continue stage_b.eve
+
+# Continue はエピローグへ飛ぶので、ここは到達しない。
+Set should_not_reach 1
+Exit
+
+エピローグ:
+Set epilogue_run 1
+Message scenario_a_ended

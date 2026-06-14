@@ -1,0 +1,9 @@
+Set greeting empty
+greet World
+greet SRC
+Message $(greeting)
+Exit
+
+greet:
+  Set greeting "$(greeting) hello-$(Args(1))"
+  Return

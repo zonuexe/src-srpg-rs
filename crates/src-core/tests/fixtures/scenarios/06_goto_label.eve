@@ -1,0 +1,6 @@
+Set state start
+Goto target
+Set state skipped
+target:
+Set state arrived
+Message $(state)

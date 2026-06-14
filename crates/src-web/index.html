@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SRC (Rust port)</title>
+    <link data-trunk rel="rust" href="Cargo.toml" data-type="main" />
+    <!-- 汎用素材パック (SRC_Graph / SRC_BA / SRC_Wave 等) を dist/vendor-assets へ
+         コピーして配信する。再配布規約のためリポジトリには含めず、各自が
+         vendor-assets/ に配置する運用 (.gitkeep でディレクトリは常に存在し、
+         未配置でもビルドは壊れない)。起動時に lib.rs が自動 fetch する。 -->
+    <link data-trunk rel="copy-dir" href="vendor-assets" />
+    <!-- PicoAudio.js: ブラウザで MIDI を SoundFont 不要で鳴らすシンセ -->
+    <script src="https://cdn.jsdelivr.net/npm/picoaudio@1/dist/browser/PicoAudio.min.js"></script>
+    <script>
+      // 1 シナリオに 1 つだけ MIDI プレイヤを保持する単純な状態
+      window.__srcMidiPlayer = null;
+      window.srcPlayMidi = function(bytes, volume, loop) {
+        try {
+          if (typeof PicoAudio === 'undefined') {
+            console.warn('PicoAudio が未ロード');
+            return false;
+          }
+          if (window.__srcMidiPlayer) {
+            try { window.__srcMidiPlayer.stop(); } catch (_) {}
+          }
+          const pa = new PicoAudio();
+          pa.init();
+          const smf = pa.parseSMF(bytes.buffer || bytes);
+          pa.setData(smf);
+          if (typeof pa.setMasterVolume === 'function') {
+            pa.setMasterVolume(volume);
+          }
+          if (loop && typeof pa.setLoop === 'function') {
+            pa.setLoop(true);
+          }
+          pa.play();
+          window.__srcMidiPlayer = pa;
+          return true;
+        } catch (e) {
+          console.error('srcPlayMidi failed', e);
+          return false;
+        }
+      };
+      window.srcStopMidi = function() {
+        try {
+          if (window.__srcMidiPlayer) {
+            window.__srcMidiPlayer.stop();
+            window.__srcMidiPlayer = null;
+          }
+        } catch (e) {
+          console.error('srcStopMidi failed', e);
+        }
+      };
+    </script>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #06060c;
+        color: #d8d8e0;
+        font-family: system-ui, -apple-system, "Hiragino Kaku Gothic ProN", "Yu Gothic UI", sans-serif;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
+        min-height: 100vh;
+      }
+      header {
+        text-align: center;
+      }
+      header h1 {
+        margin: 0;
+        font-size: 18px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+      }
+      header p {
+        margin: 4px 0 0;
+        font-size: 12px;
+        opacity: 0.6;
+      }
+      #src-canvas {
+        /* 論理 640x480、HiDPI 環境で見やすいよう CSS で 1.5x 拡大表示。
+           Canvas の論理解像度は src-core::CANVAS_WIDTH/HEIGHT のまま保持。 */
+        background: #c0c0c0;
+        image-rendering: pixelated;
+        width: 960px;
+        height: 720px;
+        max-width: calc(100vw - 32px);
+        max-height: calc(100vh - 160px);
+        box-shadow: 0 0 0 1px #1c1c2a, 0 12px 40px rgba(0,0,0,0.6);
+      }
+      /* ===== メニューバー (Windows ライク) ===== */
+      #src-menubar {
+        display: flex;
+        align-items: stretch;
+        gap: 2px;
+        width: 960px;
+        max-width: calc(100vw - 32px);
+        box-sizing: border-box;
+        background: linear-gradient(#3a3a48, #2c2c38);
+        border: 1px solid #1c1c2a;
+        border-radius: 4px;
+        padding: 2px;
+        font-size: 13px;
+        user-select: none;
+      }
+      #src-menubar details.menu {
+        position: relative;
+      }
+      #src-menubar summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 4px 12px;
+        border-radius: 3px;
+        color: #e6e6f0;
+        white-space: nowrap;
+      }
+      #src-menubar summary::-webkit-details-marker { display: none; }
+      #src-menubar summary:hover,
+      #src-menubar details[open] > summary {
+        background: #4a4a60;
+      }
+      #src-menubar .menu-items {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        margin-top: 2px;
+        min-width: 200px;
+        background: #20202c;
+        border: 1px solid #4a4a60;
+        border-radius: 4px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+        padding: 4px;
+        z-index: 100;
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+      }
+      #src-menubar .menu-items button[data-menu-item] {
+        text-align: left;
+        background: transparent;
+        color: #e6e6f0;
+        border: 0;
+        border-radius: 3px;
+        padding: 6px 10px;
+        font-size: 13px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      #src-menubar .menu-items button[data-menu-item]:hover {
+        background: #3a6ea5;
+      }
+      #src-menubar .menu-items hr {
+        border: 0;
+        border-top: 1px solid #3a3a4a;
+        margin: 4px 2px;
+      }
+      #src-menubar .submenu-label {
+        font-size: 11px;
+        opacity: 0.55;
+        padding: 4px 10px 2px;
+      }
+      #src-menubar .slot-row {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 2px;
+        padding: 2px;
+      }
+      #src-menubar .slot-row button {
+        background: #2c2c3a;
+        color: #cfcfe0;
+        border: 1px solid #44445a;
+        border-radius: 3px;
+        padding: 4px 0;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      #src-menubar .slot-row button:hover { background: #3a6ea5; }
+      #src-menubar .slot-row button[aria-current="true"] {
+        background: #4e6a3a;
+        border-color: #6f9a4f;
+        font-weight: bold;
+      }
+      #src-menubar .menubar-action {
+        margin-left: auto;
+        align-self: center;
+        font-size: 12px;
+        padding: 4px 12px;
+        background: #3a3a4e;
+        color: #e0e0e8;
+        border: 1px solid #555;
+        border-radius: 3px;
+        cursor: pointer;
+      }
+      #src-menubar .menubar-action:hover { background: #4a4a60; }
+      footer {
+        font-size: 11px;
+        opacity: 0.4;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>SRC (Simulation RPG Construction) — Rust / WASM port</h1>
+      <p>VB6 製の原典コードを段階的に Rust + WebAssembly に移植します。</p>
+    </header>
+    <!-- Windows ライクなメニューバー。原典 SRC のメインウィンドウのメニュー構成
+         (マップコマンド) を踏襲しつつ、Web 移植固有の操作 (シナリオ読込 / リセット /
+         セーブスロット) を「システム」メニューにまとめる。各 <details> が 1 つの
+         ドロップダウンで、項目クリック時の動作は lib.rs (install_menu_bar) が配線する。 -->
+    <nav id="src-menubar" aria-label="メニュー">
+      <details class="menu" id="menu-system">
+        <summary>システム</summary>
+        <div class="menu-items">
+          <button type="button" data-menu-item id="mi-load-scenario">シナリオ読込...</button>
+          <button type="button" data-menu-item id="mi-reset">最初からやり直す</button>
+          <hr />
+          <button type="button" data-menu-item id="mi-save">セーブ</button>
+          <button type="button" data-menu-item id="mi-load">ロード</button>
+          <div class="submenu-label">セーブスロット</div>
+          <div class="slot-row" id="mi-slot-row">
+            <button type="button" id="mi-slot-0">0</button>
+            <button type="button" id="mi-slot-1">1</button>
+            <button type="button" id="mi-slot-2">2</button>
+            <button type="button" id="mi-slot-3">3</button>
+            <button type="button" id="mi-slot-4">4</button>
+            <button type="button" id="mi-slot-5">5</button>
+            <button type="button" id="mi-slot-6">6</button>
+            <button type="button" id="mi-slot-7">7</button>
+            <button type="button" id="mi-slot-8">8</button>
+            <button type="button" id="mi-slot-9">9</button>
+          </div>
+        </div>
+      </details>
+      <details class="menu" id="menu-mapcommand">
+        <summary>マップコマンド</summary>
+        <div class="menu-items">
+          <button type="button" data-menu-item id="mi-endturn">ターン終了</button>
+          <button type="button" data-menu-item id="mi-unitlist">部隊表</button>
+          <hr />
+          <button type="button" data-menu-item id="mi-autocounter">自動反撃モード</button>
+          <button type="button" data-menu-item id="mi-settings">設定変更</button>
+          <hr />
+          <button type="button" data-menu-item id="mi-quicksave">クイックセーブ</button>
+          <button type="button" data-menu-item id="mi-quickload">クイックロード</button>
+        </div>
+      </details>
+      <details class="menu" id="menu-help">
+        <summary>ヘルプ</summary>
+        <div class="menu-items">
+          <button type="button" data-menu-item id="mi-help-keys">操作説明</button>
+          <button type="button" data-menu-item id="mi-help-about">バージョン情報</button>
+          <button type="button" data-menu-item id="mi-copy-debug">デバッグ情報をコピー</button>
+        </div>
+      </details>
+      <!-- 右寄せ: 押しやすい位置に残すキャプチャボタン -->
+      <button id="src-capture" type="button" class="menubar-action">キャプチャ保存</button>
+    </nav>
+    <canvas id="src-canvas" width="640" height="480"></canvas>
+    <!-- シナリオ読込用ファイル入力。メニュー「シナリオ読込...」から click() で開くため
+         画面上は隠す（DOM には残す）。 -->
+    <input id="src-file" type="file" accept=".eve,.txt,.zip,.lzh" style="display:none;" />
+    <script>
+      // Canvas を PNG として保存。toBlob で大きな data URL を経由せずに済ませる。
+      document.addEventListener('DOMContentLoaded', function () {
+        var btn = document.getElementById('src-capture');
+        if (!btn) return;
+        btn.addEventListener('click', function () {
+          var canvas = document.getElementById('src-canvas');
+          if (!canvas) return;
+          var ts = new Date();
+          var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+          var name = 'src-' + ts.getFullYear() + pad(ts.getMonth() + 1) + pad(ts.getDate())
+            + '-' + pad(ts.getHours()) + pad(ts.getMinutes()) + pad(ts.getSeconds()) + '.png';
+          var save = function (blob) {
+            if (!blob) return;
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = url;
+            a.download = name;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+          };
+          if (canvas.toBlob) {
+            canvas.toBlob(save, 'image/png');
+          } else {
+            var dataUrl = canvas.toDataURL('image/png');
+            var a = document.createElement('a');
+            a.href = dataUrl;
+            a.download = name;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+          }
+        });
+      });
+    </script>
+    <script>
+      // メニューバーの開閉挙動 (Windows ライク):
+      //  - あるメニューを開いたら他は閉じる (同時に 1 つだけ)
+      //  - メニュー項目クリックで閉じる (実際の動作は lib.rs が配線)
+      //  - メニュー外クリック / Esc で閉じる
+      document.addEventListener('DOMContentLoaded', function () {
+        var bar = document.getElementById('src-menubar');
+        if (!bar) return;
+        var menus = Array.prototype.slice.call(bar.querySelectorAll('details.menu'));
+        var closeAll = function (except) {
+          menus.forEach(function (m) { if (m !== except) m.open = false; });
+        };
+        menus.forEach(function (m) {
+          m.addEventListener('toggle', function () { if (m.open) closeAll(m); });
+        });
+        bar.querySelectorAll('[data-menu-item], .slot-row button').forEach(function (btn) {
+          btn.addEventListener('click', function () { closeAll(null); });
+        });
+        document.addEventListener('click', function (e) {
+          if (!bar.contains(e.target)) closeAll(null);
+        });
+        document.addEventListener('keydown', function (e) {
+          if (e.key === 'Escape') closeAll(null);
+        });
+      });
+    </script>
+    <!-- `.eve` 内 `Input` 命令用テキスト入力オーバーレイ。デフォルトは非表示。 -->
+    <div id="src-input-overlay" style="display:none;position:fixed;inset:0;background:rgba(8,10,18,0.7);z-index:50;align-items:center;justify-content:center;">
+      <form id="src-input-form" style="background:#15182a;border:2px solid #f0e68c;padding:18px 22px;border-radius:6px;min-width:360px;display:flex;flex-direction:column;gap:10px;">
+        <div id="src-input-prompt" style="font-size:14px;color:#e0e0ff;"></div>
+        <input id="src-input-field" type="text" autocomplete="off" style="font-size:16px;padding:6px 10px;border:1px solid #555;border-radius:4px;background:#0a0a14;color:#fff;" />
+        <div style="display:flex;gap:10px;justify-content:flex-end;font-size:12px;">
+          <button type="button" id="src-input-cancel" style="padding:4px 10px;background:#444;color:#ddd;border:0;border-radius:3px;">キャンセル (Esc)</button>
+          <button type="submit" style="padding:4px 10px;background:#f0c060;color:#222;border:0;border-radius:3px;font-weight:bold;">OK (Enter)</button>
+        </div>
+      </form>
+    </div>
+    <footer>build: trunk · runtime: wasm-bindgen + web-sys</footer>
+  </body>
+</html>

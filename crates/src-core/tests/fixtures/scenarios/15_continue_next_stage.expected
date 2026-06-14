@@ -1,0 +1,28 @@
+== scene ==
+scene = Title
+stage = 
+stage_state = Briefing
+turn = 1 / Player
+money = 0
+briefing = 
+
+== modal ==
+modal_gate = Open
+pending_dialog = None
+pending_timer = None
+pending_audio = 0
+
+== messages (1) ==
+[0] scenario_a_ended
+
+== vars (3) ==
+chapter = 1
+epilogue_run = 1
+次ステージ = stage_b.eve
+
+== units (0) ==
+
+== hotpoints (0) ==
+
+== outcome ==
+Finished

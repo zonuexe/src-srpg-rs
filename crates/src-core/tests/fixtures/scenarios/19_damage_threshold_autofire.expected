@@ -1,0 +1,31 @@
+== scene ==
+scene = Title
+stage = 
+stage_state = Briefing
+turn = 1 / Player
+money = 0
+briefing = 
+
+== modal ==
+modal_gate = Open
+pending_dialog = None
+pending_timer = None
+pending_audio = 0
+
+== messages (1) ==
+[0] all_damage_applied
+
+== vars (3) ==
+enemy_party_fired = 2
+lod30_fired = 1
+lod50_fired = 1
+
+== units (3) ==
+[0] 敵A/ロディマス Enemy @(2,2) HP=500/1200 EN=100/100 morale=100
+[1] 敵B/ガルダン Enemy @(3,3) HP=600/1200 EN=100/100 morale=100
+[2] 敵C/ヴェルダ Enemy @(4,4) HP=900/1200 EN=100/100 morale=100
+
+== hotpoints (0) ==
+
+== outcome ==
+Finished

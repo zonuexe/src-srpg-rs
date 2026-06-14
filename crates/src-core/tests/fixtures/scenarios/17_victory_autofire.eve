@@ -1,0 +1,16 @@
+# 17_victory_autofire.eve
+#
+# `Win` / `GameClear` で Victory / 勝利 / Ending / エンディング ラベルが
+# auto-fire することを確認する合成 fixture。
+# `Lose` / `GameOver` も同様に GameOver / ゲームオーバー が発火する。
+
+Goto run_test
+
+run_test:
+GameClear
+Message victory_done
+Exit
+
+エンディング:
+Set ending_fired 1
+Return

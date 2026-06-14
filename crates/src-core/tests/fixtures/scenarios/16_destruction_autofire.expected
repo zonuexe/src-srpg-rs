@@ -1,0 +1,29 @@
+== scene ==
+scene = Title
+stage = 
+stage_state = Briefing
+turn = 1 / Player
+money = 0
+briefing = 
+
+== modal ==
+modal_gate = Open
+pending_dialog = None
+pending_timer = None
+pending_audio = 0
+
+== messages (1) ==
+[0] all_damage_applied
+
+== vars (4) ==
+d1_fired = 1
+d2_fired = 1
+d3_fired = 1
+d4_unit_fallback = 1
+
+== units (0) ==
+
+== hotpoints (0) ==
+
+== outcome ==
+Finished

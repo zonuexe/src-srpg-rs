@@ -1,0 +1,36 @@
+== scene ==
+scene = Title
+stage = 
+stage_state = Briefing
+turn = 1 / Player
+money = 0
+briefing = 
+
+== modal ==
+modal_gate = Open
+pending_dialog = None
+pending_timer = None
+pending_audio = 0
+
+== messages (1) ==
+[0] empty hello-World hello-SRC
+
+== vars (11) ==
+ArgNum = 
+Args(1) = 
+Args(2) = 
+Args(3) = 
+Args(4) = 
+Args(5) = 
+Args(6) = 
+Args(7) = 
+Args(8) = 
+Args(9) = 
+greeting = empty hello-World hello-SRC
+
+== units (0) ==
+
+== hotpoints (0) ==
+
+== outcome ==
+Finished

@@ -1,0 +1,27 @@
+== scene ==
+scene = Title
+stage = スクリプト戦闘
+stage_state = Briefing
+turn = 1 / Player
+money = 0
+briefing = 
+
+== modal ==
+modal_gate = Open
+pending_dialog = None
+pending_timer = None
+pending_audio = 0
+
+== messages (1) ==
+[0] damage_applied
+
+== vars (0) ==
+
+== units (2) ==
+[0] ブレイバー/リオ Player @(1,1) HP=3500/3500 EN=120/120 morale=100
+[1] ゾルダ/ガロ Enemy @(5,5) HP=800/2500 EN=110/110 morale=100
+
+== hotpoints (0) ==
+
+== outcome ==
+Finished

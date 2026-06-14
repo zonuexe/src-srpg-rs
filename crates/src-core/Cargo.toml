@@ -1,0 +1,22 @@
+[package]
+name = "src-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Platform-agnostic engine core for the SRC SRPG port"
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+log.workspace = true
+encoding_rs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+regex.workspace = true
+
+[dev-dependencies]
+zip = { version = "2", default-features = false, features = ["deflate"] }

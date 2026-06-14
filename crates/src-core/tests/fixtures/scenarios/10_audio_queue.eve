@@ -1,0 +1,4 @@
+Startbgm "battle.mid"
+Playsound "hit.wav"
+Stopbgm
+Message done

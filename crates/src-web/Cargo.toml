@@ -1,0 +1,65 @@
+[package]
+name = "src-web"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "WebAssembly / Canvas frontend for the SRC SRPG port"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+src-core = { path = "../src-core" }
+wasm-bindgen.workspace = true
+js-sys.workspace = true
+console_error_panic_hook.workspace = true
+log.workspace = true
+wasm-bindgen-futures = "0.4"
+# LZH / LHA (lh0/lh1/lh4/lh5/lh6/lh7) 展開
+delharc = "0.6"
+
+# .zip 展開用。wasm に乗せるため最小機能セットで取り込む。
+[dependencies.zip]
+version = "2"
+default-features = false
+features = ["deflate"]
+
+[dependencies.web-sys]
+workspace = true
+features = [
+    "Blob",
+    "BlobPropertyBag",
+    "console",
+    "Window",
+    "Document",
+    "DomRect",
+    "Element",
+    "Event",
+    "EventTarget",
+    "File",
+    "FileList",
+    "HtmlAudioElement",
+    "HtmlElement",
+    "HtmlCanvasElement",
+    "HtmlImageElement",
+    "HtmlInputElement",
+    "HtmlMediaElement",
+    "Navigator",
+    "Clipboard",
+    "CanvasRenderingContext2d",
+    "ImageData",
+    "KeyboardEvent",
+    "MouseEvent",
+    "Response",
+    "TextMetrics",
+    "Url",
+    "Performance",
+    "Storage",
+    "CssStyleDeclaration",
+    "DataTransfer",
+    "DataTransferItem",
+    "DataTransferItemList",
+]

@@ -1,0 +1,10 @@
+Set counter 0
+incrementCounter
+incrementCounter
+incrementCounter
+Message $(counter)
+Exit
+
+incrementCounter:
+  Incr counter
+  Return

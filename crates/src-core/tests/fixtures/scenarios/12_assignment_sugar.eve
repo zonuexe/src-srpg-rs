@@ -1,0 +1,4 @@
+Set hp 1500
+maxhp = 3000
+percent = 50
+Message $(maxhp)/$(hp)/$(percent)

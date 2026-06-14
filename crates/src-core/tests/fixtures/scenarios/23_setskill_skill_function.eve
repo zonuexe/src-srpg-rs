@@ -1,0 +1,13 @@
+Stage "スキルテスト"
+MapSize 6 6
+Pilot "リオ" リオ 男性 超能力者 AAAA 100 100 100 100 100 100 100
+Unit ブレイバー リアル系 1 0 陸 5 M 1000 100 3500 120 1200 110 BBBC
+Weapon "ブレイバー" "ライフル" 2500 2 5 0 -1
+Place ブレイバー リオ Player 1 1
+SetSkill リオ 格闘 3
+Set skill_lv Skill(リオ, 格闘)
+SetSkill リオ 射撃 -1
+Set shooting_lv Skill(リオ, 射撃)
+ClearSkill リオ 格闘
+Set after_clear Skill(リオ, 格闘)
+Message skill_results

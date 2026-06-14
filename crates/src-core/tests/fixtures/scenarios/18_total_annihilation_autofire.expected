@@ -1,0 +1,29 @@
+== scene ==
+scene = Title
+stage = 
+stage_state = Briefing
+turn = 1 / Player
+money = 0
+briefing = 
+
+== modal ==
+modal_gate = Open
+pending_dialog = None
+pending_timer = None
+pending_audio = 0
+
+== messages (3) ==
+[0] after_first_kill
+[1] after_second_kill
+[2] annihilation_fired
+
+== vars (1) ==
+enemy_wipeout_count = 1
+
+== units (1) ==
+[0] 味方ブレイバー/味方A Player @(1,1) HP=3500/3500 EN=120/120 morale=100
+
+== hotpoints (0) ==
+
+== outcome ==
+Finished

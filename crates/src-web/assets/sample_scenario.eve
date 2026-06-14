@@ -1,0 +1,64 @@
+# 移植版デモ用シナリオ (.eve) — 元 SRC イベントスクリプトの最小サブセット。
+# event_runtime::execute が解釈する命令のみを使用。
+# 登場人物・機体名はすべて本デモ用のオリジナル（実在作品とは無関係）。
+
+Stage "序章 — 月の影"
+Briefing "敵 ゾルダII を 撃破せよ。"
+MapSize 6 5
+# 中央の (3,2) は森林、上端 1 行は山、右端は海
+SetTile 3 2 2
+SetTile 0 0 3
+SetTile 1 0 3
+SetTile 2 0 3
+SetTile 3 0 3
+SetTile 4 0 3
+SetTile 5 0 3
+SetTile 5 1 4
+SetTile 5 2 4
+SetTile 5 3 4
+SetTile 5 4 4
+
+Pilot "リオ・カザミ" リオ 男性 超能力者 AAAA 100 160 220 200 220 240 200
+Pilot "ガロ・ベルク" ガロ 男性 超能力者 AAAA 100 180 200 200 230 230 200
+
+Unit "ブレイバー" リアル系 1 4 陸宇 5 M 3000 400 3500 120 1200 110 AAAA
+Weapon "ブレイバー" "バルカン砲"   200 1 1 10 99
+Weapon "ブレイバー" "ビームライフル" 2500 2 5 15 -1
+Weapon "ブレイバー" "ビームサーベル" 2800 1 1 20 -1
+
+Unit "ゾルダII" リアル系 1 2 陸 5 M 800 200 2400 80 900 80 BBBB
+Weapon "ゾルダII" "マシンガン"   1400 1 3 5 -1
+Weapon "ゾルダII" "ヒートアックス" 1600 1 1 10 -1
+
+Place "ブレイバー" "リオ・カザミ"   Player 1 3
+Place "ゾルダII"   "ガロ・ベルク"   Enemy  4 3
+
+Turn 1
+Message "戦闘開始"
+
+# 対話 UI のデモ
+Font ゴシック 18 #fff176
+PaintString 60 90 *** DEMO BASE シナリオ ***
+Font ゴシック 13 #a0c4ff
+PaintString 60 120 PaintString / Font / Line のデモ
+Line 50 140 350 140 #f0e68c
+Talk "リオ・カザミ"
+こちらリオ、ブレイバー出ます！
+End
+Input pilot_name "パイロット名を入力してください" リオ
+Talk "システム"
+パイロット名: $(pilot_name)
+End
+Confirm "ゾルダと交戦しますか？"
+If $(選択) = 1 Then
+  Menu "どの武器を使う？"
+  バルカン砲
+  ビームライフル
+  ビームサーベル
+  End
+  Talk "ガロ・ベルク"
+  さあ来い、同盟の機動兵器！
+  End
+Else
+  Message "戦闘を回避しました。"
+EndIf

@@ -1,0 +1,29 @@
+== scene ==
+scene = Title
+stage = スキルテスト
+stage_state = Briefing
+turn = 1 / Player
+money = 0
+briefing = 
+
+== modal ==
+modal_gate = Open
+pending_dialog = None
+pending_timer = None
+pending_audio = 0
+
+== messages (1) ==
+[0] skill_results
+
+== vars (3) ==
+after_clear = 0
+shooting_lv = 1
+skill_lv = 3
+
+== units (1) ==
+[0] ブレイバー/リオ Player @(1,1) HP=3500/3500 EN=120/120 morale=100
+
+== hotpoints (0) ==
+
+== outcome ==
+Finished

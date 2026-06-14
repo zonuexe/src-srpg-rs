@@ -1,0 +1,18 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "trunk-serve",
+      "runtimeExecutable": "/nix/var/nix/profiles/default/bin/nix",
+      "runtimeArgs": [
+        "--extra-experimental-features",
+        "nix-command flakes",
+        "develop",
+        "--command",
+        "trunk",
+        "serve"
+      ],
+      "port": 8080
+    }
+  ]
+}

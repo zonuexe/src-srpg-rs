@@ -1,0 +1,5 @@
+Set total 0
+For i = 1 To 5
+  Incr total $(i)
+Next
+Message $(total)

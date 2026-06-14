@@ -1,0 +1,6 @@
+Confirm 続けますか
+If $(選択) = 1 Then
+  Message yes_branch
+Else
+  Message no_branch
+EndIf
