@@ -56,9 +56,9 @@
 > `apply_ability_area`/`apply_ability_attributes`/`copy_size_ok` 新設、`Size::rank/step_diff`・`AbilityData`
 > ヘルパ追加。`bb8ebc5`）/ **A2 合体時のパイロット統合**（構成ユニットのパイロットを合体形態へ集約・分離で
 > 復帰。`pre_combine_pilots` 追加。技能ボーナスが戦闘に反映。`2c81342`）/ **A4 特殊効果攻撃属性を反撃/援護
-> でも proc**（`try_counterattack`/`try_support_attack` の命中・生存分岐に追加。`1d23396`）。回帰テスト 7 件追加。
-> A2 残は 3機ルール/最初から合体形態の分離/着地点選択、A4 残は CC以外属性/耐性/proc⇄crit（いずれも MVP/大）。
-> test/clippy/wasm-check 全緑。
+> でも proc**（`try_counterattack`/`try_support_attack` の命中・生存分岐に追加。`1d23396`）／**A4 proc が
+> crit を置換**（特殊効果武器は通常クリティカルしない。`0ab3e33`）。回帰テスト 8 件追加。A2 残は 3機ルール/
+> 最初から合体形態の分離/着地点選択、A4 残は CC以外属性/耐性弱点（いずれも MVP/大）。test/clippy/wasm-check 全緑。
 
 VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 本ドキュメントは作業継続のための要約。**解決済み課題は §9 に 1 行で要約**し、本文は
@@ -86,7 +86,7 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 | A1 | ✅ **アビリティ未対応効果**（`bb8ebc5`） | `apply_ability_effects` の `_ => {}` を解消。**強化**（指定特殊能力を一時状態として付与＝付加と同機構。既存能力へのレベル加算は未モデル）/ **能力コピー**（発動者を射程内味方の形態へ変化＝`set_unit_form` 共有・pilot 保持＋サイズ制限 `copy_size_ok`）/ **M型マップアビリティ**（`Ｍ全`/`Ｍ投`… → `apply_ability_area` で射程内全有効対象へ適用、`Ｍ全` は盤上全体）/ **敵対象アビリティ**（`脱`/`除` 属性で `ability_target_valid` を敵対象に切替、`apply_ability_attributes` で 脱=気力-10/除=状態解除）。**残**: 除の対象状態をアビリティ由来に限定（現状は全状態クリア）・強化のレベル加算モデル。 |
 | A2 | 🔶 **合体/分離の精緻化**（一部 `2c81342`） | ✅ **合体時のパイロット統合**（全員搭乗。`pre_combine_pilots` で host の元搭乗構成を保持し、構成ユニットの `pilot_ids` を合体形態へ集約。分離で各機へ復帰。技能ボーナスが戦闘に効く）。**残**: 3機以上ルール未区別（現状は 2 マス内を全合体）・最初から合体形態の `.eve` 配置ユニットの分離（構成 uid が無い→`分離` フォームから生成が要る）・着地点は隣接自動（原典は移動範囲から選択） |
 | A3 | **修理/補給の残り** | EN コスト未実装（修理装置の消費 EN）・補給は全快固定（Lv 別なし）・修理/補給の経験値は一律 10（原典は対象レベル依存） |
-| A4 | 🔶 **特殊効果攻撃属性の残り**（§0.5、一部 `1d23396`） | ✅ **反撃/援護でも proc**（`try_counterattack`/`try_support_attack` の命中・生存分岐に `apply_weapon_special_effects` を追加。撃破/復活時は付与せず）。**残**: CC 以外の多数属性（魅/恐/狂/盲/脱/低攻低運低移/弱効剋 等）・耐性/弱点・proc が crit を置換する原典仕様 |
+| A4 | 🔶 **特殊効果攻撃属性の残り**（§0.5、`1d23396`/`0ab3e33`） | ✅ **反撃/援護でも proc**（`try_counterattack`/`try_support_attack` の命中・生存分岐に `apply_weapon_special_effects` を追加。撃破/復活時は付与せず）。✅ **proc が crit を置換**（特殊効果武器は通常クリティカルしない＝`attack_resolve_and_run` で `critical && !has_special_effect`。`特殊効果攻撃属性.md`）。**残**: CC 以外の多数属性（魅/恐/狂/盲/脱/低攻低運低移/弱効剋 等）・耐性/弱点 |
 | A5 | **精神 決意/気迫/希望** | シナリオ独自（東方夢想伝）で原典定義が無く確定不能。暫定実装のまま（決意→必中+熱血 / 気迫→気力+20 / 希望→必中+集中）。実シナリオの定義が判れば `apply_spirit_effect` を修正。捨て身の「反撃時無効/被弾まで継続」・直撃の切り払い/サポートガード無効化も未モデル |
 
 ### B. Tier 3 クイックウィン（小・要確認）
