@@ -3562,6 +3562,13 @@ impl App {
                         self.push_message(format!("  援護撃破: 資金 +{money}"));
                     }
                 }
+            } else if remaining > 0 {
+                // 生存: 援護武器の特殊効果攻撃属性 (状態異常付与) を防御側へ proc。
+                let inflicted =
+                    self.apply_weapon_special_effects(def_idx, &weapon, &sup_pilot, &def_pilot);
+                if !inflicted.is_empty() {
+                    self.push_message(format!("  → {}", inflicted.join("・")));
+                }
             }
         } else {
             self.push_message(format!("{} のサポートアタックはミス", sup_pilot.nickname));
@@ -3819,10 +3826,18 @@ impl App {
                 }
                 m
             } else {
-                format!(
+                // 生存: 反撃武器の特殊効果攻撃属性 (状態異常付与) を被弾側へ proc。
+                // 反撃側 = def (atk_pilot=def_pilot)、被弾側 = atk (def_pilot=atk_pilot)。
+                let inflicted =
+                    self.apply_weapon_special_effects(atk_idx, &weapon, &def_pilot, &atk_pilot);
+                let mut m = format!(
                     "  ↩ 反撃: {} → {} [{}]: 命中 {} ダメージ (残HP {})",
                     def_pilot.nickname, atk_pilot.nickname, weapon.name, preview.damage, remaining
-                )
+                );
+                if !inflicted.is_empty() {
+                    m.push_str(&format!(" → {}", inflicted.join("・")));
+                }
+                m
             }
         } else {
             format!(
@@ -10190,6 +10205,123 @@ mod tests {
         assert!(
             app.database().unit_instances[def_idx].attack_disabled(),
             "麻痺 は行動不能 (AI / 攻撃ゲートが効く)"
+        );
+    }
+
+    /// 反撃武器の特殊効果攻撃属性 (状態異常) が、反撃の命中・生存時に被弾側へ proc する。
+    #[test]
+    fn counterattack_procs_weapon_special_effect() {
+        use crate::data::unit::WeaponData;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6); // 反撃を受ける側
+                                                   // 敵 unit_data: 痺 反撃武器 (critical 100 → 必ず proc)。
+        let mut ebot = app.database().unit_by_name("Hero").cloned().unwrap();
+        ebot.name = "EnemyBot".into();
+        ebot.weapons = vec![WeaponData {
+            name: "麻痺針".into(),
+            power: 1, // Hero を撃破しない
+            min_range: 1,
+            max_range: 1,
+            precision: 0,
+            bullet: -1,
+            en_consumption: 0,
+            necessary_morale: 0,
+            adaption: "AAAA".into(),
+            critical: 100,
+            class: "痺".into(),
+            extras: Vec::new(),
+        }];
+        app.database_mut().units.push(ebot);
+        let hero = first_player_uid(&app);
+        let enemy = app.database_mut().register_unit(crate::UnitInstance::new(
+            "EnemyBot",
+            "PILOT",
+            crate::Party::Enemy,
+            3,
+            6,
+        ));
+        // 反撃を必中させ RNG 非依存にする (hit_chance=100)。
+        app.database_mut()
+            .unit_by_uid_mut(&enemy)
+            .unwrap()
+            .add_condition(crate::Condition::new("必中", -1));
+
+        let res = app.try_counterattack(3, 6, (2, 6));
+        assert!(res.is_some(), "反撃が成立する");
+        assert!(
+            app.database()
+                .unit_by_uid(&hero)
+                .unwrap()
+                .has_condition("麻痺"),
+            "反撃武器の特殊効果 (麻痺) が被弾側へ proc する"
+        );
+    }
+
+    /// 援護攻撃武器の特殊効果攻撃属性が、援護の命中・生存時に防御側へ proc する。
+    #[test]
+    fn support_attack_procs_weapon_special_effect() {
+        use crate::data::unit::WeaponData;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6); // 本攻撃側 (atk_idx)
+        place_player_unit(&mut app, "Supporter", 3, 6); // Hero に隣接した援護役
+                                                        // Supporter に 痺 武器 (critical 100)。
+        app.database_mut()
+            .units
+            .iter_mut()
+            .find(|d| d.name == "Supporter")
+            .unwrap()
+            .weapons = vec![WeaponData {
+            name: "麻痺針".into(),
+            power: 1,
+            min_range: 1,
+            max_range: 1,
+            precision: 0,
+            bullet: -1,
+            en_consumption: 0,
+            necessary_morale: 0,
+            adaption: "AAAA".into(),
+            critical: 100,
+            class: "痺".into(),
+            extras: Vec::new(),
+        }];
+        let hero = first_player_uid(&app);
+        let sup = app
+            .database()
+            .unit_instances
+            .iter()
+            .find(|u| u.unit_data_name == "Supporter")
+            .unwrap()
+            .uid
+            .clone();
+        // 援護攻撃 + 必中 (hit_chance=100)。
+        app.database_mut()
+            .unit_by_uid_mut(&sup)
+            .unwrap()
+            .add_condition(crate::Condition::new("サポートアタック", -1));
+        app.database_mut()
+            .unit_by_uid_mut(&sup)
+            .unwrap()
+            .add_condition(crate::Condition::new("必中", -1));
+        // 敵 (3,7): Supporter (3,6) の射程内 (距離1)。
+        let enemy = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "PILOT",
+            crate::Party::Enemy,
+            3,
+            7,
+        ));
+        let atk_idx = app.database().idx_by_uid(&hero).unwrap();
+
+        let res = app.try_support_attack(atk_idx, 3, 7);
+        assert!(res.is_some(), "援護攻撃が成立する");
+        assert!(
+            app.database()
+                .unit_by_uid(&enemy)
+                .unwrap()
+                .has_condition("麻痺"),
+            "援護攻撃武器の特殊効果 (麻痺) が防御側へ proc する"
         );
     }
 
