@@ -5272,8 +5272,13 @@ impl App {
             self.reopen_unit_menu_for(&pa.uid);
             return true;
         };
-        if ab.is_self_only() {
-            // 射程0: 自分に即適用 (召喚も射程0 だが MVP 未対応)。
+        if ab.is_map_type() {
+            // マップ型 (Ｍ全/Ｍ投/…): 座標選択を省略し射程内の全有効対象へ即適用。
+            let caster = pa.uid.clone();
+            self.apply_ability(&caster, ability_idx, &caster);
+            self.finish_ability(&caster);
+        } else if ab.is_self_only() {
+            // 射程0: 自分に即適用 (召喚も射程0)。
             let caster = pa.uid.clone();
             self.apply_ability(&caster, ability_idx, &caster);
             self.finish_ability(&caster);
@@ -5301,7 +5306,8 @@ impl App {
         ));
     }
 
-    /// アビリティの対象が有効か (味方・射程内・盤上、`援` 属性は自分不可)。
+    /// アビリティの対象が有効か (射程内・盤上、対象勢力、`援`/サイズ制限)。
+    /// 対象勢力は属性で決まる: `脱`/`除` (敵対象) は敵、それ以外は味方。
     fn ability_target_valid(&self, caster: &str, idx: usize, target: &str) -> bool {
         let Some(ab) = self.ability_at(caster, idx) else {
             return false;
@@ -5318,10 +5324,49 @@ impl App {
         if ab.attributes.contains('援') && target == caster {
             return false; // 援: 自分に使用不可
         }
-        if !c.party.is_ally_of(t.party) {
-            return false; // MVP: 支援アビリティ (味方対象) のみ
+        // 対象勢力: 脱/除 アビリティは敵、それ以外は味方。
+        if ab.targets_enemy() {
+            if !c.party.is_hostile_to(t.party) {
+                return false;
+            }
+        } else if !c.party.is_ally_of(t.party) {
+            return false;
+        }
+        // 能力コピー: 自分以外の味方が対象。サイズ制限 (既定で 2 段階以上差は不可、
+        // 追加設定 サイズ制限無し/強 で変化) を満たす相手のみ。
+        if ab.has_copy_effect() {
+            if target == caster {
+                return false;
+            }
+            if !self.copy_size_ok(c, t, &ab) {
+                return false;
+            }
         }
         combat::manhattan((c.x, c.y), (t.x, t.y)) <= ab.range.max(0) as u32
+    }
+
+    /// `能力コピー` のサイズ制限判定。既定は 2 段階以上のサイズ差を禁止
+    /// (`アビリティ効果.md`)。`サイズ制限無し` で無制限、`サイズ制限強` で同サイズのみ。
+    fn copy_size_ok(
+        &self,
+        caster: &crate::UnitInstance,
+        target: &crate::UnitInstance,
+        ab: &crate::data::unit::AbilityData,
+    ) -> bool {
+        if ab.effect.contains("サイズ制限無し") {
+            return true;
+        }
+        let (Some(cd), Some(td)) = (
+            self.database.unit_by_name(&caster.unit_data_name),
+            self.database.unit_by_name(&target.unit_data_name),
+        ) else {
+            return true;
+        };
+        if ab.effect.contains("サイズ制限強") {
+            cd.size == td.size
+        } else {
+            cd.size.step_diff(td.size) < 2
+        }
     }
 
     /// アビリティを発動: 回数 / EN を消費し効果を `target` に適用する。
@@ -5351,13 +5396,71 @@ impl App {
         if let Some(u) = self.database.unit_by_uid_mut(caster) {
             u.has_acted = true;
         }
-        self.apply_ability_effects(target, &ab.effect);
-        let tnick = self
+        if ab.is_map_type() {
+            // マップ型: 射程内の全有効対象へ効果と属性を適用する。
+            self.apply_ability_area(caster, &ab);
+        } else {
+            self.apply_ability_effects(caster, target, &ab.effect);
+            self.apply_ability_attributes(target, &ab);
+            let tnick = self
+                .database
+                .unit_by_uid(target)
+                .map(|u| u.pilot_name.clone())
+                .unwrap_or_default();
+            self.push_message(format!("アビリティ【{}】→ {tnick}", ab.display_name()));
+        }
+    }
+
+    /// マップ型アビリティの効果を、射程内 (`Ｍ全` は盤上全体) の全有効対象へ
+    /// 適用する。対象勢力は属性で決まる (脱/除=敵、それ以外=味方)。
+    fn apply_ability_area(&mut self, caster: &str, ab: &crate::data::unit::AbilityData) {
+        let Some(c) = self.database.unit_by_uid(caster) else {
+            return;
+        };
+        let (cx, cy, cparty) = (c.x, c.y, c.party);
+        let range = ab.range.max(0) as u32;
+        let targets: Vec<String> = self
             .database
-            .unit_by_uid(target)
-            .map(|u| u.pilot_name.clone())
-            .unwrap_or_default();
-        self.push_message(format!("アビリティ【{}】→ {tnick}", ab.display_name()));
+            .unit_instances
+            .iter()
+            .filter(|u| !u.off_map)
+            .filter(|u| {
+                if ab.targets_enemy() {
+                    cparty.is_hostile_to(u.party)
+                } else {
+                    cparty.is_ally_of(u.party)
+                }
+            })
+            // 援: 自分自身は対象外。
+            .filter(|u| !(ab.attributes.contains('援') && u.uid == caster))
+            // Ｍ全 は射程・座標を無視。それ以外は発動者からの射程内。
+            .filter(|u| ab.is_map_all() || combat::manhattan((cx, cy), (u.x, u.y)) <= range)
+            .map(|u| u.uid.clone())
+            .collect();
+        for t in &targets {
+            self.apply_ability_effects(caster, t, &ab.effect);
+            self.apply_ability_attributes(t, ab);
+        }
+        self.push_message(format!(
+            "アビリティ【{}】→ {} 体",
+            ab.display_name(),
+            targets.len()
+        ));
+    }
+
+    /// アビリティ属性 (`脱`=気力低下 / `除`=特殊効果解除) を対象へ適用する。
+    /// いずれも発動確率 100% (`ユニットデータ.md` アビリティ属性)。
+    fn apply_ability_attributes(&mut self, target: &str, ab: &crate::data::unit::AbilityData) {
+        if ab.attributes.contains('脱') {
+            self.add_unit_morale(target, -10);
+        }
+        if ab.attributes.contains('除') {
+            // 相手にかかっているアビリティ由来の特殊効果を解除。MVP: 状態異常を
+            // 全消去 (アビリティ付与分とそれ以外を区別しない簡易版)。
+            if let Some(u) = self.database.unit_by_uid_mut(target) {
+                u.conditions.clear();
+            }
+        }
     }
 
     /// アビリティ発動後の後処理: 行動が残っていればメニュー再表示、消費済みなら
@@ -5384,7 +5487,8 @@ impl App {
 
     /// アビリティ効果文字列 (`回復Lv2 治癒` 等、半角スペース区切り) を適用する。
     /// `アビリティ効果.md` の主要効果に対応。未対応効果は無視 (無害)。
-    fn apply_ability_effects(&mut self, target: &str, effect: &str) {
+    /// `caster` は発動者 (`能力コピー` で発動者自身が変化するため必要)。
+    fn apply_ability_effects(&mut self, caster: &str, target: &str, effect: &str) {
         for tok in effect.split_whitespace() {
             let (head, arg) = match tok.split_once('=') {
                 Some((h, a)) => (h, Some(a.trim_matches('"'))),
@@ -5451,9 +5555,31 @@ impl App {
                         }
                     }
                 }
+                // 強化: メインパイロットの特殊能力レベルを一定時間増加。MVP では
+                // 指定能力を一時的な状態 (condition) として対象へ付与する (付加と同じ
+                // 機構で名前ベースに参照可能化。既存能力へのレベル加算は未モデル)。
+                "強化" => {
+                    if let Some(name) = arg {
+                        let lifetime = if head.contains("Lv") { lv } else { -1 };
+                        self.add_unit_condition(target, name, lifetime);
+                    }
+                }
+                // 能力コピー: 発動者自身を対象 (射程内味方) のユニットへ変化させる。
+                // 対象のユニットデータをコピー (サイズ制限は target 選択時に担保)。
+                // パイロット能力は変化しない (set_unit_form は pilot を保持)。
+                "能力コピー" => {
+                    let form = self
+                        .database
+                        .unit_by_uid(target)
+                        .map(|u| u.unit_data_name.clone());
+                    if let Some(form) = form {
+                        if caster != target {
+                            self.set_unit_form(caster, &form);
+                        }
+                    }
+                }
                 // 解説: 効果なし (表示用)。
                 "解説" => {}
-                // MVP 未対応 (無害スキップ): 強化 / 能力コピー。
                 _ => {}
             }
         }
@@ -9167,7 +9293,7 @@ mod tests {
             .unit_by_uid_mut(&uid)
             .unwrap()
             .sp_consumed = 30;
-        app.apply_ability_effects(&uid, "霊力回復Lv2"); // 10×2 = 20 回復
+        app.apply_ability_effects(&uid, &uid, "霊力回復Lv2"); // 10×2 = 20 回復
         assert_eq!(
             app.database().unit_by_uid(&uid).unwrap().sp_consumed,
             10,
@@ -9186,7 +9312,7 @@ mod tests {
         d.name = "Dragon".into();
         app.database_mut().units.push(d);
         let uid = first_player_uid(&app);
-        app.apply_ability_effects(&uid, "変身Lv3=Dragon");
+        app.apply_ability_effects(&uid, &uid, "変身Lv3=Dragon");
         assert_eq!(
             app.database().unit_by_uid(&uid).unwrap().unit_data_name,
             "Dragon",
@@ -9205,7 +9331,7 @@ mod tests {
         d.name = "Drone".into();
         app.database_mut().units.push(d);
         let uid = first_player_uid(&app);
-        app.apply_ability_effects(&uid, "召喚Lv2=Drone");
+        app.apply_ability_effects(&uid, &uid, "召喚Lv2=Drone");
 
         let drones: Vec<_> = app
             .database()
@@ -9228,6 +9354,150 @@ mod tests {
         assert!(drones
             .iter()
             .all(|d| (d.x as i32 - 5).abs() <= 1 && (d.y as i32 - 5).abs() <= 1));
+    }
+
+    /// アビリティ効果 強化 は指定特殊能力を一時状態 (condition) として対象へ付与する。
+    #[test]
+    fn ability_kyouka_adds_condition() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Booster", 2, 6);
+        let uid = first_player_uid(&app);
+        app.apply_ability_effects(&uid, &uid, "強化Lv2=切り払い");
+        let u = app.database().unit_by_uid(&uid).unwrap();
+        assert!(
+            u.conditions.iter().any(|c| c.name == "切り払い"),
+            "強化で指定能力が状態として付与される"
+        );
+    }
+
+    /// アビリティ効果 能力コピー は発動者を対象 (射程内味方) の形態へ変化させる。
+    /// サイズ 2 段階以上差のユニットへは変化できない (サイズ制限)。
+    #[test]
+    fn ability_nouryoku_copy_transforms_caster_with_size_limit() {
+        use crate::data::unit::Size;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Copier", 2, 6); // Size::M
+        place_player_unit(&mut app, "Model", 4, 6); // Size::M (同サイズ)
+        let caster = first_player_uid(&app);
+        let model = app
+            .database()
+            .unit_instances
+            .iter()
+            .find(|u| u.x == 4 && u.y == 6)
+            .unwrap()
+            .uid
+            .clone();
+        give_ability(
+            &mut app,
+            "Copier",
+            &caster,
+            mk_ability("コピー", "能力コピーLv3", 3, None),
+        );
+        // 同サイズ・射程内 → 有効な対象。
+        assert!(app.ability_target_valid(&caster, 0, &model));
+        app.apply_ability(&caster, 0, &model);
+        assert_eq!(
+            app.database().unit_by_uid(&caster).unwrap().unit_data_name,
+            "Model",
+            "能力コピーで発動者が対象の形態へ変化"
+        );
+
+        // XL サイズの対象 (M とは 3 段階差) は対象不可。
+        let mut big = app.database().unit_by_name("Model").cloned().unwrap();
+        big.name = "BigModel".into();
+        big.size = Size::XL;
+        app.database_mut().units.push(big);
+        app.database_mut()
+            .unit_by_uid_mut(&model)
+            .unwrap()
+            .unit_data_name = "BigModel".into();
+        assert!(
+            !app.ability_target_valid(&caster, 0, &model),
+            "サイズ 2 段階以上差の対象には能力コピー不可"
+        );
+    }
+
+    /// マップ型アビリティ (Ｍ全) は射程内 (Ｍ全 は盤上全体) の全味方へ効果を及ぼす。
+    #[test]
+    fn ability_map_type_heals_all_allies() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Caster", 5, 5);
+        place_player_unit(&mut app, "AllyA", 5, 6);
+        place_player_unit(&mut app, "AllyB", 6, 5);
+        let caster = first_player_uid(&app);
+        for pos in [(5u32, 6u32), (6, 5)] {
+            let uid = app
+                .database()
+                .unit_instances
+                .iter()
+                .find(|u| u.x == pos.0 && u.y == pos.1)
+                .unwrap()
+                .uid
+                .clone();
+            app.database_mut().unit_by_uid_mut(&uid).unwrap().damage = 50;
+        }
+        let mut ab = mk_ability("全体回復", "回復Lv1", 3, None);
+        ab.attributes = "Ｍ全".into();
+        give_ability(&mut app, "Caster", &caster, ab);
+        app.apply_ability(&caster, 0, &caster);
+        for pos in [(5u32, 6u32), (6, 5)] {
+            let dmg = app
+                .database()
+                .unit_instances
+                .iter()
+                .find(|u| u.x == pos.0 && u.y == pos.1)
+                .unwrap()
+                .damage;
+            assert_eq!(dmg, 0, "Ｍ全 回復で全味方が回復する");
+        }
+    }
+
+    /// 敵対象アビリティ (脱=気力低下 / 除=特殊効果解除) は味方ではなく敵を対象に取る。
+    #[test]
+    fn ability_enemy_target_datsu_and_jo() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Caster", 2, 6);
+        app.database_mut().register_unit(crate::UnitInstance::new(
+            "Caster",
+            "FOE",
+            crate::Party::Enemy,
+            4,
+            6,
+        ));
+        let caster = first_player_uid(&app);
+        let enemy = app
+            .database()
+            .unit_instances
+            .iter()
+            .find(|u| u.party == crate::Party::Enemy)
+            .unwrap()
+            .uid
+            .clone();
+        // 敵に強化系の状態を付けておく (除 で解除される)。
+        app.database_mut()
+            .unit_by_uid_mut(&enemy)
+            .unwrap()
+            .add_condition(crate::Condition::new("攻撃力ＵＰ", -1));
+        let mut ab = mk_ability("脱力除去弾", "解説", 3, None);
+        ab.attributes = "脱 除".into();
+        give_ability(&mut app, "Caster", &caster, ab);
+
+        // 脱/除 アビリティは敵が有効対象、味方 (自分) は無効。
+        assert!(app.ability_target_valid(&caster, 0, &enemy));
+        assert!(!app.ability_target_valid(&caster, 0, &caster));
+
+        let m0 = app.database().unit_by_uid(&enemy).unwrap().morale;
+        app.apply_ability(&caster, 0, &enemy);
+        let enemy_u = app.database().unit_by_uid(&enemy).unwrap();
+        assert_eq!(enemy_u.morale, m0 - 10, "脱で敵気力 -10");
+        assert!(
+            enemy_u.conditions.is_empty(),
+            "除で敵のアビリティ特殊効果を解除"
+        );
     }
 
     /// 母艦: 搭載 (fire_boarding_event) で格納リンクが張られ、発進で隣接マスへ出撃する。

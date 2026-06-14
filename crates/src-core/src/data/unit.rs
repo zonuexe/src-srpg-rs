@@ -58,6 +58,24 @@ impl Size {
             Self::SS => "SS",
         }
     }
+
+    /// サイズ序列 (XL=0 … SS=5)。`能力コピー` のサイズ制限 (2 段階以上の差を
+    /// 禁止) 等、サイズ間の段階差を測るために使う。
+    pub fn rank(self) -> i32 {
+        match self {
+            Self::XL => 0,
+            Self::LL => 1,
+            Self::L => 2,
+            Self::M => 3,
+            Self::S => 4,
+            Self::SS => 5,
+        }
+    }
+
+    /// 2 つのサイズの段階差 (絶対値)。
+    pub fn step_diff(self, other: Self) -> i32 {
+        (self.rank() - other.rank()).abs()
+    }
 }
 
 /// 元 `WeaponData` クラスの主要フィールド。
@@ -123,6 +141,28 @@ impl AbilityData {
     /// 射程 0 (自分のみ / 召喚) で対象選択が不要か。
     pub fn is_self_only(&self) -> bool {
         self.range <= 0
+    }
+
+    /// マップ型アビリティ (`Ｍ全` / `Ｍ投` / `Ｍ直` 等、属性に全角 `Ｍ` を含む)。
+    /// 複数のユニットへ同時に効果を及ぼす (`マップ攻撃に関する属性.md`)。
+    pub fn is_map_type(&self) -> bool {
+        self.attributes.contains('Ｍ')
+    }
+
+    /// 全体型マップアビリティ (`Ｍ全`)。射程・座標を無視して盤上全体が対象。
+    pub fn is_map_all(&self) -> bool {
+        self.attributes.contains("Ｍ全")
+    }
+
+    /// 敵対象アビリティか (`脱` = 気力低下 / `除` = 特殊効果解除)。これらの属性を
+    /// 持つアビリティは味方ではなく敵を対象に取る (`ユニットデータ.md` アビリティ属性)。
+    pub fn targets_enemy(&self) -> bool {
+        self.attributes.contains('脱') || self.attributes.contains('除')
+    }
+
+    /// `能力コピー` 効果を持つか (対象選択は味方だが効果は発動者自身に及ぶ特殊効果)。
+    pub fn has_copy_effect(&self) -> bool {
+        self.effect.contains("能力コピー")
     }
 }
 
