@@ -3113,7 +3113,10 @@ impl App {
             preview.critical_chance
         };
         let crit_roll = ((r / 100) % 100) as i32;
-        let critical = hit && crit_roll < crit_chance;
+        // 特殊効果攻撃属性 (CC 属性) を持つ武器では通常のクリティカルは発生しない。
+        // 特殊効果の発動がクリティカルの代わりとみなされる (SRC 特殊効果攻撃属性.md)。
+        let has_special_effect = !crate::combat::weapon_special_effects(&weapon.class).is_empty();
+        let critical = hit && crit_roll < crit_chance && !has_special_effect;
         let mut defender_killed = false;
         // クリティカルはダメージ 1.5 倍 (SRC)。その後、防御選択でさらに半減する。
         let crit_damage = if critical {
@@ -12212,6 +12215,111 @@ Return
         assert!(
             app.messages().iter().any(|m| m.contains("クリティカル")),
             "クリティカル表示が無い"
+        );
+    }
+
+    /// 特殊効果攻撃属性 (痺) を持つ武器は critical=100 でもクリティカルしない
+    /// (特殊効果がクリの代わり)。ダメージは ×1.5 されず、状態異常が proc する。
+    #[test]
+    fn special_effect_weapon_does_not_crit_but_procs() {
+        use crate::data::unit::WeaponData;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 5, 6);
+        // 痺 + critical 100 の武器を Hero に持たせ、必中で命中を確定。
+        app.database_mut()
+            .units
+            .iter_mut()
+            .find(|u| u.name == "Hero")
+            .unwrap()
+            .weapons
+            .push(WeaponData {
+                name: "麻痺砲".into(),
+                power: 20,
+                min_range: 1,
+                max_range: 1,
+                precision: 100,
+                bullet: -1,
+                en_consumption: 0,
+                necessary_morale: 0,
+                adaption: String::new(),
+                critical: 100,
+                class: "痺".into(),
+                extras: Vec::new(),
+            });
+        app.database_mut()
+            .unit_instances
+            .iter_mut()
+            .find(|u| u.unit_data_name == "Hero")
+            .unwrap()
+            .add_condition(crate::Condition::new("必中", 9));
+        place_player_unit(&mut app, "Foe", 9, 9);
+        let euid = spawn_party(&mut app, "Foe", crate::Party::Enemy, 6, 6);
+        // Foe は高 HP で生存させる (撃破時は proc しないため)。
+        app.database_mut()
+            .units
+            .iter_mut()
+            .find(|u| u.name == "Foe")
+            .unwrap()
+            .hp = 100_000;
+        app.set_stage_state(crate::stage::StageState::Battle);
+        app.set_map_cursor(5, 6);
+
+        // 非クリの基本ダメージを combat で算出 (crit 抑止後はこれと一致するはず)。
+        let base = {
+            let hero = app
+                .database()
+                .unit_instances
+                .iter()
+                .find(|u| u.unit_data_name == "Hero")
+                .unwrap();
+            let foe = app.database().unit_by_uid(&euid).unwrap();
+            let atk_unit = app.database().unit_by_name("Hero").unwrap();
+            let weapon = atk_unit
+                .weapons
+                .iter()
+                .find(|w| w.name == "麻痺砲")
+                .unwrap();
+            let atk_pilot = app.database().pilot_by_name(&hero.pilot_name).unwrap();
+            let def_unit = app.database().unit_by_name("Foe").unwrap();
+            let def_pilot = app.database().pilot_by_name(&foe.pilot_name).unwrap();
+            let t = app.database().map.as_ref().unwrap().cell(6, 6).terrain_id;
+            let atk_env = app.terrain_env_at(hero.x, hero.y);
+            let def_env = app.terrain_env_at(6, 6);
+            crate::combat::predict_with_status_terrain(
+                atk_pilot,
+                atk_unit,
+                weapon,
+                def_pilot,
+                def_unit,
+                app.database().terrain_hit_mod(t),
+                app.database().terrain_damage_mod(t),
+                hero.morale,
+                foe.morale,
+                &["必中".to_string()],
+                &[],
+                atk_env,
+                def_env,
+            )
+            .damage
+        };
+
+        assert!(app.attack_resolve_and_run(Some((6, 6)), false, ""));
+        let dealt = app.database().unit_by_uid(&euid).map(|u| u.damage).unwrap();
+        assert_eq!(
+            dealt, base,
+            "特殊効果武器はクリティカルしない (×1.5 されない: base={base}, dealt={dealt})"
+        );
+        assert!(
+            !app.messages().iter().any(|m| m.contains("クリティカル")),
+            "特殊効果武器でクリティカル表示は出ない"
+        );
+        assert!(
+            app.database()
+                .unit_by_uid(&euid)
+                .unwrap()
+                .has_condition("麻痺"),
+            "特殊効果 (麻痺) が proc する"
         );
     }
 
