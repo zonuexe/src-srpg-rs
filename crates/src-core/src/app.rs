@@ -507,6 +507,33 @@ fn custom_command_targets_party(target: &str, party: crate::Party) -> bool {
     }
 }
 
+/// 修理 / 補給 の獲得経験値を、対象パイロットと実行者のレベル差で増減させる
+/// (SRC `Unit.cs::GetExp`)。`base` は 修理 / 補給 の基準値で、差 (target - actor) が
+/// 大きいほど倍率が上がる (> +7 で ×5、-1 以下で逓減)。倍率テーブルは原典準拠だが、
+/// 基準値の絶対量は本実装の経験値スケール (level = total_exp/100) に合わせ、
+/// 同レベル時に従来の一律値を保つよう小さく取る (原典は 修理=100/補給=150)。
+/// 素質 / 遅成長 等の技能補正は未対応。
+fn support_exp_with_level_diff(base: i32, target_level: i32, actor_level: i32) -> i32 {
+    let xp = match target_level - actor_level {
+        d if d > 7 => base * 5,
+        7 => base * 9 / 2,
+        6 => base * 4,
+        5 => base * 7 / 2,
+        4 => base * 3,
+        3 => base * 5 / 2,
+        2 => base * 2,
+        1 => base * 3 / 2,
+        0 => base,
+        -1 => base / 2,
+        -2 => base / 4,
+        -3 => base / 6,
+        -4 => base / 8,
+        -5 => base / 10,
+        _ => base / 12,
+    };
+    xp.max(1)
+}
+
 /// アビリティ効果トークンを (基底名, レベル) に分割する。`回復Lv2` → (`回復`, 2)、
 /// `治癒` → (`治癒`, 1)。`Lv` は半角。レベル省略・解析失敗時は 1。
 fn split_effect_level(s: &str) -> (&str, i32) {
@@ -5054,9 +5081,20 @@ impl App {
                 self.push_message(format!("補給 → {tnick} (EN・残弾 補給 / 気力 -10)"));
             }
         }
-        // 修理 / 補給 を行った側は経験値を得る (原典準拠の簡易: 一律 10)。
-        if let Some(ci) = self.database.idx_by_uid(caster) {
-            self.award_support_exp(ci, 10);
+        // 修理 / 補給 を行った側は経験値を得る。獲得量は対象パイロットのレベルが
+        // 高いほど多い (SRC: 相手のレベルが高いほど多い)。基準値は 修理:補給 = 2:3。
+        if let (Some(ci), Some(ti)) = (
+            self.database.idx_by_uid(caster),
+            self.database.idx_by_uid(target),
+        ) {
+            let base = match kind {
+                SupportKind::Repair => 10,
+                SupportKind::Supply => 15,
+            };
+            let actor_lv = self.unit_pilot_level(&self.database.unit_instances[ci]);
+            let target_lv = self.unit_pilot_level(&self.database.unit_instances[ti]);
+            let xp = support_exp_with_level_diff(base, target_lv, actor_lv);
+            self.award_support_exp(ci, xp);
         }
     }
 
@@ -8698,8 +8736,57 @@ mod tests {
         assert_eq!(
             app.database().unit_by_uid(&caster).unwrap().total_exp,
             exp0 + 10,
-            "修理で経験値 +10"
+            "同レベル対象の修理で経験値 +10 (基準値)"
         );
+    }
+
+    /// 修理 / 補給 経験値の対象レベル差倍率 (SRC `Unit.cs::GetExp`)。
+    #[test]
+    fn support_exp_level_diff_table() {
+        // 同レベル → 基準値。
+        assert_eq!(support_exp_with_level_diff(10, 5, 5), 10);
+        // 対象 +2 → ×2、+8 (>7) → ×5。
+        assert_eq!(support_exp_with_level_diff(10, 7, 5), 20);
+        assert_eq!(support_exp_with_level_diff(10, 13, 5), 50);
+        // 対象が低レベル → 逓減 (-1 で ÷2)。
+        assert_eq!(support_exp_with_level_diff(10, 4, 5), 5);
+        // 補給基準 15 で +1 → ×1.5 = 22 (整数)。
+        assert_eq!(support_exp_with_level_diff(15, 6, 5), 22);
+        // 最低 1。
+        assert_eq!(support_exp_with_level_diff(10, 0, 99), 1);
+    }
+
+    /// 統合: 高レベルの対象を修理すると経験値が増える (caster lv1, target lv5 → ×3)。
+    #[test]
+    fn support_exp_more_for_higher_level_target() {
+        use crate::command_menu::SupportKind;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Medic", 2, 6);
+        place_player_unit(&mut app, "Ally", 3, 6);
+        let caster = first_player_uid(&app);
+        let ally = app
+            .database()
+            .unit_instances
+            .iter()
+            .find(|u| u.x == 3 && u.y == 6)
+            .unwrap()
+            .uid
+            .clone();
+        app.database_mut()
+            .unit_by_uid_mut(&caster)
+            .unwrap()
+            .active_features = vec![crate::feature::ActiveFeature::new("修理装置", "")];
+        // 対象を高レベル (total_exp 400 → level 5) に。
+        {
+            let a = app.database_mut().unit_by_uid_mut(&ally).unwrap();
+            a.total_exp = 400;
+            a.damage = 50;
+        }
+        let exp0 = app.database().unit_by_uid(&caster).unwrap().total_exp;
+        app.apply_support_to_target(&caster, &ally, SupportKind::Repair);
+        let gained = app.database().unit_by_uid(&caster).unwrap().total_exp - exp0;
+        assert_eq!(gained, 30, "高レベル対象 (+4) の修理で経験値 10×3=30");
     }
 
     /// 特殊能力が無い / 隣接に要支援の味方が居ないときは支援コマンドを出さない。
