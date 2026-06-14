@@ -2966,8 +2966,10 @@ fn exec_command_pc(
             }
             return exec_command_pc(app, "ClearSkill", &xargs, line, pc, stmts, labels);
         }
-        "mapattack" => {
+        "mapattack" | "mapweapon" => {
             // `MapAttack [unit] weapon X Y` — 座標 (X, Y) を中心にマップ攻撃。
+            // `MapWeapon` は SRC Ver.1.6 までの旧名称で、現在は `MapAttack` と
+            // 完全に同義 (SRC: MapAttackコマンド.md / 更新履歴(2003) で改名)。
             // 武器の max_range 内のすべての対立勢力ユニットに同時にダメージを
             // 与える。反撃 / 経験値 / 資金は無効 (SRC docs)。
             // 引数解釈: 最後の 2 つは X Y (数値), その手前は weapon, 残りがあれば unit。
@@ -16818,6 +16820,32 @@ MapAttack リオ メガキャノン 6 5
             .filter(|u| u.party == crate::Party::Player)
             .count();
         assert_eq!(alive_allies, 2);
+    }
+
+    #[test]
+    fn mapweapon_is_alias_of_mapattack() {
+        // `MapWeapon` は SRC Ver.1.6 までの旧名称で `MapAttack` と同義。
+        // 旧名称でも同じくマップ攻撃が実行されること。
+        let mut app = App::new();
+        let src = "\
+Pilot ガロ ガロ 男性 超能力者 AAAA 100 100 100 100 100 100 100
+Pilot リオ リオ 男性 超能力者 AAAA 100 100 100 100 100 100 100
+Unit ブレイバー Real 1 0 陸 5 M 1000 100 5000 100 1500 100 AAAA
+Unit ゾルダ Mass 1 0 陸 5 M 1000 100 2000 80 800 80 BBBB
+Weapon ブレイバー メガキャノン 8000 1 3 +0 0
+Place ブレイバー リオ 味方 5 5
+Place ゾルダ ガロ 敵 6 5
+MapWeapon リオ メガキャノン 6 5
+";
+        let stmts = event::parse(src).unwrap();
+        execute(&mut app, &stmts).unwrap();
+        let alive_enemies = app
+            .database()
+            .unit_instances
+            .iter()
+            .filter(|u| u.party == crate::Party::Enemy)
+            .count();
+        assert_eq!(alive_enemies, 0);
     }
 
     #[test]

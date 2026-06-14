@@ -741,7 +741,12 @@ pub const COMMAND_CATALOG: &[CommandSpec] = &[
         CommandKind::Stub,
         "文字列変数宣言 (Local と同義)",
     ),
-    sp("MapWeapon", &[], CommandKind::Stub, "マップ兵器属性付与"),
+    sp(
+        "MapWeapon",
+        &[],
+        CommandKind::Implemented,
+        "マップ攻撃 (MapAttack の旧名称)",
+    ),
     sp(
         "OnMapItemChanger",
         &[],
