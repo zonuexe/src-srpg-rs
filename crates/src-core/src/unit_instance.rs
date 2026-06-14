@@ -442,6 +442,11 @@ pub struct UnitInstance {
     /// 合体前のこの機の形態 (`unit_data_name`)。`分離` で元の形態へ戻すために保持。
     #[serde(default)]
     pub pre_combine_form: Option<String>,
+    /// 合体前のこの機 (host) の搭乗パイロット (`pilot_ids`)。合体時に構成ユニットの
+    /// パイロットを合体形態へ統合 (全員搭乗) し、`分離` で host を元の搭乗構成へ戻す
+    /// ために保持する。構成ユニット側は自身の `pilot_ids` を温存しているため復帰可能。
+    #[serde(default)]
+    pub pre_combine_pilots: Vec<String>,
 }
 
 fn default_support_attack() -> i32 {
@@ -509,6 +514,7 @@ impl UnitInstance {
             stored_in: None,
             combined_from: Vec::new(),
             pre_combine_form: None,
+            pre_combine_pilots: Vec::new(),
         }
     }
 

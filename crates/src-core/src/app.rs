@@ -5810,9 +5810,29 @@ impl App {
             .database
             .unit_by_uid(host_uid)
             .map(|u| u.unit_data_name.clone());
+        // パイロット統合 (全員搭乗): host の元搭乗者を温存しつつ、構成ユニットの
+        // パイロットを合体形態へ集約する。構成ユニット側の pilot_ids は温存され
+        // (off_map のまま)、分離時に各自へ戻る。
+        let host_pilots = self
+            .database
+            .unit_by_uid(host_uid)
+            .map(|u| u.pilot_ids.clone())
+            .unwrap_or_default();
+        let mut merged_pilots = host_pilots.clone();
+        for p in &partners {
+            if let Some(pu) = self.database.unit_by_uid(p) {
+                for pid in &pu.pilot_ids {
+                    if !merged_pilots.contains(pid) {
+                        merged_pilots.push(pid.clone());
+                    }
+                }
+            }
+        }
         self.set_unit_form(host_uid, &combined_form);
         if let Some(u) = self.database.unit_by_uid_mut(host_uid) {
             u.pre_combine_form = pre_form;
+            u.pre_combine_pilots = host_pilots;
+            u.pilot_ids = merged_pilots;
             u.combined_from = partners.clone();
             u.has_acted = true;
         }
@@ -5875,9 +5895,17 @@ impl App {
         if let Some(form) = pre {
             self.set_unit_form(host_uid, &form);
         }
+        // host の搭乗者を合体前の構成へ戻す (構成ユニットのパイロットは各機へ復帰)。
+        let pre_pilots = self
+            .database
+            .unit_by_uid(host_uid)
+            .map(|u| u.pre_combine_pilots.clone())
+            .unwrap_or_default();
         if let Some(u) = self.database.unit_by_uid_mut(host_uid) {
+            u.pilot_ids = pre_pilots;
             u.combined_from.clear();
             u.pre_combine_form = None;
+            u.pre_combine_pilots.clear();
         }
         self.push_message("分離！".to_string());
         if let Some(i) = self.database.idx_by_uid(host_uid) {
@@ -9688,6 +9716,51 @@ mod tests {
             "host (3,3) 隣接に復帰: ({},{})",
             p.x,
             p.y
+        );
+    }
+
+    /// 合体時のパイロット統合: 構成ユニットのパイロットが合体形態へ搭乗 (全員搭乗)、
+    /// 分離で各機の搭乗構成へ戻る。
+    #[test]
+    fn combine_integrates_pilots_and_separate_restores() {
+        let mut app = App::new();
+        let (host, partner) = setup_combine(&mut app);
+        // host / partner に区別可能な pilot_ids を設定。
+        app.database_mut().unit_by_uid_mut(&host).unwrap().pilot_ids = vec!["host_p".to_string()];
+        app.database_mut()
+            .unit_by_uid_mut(&partner)
+            .unwrap()
+            .pilot_ids = vec!["partner_p".to_string()];
+
+        app.apply_combine(&host);
+        let h = app.database().unit_by_uid(&host).unwrap();
+        assert!(
+            h.pilot_ids.contains(&"host_p".to_string()),
+            "host のパイロットを維持"
+        );
+        assert!(
+            h.pilot_ids.contains(&"partner_p".to_string()),
+            "相手のパイロットが合体形態へ搭乗"
+        );
+        assert_eq!(
+            h.pre_combine_pilots,
+            vec!["host_p".to_string()],
+            "合体前の搭乗構成を保持"
+        );
+
+        app.apply_separate(&host);
+        let h = app.database().unit_by_uid(&host).unwrap();
+        assert_eq!(
+            h.pilot_ids,
+            vec!["host_p".to_string()],
+            "分離で host の搭乗構成が復帰"
+        );
+        assert!(h.pre_combine_pilots.is_empty(), "統合状態がクリアされる");
+        let p = app.database().unit_by_uid(&partner).unwrap();
+        assert_eq!(
+            p.pilot_ids,
+            vec!["partner_p".to_string()],
+            "相手のパイロットが各機へ復帰"
         );
     }
 
