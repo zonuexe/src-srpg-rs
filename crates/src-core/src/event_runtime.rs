@@ -3134,9 +3134,10 @@ fn exec_command_pc(
             let name = xargs.first().map(|s| s.as_str()).unwrap_or("");
             match name {
                 "データセーブ" => {
-                    log::info!(
-                        "CallIntermissionCommand: データセーブ (save not implemented in WASM)"
-                    );
+                    // メニュー経路 (`InterItem::Save`) と同じ実体に委譲する。
+                    // 現在状態を JSON 化して `__quicksave` に保存 (フロントが
+                    // localStorage へ永続化)。
+                    app.intermission_data_save();
                 }
                 "機体改造"
                 | "ユニットの強化"
@@ -16846,6 +16847,20 @@ MapWeapon リオ メガキャノン 6 5
             .filter(|u| u.party == crate::Party::Enemy)
             .count();
         assert_eq!(alive_enemies, 0);
+    }
+
+    #[test]
+    fn call_intermission_command_data_save_writes_quicksave() {
+        // `.eve CallIntermissionCommand データセーブ` はメニュー経路と同じ実体に
+        // 委譲し、現在状態を `__quicksave` script_var へ書き込む。
+        let mut app = App::new();
+        assert!(app.script_var("__quicksave").is_empty());
+        let stmts = event::parse("CallIntermissionCommand データセーブ\n").unwrap();
+        execute(&mut app, &stmts).unwrap();
+        assert!(
+            !app.script_var("__quicksave").is_empty(),
+            "データセーブで __quicksave が書かれるべき"
+        );
     }
 
     #[test]

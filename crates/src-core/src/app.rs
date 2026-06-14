@@ -7121,7 +7121,11 @@ impl App {
 
     /// インターミッションの「データセーブ」。`to_save_json()` を `__quicksave` に
     /// 格納する (マップコマンドの QuickSave と同経路)。フロントエンドが永続化する。
-    fn intermission_data_save(&mut self) {
+    /// データセーブを実行する。現在の状態を JSON 化し `__quicksave` script_var に
+    /// 保存する (フロントエンドが localStorage に永続化する責務を持つ)。インター
+    /// ミッションメニューの「データセーブ」と `.eve CallIntermissionCommand データセーブ`
+    /// の両経路から共有する。
+    pub(crate) fn intermission_data_save(&mut self) {
         match self.to_save_json() {
             Ok(json) => {
                 self.set_script_var("__quicksave".to_string(), json);
