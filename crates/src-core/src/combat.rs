@@ -276,6 +276,14 @@ pub fn predict_with_status_terrain(
 
     let raw_hit_f = ((ed_hit - ed_avd + hit_adj) as f64 * terrain_hit_mult * size_mult) as i32;
     let mut hit_chance = raw_hit_f.clamp(5, 95);
+    // 盲目 / 撹乱 (攻撃側): 命中率が半減する (特殊効果攻撃属性 盲 / 撹)。
+    if has(atk_statuses, "盲目") || has(atk_statuses, "撹乱") {
+        hit_chance /= 2;
+    }
+    // 盲目 (防御側): 盲目ユニットへの攻撃の命中率は 1.5 倍 (95 上限)。
+    if has(def_statuses, "盲目") {
+        hit_chance = (hit_chance * 3 / 2).min(95);
+    }
     // 必中 (attacker) / 捨て身 (defender=無防備) / 麻痺 / 凍結 → 命中 100。
     if has(atk_statuses, "必中")
         || has(def_statuses, "捨て身")
@@ -399,7 +407,7 @@ pub fn critical_probability(
 /// 武器の `class` 文字列から特殊効果攻撃属性 (`特殊効果攻撃属性.md`) を抽出し、
 /// 命中時に防御側へ付与する `(状態異常名, lifetime)` の列を返す。
 ///
-/// 代表的な行動阻害・状態異常属性に対応 (Ｓ/縛/痺/眠/乱/凍/石/毒/不/止/劣/低防/低攻/低運)。
+/// 代表的な行動阻害・状態異常属性に対応 (Ｓ/縛/痺/眠/乱/凍/石/毒/不/止/劣/低防/低攻/低運/盲/撹)。
 /// `属性L<n>` でターン数を上書きできる。lifetime は「効果ターン数 + 1」を返す:
 /// `begin_phase` が当該陣営フェイズ開始時に lifetime を 1 減らすため、相手の N
 /// フェイズに効かせるには N+1 が必要 (L0 = 戦闘中のみ → 最小 lifetime 1)。
@@ -422,6 +430,9 @@ pub fn weapon_special_effects(class: &str) -> Vec<(String, i32)> {
             // 能力 DOWN 系 (3 ターン)。攻撃力 DOWN=与ダメ ×0.75 / 運動性 DOWN=命中回避 -15。
             "低攻" => Some(("攻撃力ＤＯＷＮ", 3)),
             "低運" => Some(("運動性ＤＯＷＮ", 3)),
+            // 命中率低下系。盲=盲目 (3T、攻撃側命中 ×0.5/被攻撃命中 ×1.5)、撹=撹乱 (2T、攻撃側命中 ×0.5)。
+            "盲" => Some(("盲目", 3)),
+            "撹" => Some(("撹乱", 2)),
             _ => None,
         };
         if let Some((name, default_turns)) = mapped {
@@ -783,6 +794,9 @@ mod tests {
             weapon_special_effects("低運"),
             vec![("運動性ＤＯＷＮ".to_string(), 4)]
         );
+        // 命中率低下系 (盲=盲目3T / 撹=撹乱2T)。
+        assert_eq!(weapon_special_effects("盲"), vec![("盲目".to_string(), 4)]);
+        assert_eq!(weapon_special_effects("撹"), vec![("撹乱".to_string(), 3)]);
     }
 
     /// 攻撃力ＤＯＷＮ 状態は与ダメージを ×0.75 に、攻撃力ＵＰ は ×1.25 にする。
@@ -1068,6 +1082,75 @@ mod tests {
             &["ひらめき".to_string()],
         );
         assert_eq!(prev.hit_chance, 0);
+    }
+
+    /// 盲目 / 撹乱 (攻撃側) は命中率を半減、盲目 (防御側) は被命中を 1.5 倍にする。
+    #[test]
+    fn status_moumoku_kakuran_modify_hit() {
+        // 攻撃側 hit 30 / 防御側 dodge 0 → 中間値のベースライン。
+        let base = predict_with_status(
+            &p(30, 0, 0),
+            &u(0, vec![]),
+            &weapon(0, 1, 1, 0),
+            &p(0, 0, 0),
+            &u(0, vec![]),
+            0,
+            0,
+            100,
+            100,
+            &[],
+            &[],
+        )
+        .hit_chance;
+        let atk_blind = predict_with_status(
+            &p(30, 0, 0),
+            &u(0, vec![]),
+            &weapon(0, 1, 1, 0),
+            &p(0, 0, 0),
+            &u(0, vec![]),
+            0,
+            0,
+            100,
+            100,
+            &["盲目".to_string()],
+            &[],
+        )
+        .hit_chance;
+        let atk_kakuran = predict_with_status(
+            &p(30, 0, 0),
+            &u(0, vec![]),
+            &weapon(0, 1, 1, 0),
+            &p(0, 0, 0),
+            &u(0, vec![]),
+            0,
+            0,
+            100,
+            100,
+            &["撹乱".to_string()],
+            &[],
+        )
+        .hit_chance;
+        let def_blind = predict_with_status(
+            &p(30, 0, 0),
+            &u(0, vec![]),
+            &weapon(0, 1, 1, 0),
+            &p(0, 0, 0),
+            &u(0, vec![]),
+            0,
+            0,
+            100,
+            100,
+            &[],
+            &["盲目".to_string()],
+        )
+        .hit_chance;
+        assert_eq!(atk_blind, base / 2, "盲目 (攻撃側) で命中半減");
+        assert_eq!(atk_kakuran, base / 2, "撹乱 (攻撃側) で命中半減");
+        assert_eq!(
+            def_blind,
+            (base * 3 / 2).min(95),
+            "盲目 (防御側) で被命中 1.5 倍"
+        );
     }
 
     #[test]
