@@ -331,6 +331,18 @@ pub fn predict_with_status_terrain(
     if has(atk_statuses, "捨て身") {
         raw_dmg *= 3;
     }
+    // 攻撃力ＵＰ / ＤＯＷＮ (SetStatus / 特殊効果攻撃属性 低攻): 与ダメージ ×1.25 / ×0.75。
+    // ダメージ増加系スペシャルパワー (熱血/魂/気合) がかかっている場合はそちらが優先 (重複させない)。
+    if has(atk_statuses, "攻撃力ＵＰ")
+        && !has(atk_statuses, "熱血")
+        && !has(atk_statuses, "魂")
+        && !has(atk_statuses, "気合")
+    {
+        raw_dmg = (raw_dmg as f64 * 1.25) as i64;
+    }
+    if has(atk_statuses, "攻撃力ＤＯＷＮ") {
+        raw_dmg = (raw_dmg as f64 * 0.75) as i64;
+    }
     if has(def_statuses, "麻痺") || has(def_statuses, "凍結") {
         raw_dmg = (raw_dmg as f64 * 1.5) as i64;
     }
@@ -387,7 +399,7 @@ pub fn critical_probability(
 /// 武器の `class` 文字列から特殊効果攻撃属性 (`特殊効果攻撃属性.md`) を抽出し、
 /// 命中時に防御側へ付与する `(状態異常名, lifetime)` の列を返す。
 ///
-/// 代表的な行動阻害・状態異常属性のみ対応 (Ｓ/縛/痺/眠/乱/凍/石/毒/不/止/劣)。
+/// 代表的な行動阻害・状態異常属性に対応 (Ｓ/縛/痺/眠/乱/凍/石/毒/不/止/劣/低防/低攻/低運)。
 /// `属性L<n>` でターン数を上書きできる。lifetime は「効果ターン数 + 1」を返す:
 /// `begin_phase` が当該陣営フェイズ開始時に lifetime を 1 減らすため、相手の N
 /// フェイズに効かせるには N+1 が必要 (L0 = 戦闘中のみ → 最小 lifetime 1)。
@@ -407,6 +419,9 @@ pub fn weapon_special_effects(class: &str) -> Vec<(String, i32)> {
             "不" => Some(("行動不能", 1)),
             "止" => Some(("足止め", 1)),
             "劣" | "低防" => Some(("装甲低下", 3)),
+            // 能力 DOWN 系 (3 ターン)。攻撃力 DOWN=与ダメ ×0.75 / 運動性 DOWN=命中回避 -15。
+            "低攻" => Some(("攻撃力ＤＯＷＮ", 3)),
+            "低運" => Some(("運動性ＤＯＷＮ", 3)),
             _ => None,
         };
         if let Some((name, default_turns)) = mapped {
@@ -759,6 +774,64 @@ mod tests {
             weapon_special_effects("毒 劣"),
             vec![("毒".to_string(), 4), ("装甲低下".to_string(), 4)]
         );
+        // 能力 DOWN 系 (低攻=攻撃力ＤＯＷＮ / 低運=運動性ＤＯＷＮ、3 ターン)。
+        assert_eq!(
+            weapon_special_effects("低攻"),
+            vec![("攻撃力ＤＯＷＮ".to_string(), 4)]
+        );
+        assert_eq!(
+            weapon_special_effects("低運"),
+            vec![("運動性ＤＯＷＮ".to_string(), 4)]
+        );
+    }
+
+    /// 攻撃力ＤＯＷＮ 状態は与ダメージを ×0.75 に、攻撃力ＵＰ は ×1.25 にする。
+    #[test]
+    fn attack_power_status_scales_damage() {
+        let base = predict_with_status(
+            &p(0, 0, 100),
+            &u(0, vec![]),
+            &weapon(800, 1, 1, 0),
+            &p(0, 0, 0),
+            &u(0, vec![]),
+            0,
+            0,
+            100,
+            100,
+            &[],
+            &[],
+        )
+        .damage;
+        let down = predict_with_status(
+            &p(0, 0, 100),
+            &u(0, vec![]),
+            &weapon(800, 1, 1, 0),
+            &p(0, 0, 0),
+            &u(0, vec![]),
+            0,
+            0,
+            100,
+            100,
+            &["攻撃力ＤＯＷＮ".to_string()],
+            &[],
+        )
+        .damage;
+        let up = predict_with_status(
+            &p(0, 0, 100),
+            &u(0, vec![]),
+            &weapon(800, 1, 1, 0),
+            &p(0, 0, 0),
+            &u(0, vec![]),
+            0,
+            0,
+            100,
+            100,
+            &["攻撃力ＵＰ".to_string()],
+            &[],
+        )
+        .damage;
+        assert_eq!(down, (base as f64 * 0.75) as i64, "攻撃力ＤＯＷＮ で ×0.75");
+        assert_eq!(up, (base as f64 * 1.25) as i64, "攻撃力ＵＰ で ×1.25");
     }
 
     fn weapon(power: i64, min: i32, max: i32, prec: i32) -> WeaponData {

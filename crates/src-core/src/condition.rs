@@ -124,6 +124,16 @@ impl Condition {
             "装甲低下" => vec![ConditionEffect::ArmorDown {
                 amount: self.level.max(1) * 100,
             }],
+            // 運動性ＵＰ / ＤＯＷＮ: 命中・回避に ±15 (SetStatus / 特殊効果攻撃属性 低運)。
+            // HitDown/DodgeDown は負値で UP を表現する (combat_bonuses が減算するため)。
+            "運動性ＵＰ" => vec![
+                ConditionEffect::HitDown { amount: -15 },
+                ConditionEffect::DodgeDown { amount: -15 },
+            ],
+            "運動性ＤＯＷＮ" => vec![
+                ConditionEffect::HitDown { amount: 15 },
+                ConditionEffect::DodgeDown { amount: 15 },
+            ],
             "熱血" => vec![ConditionEffect::AttackMultiplier { multiplier: 2.0 }],
             "魂" => vec![ConditionEffect::AttackMultiplier { multiplier: 3.0 }],
             "ひらめき" => vec![ConditionEffect::AttackMultiplier { multiplier: 1.5 }],
@@ -189,6 +199,18 @@ mod tests {
         let konran_effects = konran.effects();
         assert!(konran_effects.contains(&ConditionEffect::AttackDisabled));
         assert!(konran_effects.contains(&ConditionEffect::HitDown { amount: 20 }));
+
+        // 運動性ＵＰ → 命中・回避 +15 (HitDown/DodgeDown は負値で UP)。
+        let up = Condition::new("運動性ＵＰ", 3);
+        let up_effects = up.effects();
+        assert!(up_effects.contains(&ConditionEffect::HitDown { amount: -15 }));
+        assert!(up_effects.contains(&ConditionEffect::DodgeDown { amount: -15 }));
+
+        // 運動性ＤＯＷＮ → 命中・回避 -15。
+        let down = Condition::new("運動性ＤＯＷＮ", 3);
+        let down_effects = down.effects();
+        assert!(down_effects.contains(&ConditionEffect::HitDown { amount: 15 }));
+        assert!(down_effects.contains(&ConditionEffect::DodgeDown { amount: 15 }));
     }
 
     #[test]
