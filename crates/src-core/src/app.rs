@@ -6606,17 +6606,19 @@ impl App {
     /// マップコマンドメニューを開く。
     fn open_map_menu(&mut self) {
         use crate::command_menu::{CommandMenu, MapAction};
-        self.command_menu = Some(CommandMenu::Map {
-            items: vec![
-                MapAction::EndTurn,
-                MapAction::UnitList,
-                MapAction::Settings,
-                MapAction::ToggleAutoCounter,
-                MapAction::QuickSave,
-                MapAction::QuickLoad,
-            ],
-            cursor: 0,
-        });
+        let mut items = vec![
+            MapAction::EndTurn,
+            MapAction::UnitList,
+            MapAction::Settings,
+            MapAction::ToggleAutoCounter,
+        ];
+        // 「作戦目的」はシナリオが `勝利条件:` ラベルを定義している場合のみ表示する。
+        if self.has_victory_condition_event() {
+            items.push(MapAction::VictoryConditions);
+        }
+        items.push(MapAction::QuickSave);
+        items.push(MapAction::QuickLoad);
+        self.command_menu = Some(CommandMenu::Map { items, cursor: 0 });
     }
 
     /// メニュー項目が選ばれた時のアクション解決。
@@ -6768,6 +6770,14 @@ impl App {
                                 "ＯＦＦ (手動選択)"
                             }
                         ));
+                        true
+                    }
+                    MapAction::VictoryConditions => {
+                        // シナリオ定義の `勝利条件:` ラベルを発火する。メニューには
+                        // ラベル定義時のみ現れるが、発火に失敗した場合の保険も置く。
+                        if !self.fire_victory_condition_event() {
+                            self.push_message("勝利条件は設定されていません".to_string());
+                        }
                         true
                     }
                     MapAction::QuickSave => {
@@ -10569,6 +10579,42 @@ mod tests {
         // command_menu は閉じている。
         assert!(app.command_menu().is_none());
         let _ = start_turn;
+    }
+
+    #[test]
+    fn victory_conditions_map_menu_item_gated_on_label() {
+        use crate::command_menu::{CommandMenu, MapAction};
+        let mut app = App::new();
+
+        // `勝利条件:` ラベルが無いときは「作戦目的」を出さない。
+        app.open_map_menu();
+        match app.command_menu() {
+            Some(CommandMenu::Map { items, .. }) => {
+                assert!(!items.contains(&MapAction::VictoryConditions));
+            }
+            _ => panic!("map menu expected"),
+        }
+
+        // ラベルを定義すると「作戦目的」が現れ、選択でラベル本体が走る。
+        let stmts = crate::data::event::parse("勝利条件:\nSet vc_fired 1\nReturn\n")
+            .expect("parse 勝利条件");
+        app.script_library_mut().append(&stmts);
+        assert!(app.has_victory_condition_event());
+
+        app.open_map_menu();
+        let items = match app.command_menu() {
+            Some(CommandMenu::Map { items, .. }) => items.clone(),
+            _ => panic!("map menu expected"),
+        };
+        assert!(items.contains(&MapAction::VictoryConditions));
+
+        // メニュー経由で実行 → `勝利条件:` 本体が発火する。
+        let idx = items
+            .iter()
+            .position(|a| *a == MapAction::VictoryConditions)
+            .unwrap();
+        assert!(app.execute_menu_action(crate::command_menu::MenuActionId::Map(items[idx])));
+        assert_eq!(app.script_var("vc_fired"), "1");
     }
 
     #[test]

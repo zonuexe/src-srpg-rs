@@ -46,6 +46,9 @@ pub enum MapAction {
     Settings,
     /// 自動反撃モード切替: 味方が攻撃された際の反撃手段選択を自動化する。
     ToggleAutoCounter,
+    /// 作戦目的: シナリオ定義の `勝利条件:` ラベルを発火して勝利条件を表示する。
+    /// `勝利条件:` ラベルが定義されているステージでのみメニューに現れる。
+    VictoryConditions,
     /// クイックセーブ
     QuickSave,
     /// クイックロード
@@ -59,6 +62,7 @@ impl MapAction {
             Self::UnitList => "部隊表",
             Self::Settings => "設定変更",
             Self::ToggleAutoCounter => "自動反撃モード",
+            Self::VictoryConditions => "作戦目的",
             Self::QuickSave => "クイックセーブ",
             Self::QuickLoad => "クイックロード",
         }
