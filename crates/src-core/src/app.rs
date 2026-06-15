@@ -3195,6 +3195,16 @@ impl App {
             } else {
                 applied_damage
             };
+        // 切り払い: 格闘系の攻撃を防御側が確率で無効化する (攻撃側 直撃 で無効化されない)。
+        let atk_has_chokugeki = atk_statuses.iter().any(|s| s.contains("直撃"));
+        let parried = hit && !atk_has_chokugeki && self.roll_parry(atk_idx, def_idx, &weapon.class);
+        if parried {
+            self.push_message(format!(
+                "{} は {} の [{}] を切り払った！",
+                def_pilot.nickname, atk_pilot.nickname, weapon.name
+            ));
+        }
+        let applied_damage = if parried { 0 } else { applied_damage };
 
         // 援護防御チェック。`def_mode` で挙動を切替える (SRC 反撃モードの「援護防御
         // ON/OFF」):
@@ -3326,12 +3336,16 @@ impl App {
                     }
                 } else {
                     // 特殊効果攻撃属性: 命中かつ生存時に確率で状態異常を付与。
-                    let inflicted =
-                        self.apply_weapon_special_effects(def_idx, &weapon, &atk_pilot, &def_pilot);
+                    // 切り払いで無効化された攻撃は特殊効果も発動しない。
+                    let inflicted = if parried {
+                        Vec::new()
+                    } else {
+                        self.apply_weapon_special_effects(def_idx, &weapon, &atk_pilot, &def_pilot)
+                    };
                     // 衰 / 滅: クリティカル時に対象の現在 HP / EN を割合減少させる。
                     // 引 / 転: クリティカル時に対象の位置を移す。盗: 資金を奪う。
                     // 写 / 化: 発動者が対象のユニットへ変化する。
-                    let decayed = if critical {
+                    let decayed = if critical && !parried {
                         let mut d = self.apply_weapon_crit_decay(def_idx, &weapon);
                         d.extend(self.apply_weapon_crit_reposition(def_idx, (cx, cy), &weapon));
                         d.extend(self.apply_weapon_crit_steal(
@@ -3346,13 +3360,17 @@ impl App {
                         Vec::new()
                     };
                     // 吹 / Ｋ: 命中時に対象を遠ざかる方向へ押し出す。
-                    let knocked = self.apply_weapon_knockback(
-                        def_idx,
-                        (cx, cy),
-                        &atk_unit_name,
-                        &weapon,
-                        critical,
-                    );
+                    let knocked = if parried {
+                        false
+                    } else {
+                        self.apply_weapon_knockback(
+                            def_idx,
+                            (cx, cy),
+                            &atk_unit_name,
+                            &weapon,
+                            critical,
+                        )
+                    };
                     let mut m = format!(
                         "{} → {} [{}]: 命中 {} ダメージ{} (残HP {})",
                         atk_pilot.nickname,
@@ -5153,6 +5171,58 @@ impl App {
             }
         }
         p.clamp(1, 100)
+    }
+
+    /// ユニットの主パイロットの「切り払い」技能レベル (PilotInstance 優先、無ければ
+    /// `PilotData.features` の「切り払いLv<n>」から)。0 = 切り払い不可。
+    fn unit_parry_level(&self, idx: usize) -> i32 {
+        let u = &self.database.unit_instances[idx];
+        let from_inst = u
+            .pilot_ids
+            .first()
+            .and_then(|id| self.database.pilot_instance_by_id(id))
+            .map(|p| p.skill_level("切り払い"))
+            .unwrap_or(0);
+        if from_inst > 0 {
+            return from_inst;
+        }
+        self.database
+            .pilot_by_name(&u.pilot_name)
+            .and_then(|pd| pd.features.iter().find(|(n, _)| n.contains("切り払い")))
+            .map(|(n, _)| {
+                n.rfind(|c: char| c.is_ascii_digit())
+                    .and_then(|pos| {
+                        let start = n[..=pos]
+                            .rfind(|c: char| !c.is_ascii_digit())
+                            .map(|i| i + 1)
+                            .unwrap_or(0);
+                        n[start..=pos].parse::<i32>().ok()
+                    })
+                    .unwrap_or(1)
+            })
+            .unwrap_or(0)
+    }
+
+    /// 切り払い判定 (SRC `Unit.cs::CheckParryFeature`)。格闘系 (武/格/突/接) の攻撃を、
+    /// 防御側が確率で無効化する。攻撃側が `直撃` を持つときは無効化されない。
+    /// 確率: `2×防御側Lv − 攻撃側Lv` が `Dice(1..32)` 以上で発動。防御側が切り払いを
+    /// 持たない (Lv0) ときは乱数を消費しない (既存 RNG 列を保つ)。
+    fn roll_parry(&mut self, atk_idx: usize, def_idx: usize, weapon_class: &str) -> bool {
+        let is_melee = weapon_class.contains('武')
+            || weapon_class.contains('格')
+            || weapon_class.contains('突')
+            || weapon_class.contains('接');
+        if !is_melee {
+            return false;
+        }
+        let def_parry = self.unit_parry_level(def_idx);
+        if def_parry <= 0 {
+            return false;
+        }
+        let atk_parry = self.unit_parry_level(atk_idx);
+        let prob = 2 * def_parry - atk_parry;
+        let dice = (self.next_u32() % 32) as i32 + 1; // 1..=32
+        prob >= dice
     }
 
     /// 即死 (`即`) の発動判定。武器が `即` 属性を持ち対象がボスでないとき、特殊効果
@@ -14217,6 +14287,53 @@ End
         let with_sutemi = counter_dmg(true);
         assert!(normal > 0, "反撃が命中している");
         assert_eq!(with_sutemi, normal, "捨て身 は反撃では ×3 されない");
+    }
+
+    /// 切り払い: 高レベルの防御側は格闘攻撃を切り払う (確率 prob=2×防御Lv−攻撃Lv、Dice 1..32)。
+    /// 射撃 (近接でない) は切り払い対象外。
+    #[test]
+    fn parry_nullifies_melee_for_skilled_defender() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Swordsman", 2, 6);
+        // 攻撃側用に 切り払いなしの別パイロット Brute を作る。
+        {
+            let mut p = app.database().pilot_by_name("PILOT").unwrap().clone();
+            p.name = "Brute".into();
+            p.nickname = "Brute".into();
+            p.features = vec![];
+            app.database_mut().pilots.push(p);
+        }
+        let attacker = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Swordsman",
+            "Brute",
+            crate::Party::Enemy,
+            3,
+            6,
+        ));
+        // Swordsman の搭乗者 PILOT に 切り払いLv16 (prob 2×16=32 → 必ず発動)。
+        {
+            let p = app
+                .database_mut()
+                .pilots
+                .iter_mut()
+                .find(|p| p.name == "PILOT")
+                .unwrap();
+            p.features.push(("切り払いLv16".into(), String::new()));
+        }
+        let def_uid = first_player_uid(&app);
+        let def_idx = app.database().idx_by_uid(&def_uid).unwrap();
+        let atk_idx = app.database().idx_by_uid(&attacker).unwrap();
+        assert_eq!(app.unit_parry_level(def_idx), 16, "防御側 切り払いLv16");
+        assert_eq!(app.unit_parry_level(atk_idx), 0, "攻撃側 切り払いなし");
+        assert!(
+            app.roll_parry(atk_idx, def_idx, "武"),
+            "格闘攻撃 (武) を切り払う"
+        );
+        assert!(
+            !app.roll_parry(atk_idx, def_idx, "射"),
+            "射撃は切り払い対象外"
+        );
     }
 
     #[test]
