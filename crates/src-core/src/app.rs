@@ -4143,6 +4143,10 @@ impl App {
         if self.ai_use_support_ability(idx) {
             return;
         }
+        // マップ兵器を持つ AI は、2 体以上の敵を巻き込める照準があれば優先発射する。
+        if self.ai_use_map_weapon(idx) {
+            return;
+        }
         // 自ユニットの最大射程 (= 攻撃移動目標距離)
         let max_range = self
             .database
@@ -4351,6 +4355,69 @@ impl App {
             }
         }
         let _ = self.attack_target();
+    }
+
+    /// 敵 AI のマップ兵器使用。`Ｍ` 属性の武器を持ち、現在位置からの照準で 2 体以上の
+    /// 敵対ユニットを巻き込める場合、最も多く巻き込む座標へマップ攻撃を発射する。発射したら
+    /// `true`。マップ兵器は移動前提でないため現在位置から評価する。テスト用ユニットは
+    /// マップ武器を持たないので無効 (= 既存テストへ影響なし)。
+    fn ai_use_map_weapon(&mut self, idx: usize) -> bool {
+        let pos = (
+            self.database.unit_instances[idx].x,
+            self.database.unit_instances[idx].y,
+        );
+        let party = self.database.unit_instances[idx].party;
+        let unit_name = self.database.unit_instances[idx].unit_data_name.clone();
+        let caster = self.database.unit_instances[idx].uid.clone();
+        // マップ兵器 (class に全角 Ｍ) の WeaponData を収集。
+        let map_weapons: Vec<crate::data::unit::WeaponData> =
+            match self.database.unit_by_name(&unit_name) {
+                Some(d) => d
+                    .weapons
+                    .iter()
+                    .filter(|w| w.class.contains('Ｍ'))
+                    .cloned()
+                    .collect(),
+                None => return false,
+            };
+        if map_weapons.is_empty() {
+            return false;
+        }
+        let enemies: Vec<(u32, u32)> = self
+            .database
+            .unit_instances
+            .iter()
+            .filter(|u| !u.off_map && u.party.is_hostile_to(party))
+            .map(|u| (u.x, u.y))
+            .collect();
+        if enemies.len() < 2 {
+            return false;
+        }
+        for weapon in &map_weapons {
+            // 各敵位置を照準候補に、最も多く敵を巻き込む中心を探す。
+            let mut best: Option<((u32, u32), usize)> = None;
+            for &center in &enemies {
+                let area = crate::event_runtime::map_attack_area(weapon, pos, center);
+                let hits = enemies.iter().filter(|e| area.contains(e)).count();
+                if hits >= 2 && best.as_ref().map(|(_, h)| hits > *h).unwrap_or(true) {
+                    best = Some((center, hits));
+                }
+            }
+            if let Some((center, _)) = best {
+                crate::event_runtime::map_attack(
+                    self,
+                    Some(&caster),
+                    &weapon.name,
+                    center.0,
+                    center.1,
+                );
+                if let Some(i) = self.database.idx_by_uid(&caster) {
+                    self.database.unit_instances[i].has_acted = true;
+                }
+                return true;
+            }
+        }
+        false
     }
 
     /// 敵 AI の回復アビリティ使用。回復系アビリティ (効果に `回復`、霊力/ＳＰ 回復は除く) を
@@ -11114,6 +11181,59 @@ mod tests {
         assert!(
             app.database().unit_by_uid(&healer).unwrap().has_acted,
             "回復で行動終了"
+        );
+    }
+
+    /// マップ兵器を持つ敵 AI は、2 体以上の敵を巻き込める照準があれば発射する。
+    #[test]
+    fn ai_uses_map_weapon_on_multiple_enemies() {
+        use crate::data::unit::WeaponData;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Bomber", 9, 0); // Bomber unit_data + PILOT
+        app.database_mut()
+            .units
+            .iter_mut()
+            .find(|d| d.name == "Bomber")
+            .unwrap()
+            .weapons
+            .push(WeaponData {
+                name: "全体砲".into(),
+                power: 30,
+                min_range: 1,
+                max_range: 5,
+                precision: 50,
+                bullet: -1,
+                en_consumption: 0,
+                necessary_morale: 0,
+                adaption: "AAAA".into(),
+                critical: 0,
+                class: "Ｍ全".into(),
+                extras: Vec::new(),
+            });
+        let bomber = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Bomber",
+            "PILOT",
+            crate::Party::Enemy,
+            5,
+            5,
+        ));
+        place_player_unit(&mut app, "Victim1", 6, 5);
+        place_player_unit(&mut app, "Victim2", 7, 5);
+        app.set_stage_state(crate::stage::StageState::Battle);
+        let idx = app.database().idx_by_uid(&bomber).unwrap();
+        app.ai_act_unit(idx);
+        let victims: Vec<_> = app
+            .database()
+            .unit_instances
+            .iter()
+            .filter(|u| u.unit_data_name.starts_with("Victim"))
+            .collect();
+        let hit = victims.len() < 2 || victims.iter().all(|u| u.damage > 0);
+        assert!(hit, "マップ兵器で複数の敵が被弾する");
+        assert!(
+            app.database().unit_by_uid(&bomber).unwrap().has_acted,
+            "マップ兵器発射で行動終了"
         );
     }
 

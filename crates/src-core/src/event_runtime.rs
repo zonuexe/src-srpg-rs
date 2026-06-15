@@ -12610,7 +12610,7 @@ fn parse_i64_at(s: &str, line: usize) -> Result<i64, ScriptError> {
 /// - `Ｍ移` / `Ｍ線`     : 攻撃者と指定地点を結ぶ直線 (近似で軸線優先)
 /// - `Ｍ扇L<n>`         : 簡略実装で `Ｍ拡` 同等 (将来詳細化)
 /// - 不明 / `Ｍ` 接頭辞なし : 指定地点中心の菱形 (半径 = max_range) — 旧挙動互換
-fn map_attack_area(
+pub(crate) fn map_attack_area(
     weapon: &crate::data::unit::WeaponData,
     src: (u32, u32),
     target: (u32, u32),
@@ -12710,7 +12710,13 @@ fn line_into(
 /// ユニット種別の最初のインスタンスを攻撃元とみなす。weapon 名で武器を
 /// 引き、`map_attack_area` で武器属性別の効果範囲を算出して、その中の
 /// 対立勢力ユニットにダメージを与える。反撃 / 経験値 / 資金加算は無効。
-fn map_attack(app: &mut App, unit_key: Option<&str>, weapon_name: &str, cx: u32, cy: u32) {
+pub(crate) fn map_attack(
+    app: &mut App,
+    unit_key: Option<&str>,
+    weapon_name: &str,
+    cx: u32,
+    cy: u32,
+) {
     // 攻撃側ユニットの解決: unit_key 指定時はそれを引き、無ければ任意の Player ユニットへ。
     let atk_idx = if let Some(k) = unit_key {
         app.database()
