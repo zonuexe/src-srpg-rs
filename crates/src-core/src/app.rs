@@ -5144,8 +5144,9 @@ impl App {
     }
 
     /// 特殊効果の発動確率を、対象の `耐性` / `弱点` 特殊能力で調整する
-    /// (`特殊効果攻撃属性.md`: 弱点属性に対しては発動確率倍、耐性属性に対しては半減)。
-    /// 武器 class のいずれかの属性が対象の弱点に一致すれば ×2、耐性に一致すれば ÷2。
+    /// (SRC `Unit.cs::CriticalProbability` 準拠: 弱点属性に対しては発動確率 +10、
+    /// 耐性属性に対しては半減。与ダメージ自体は「変化なし」)。武器 class のいずれかの
+    /// 属性が対象の弱点に一致すれば +10、耐性に一致すれば ÷2。
     fn adjust_proc_for_resistance(&self, def_idx: usize, weapon_class: &str, prob: i32) -> i32 {
         let inst = &self.database.unit_instances[def_idx];
         let weak = crate::feature::feature_value(&inst.active_features, "弱点").unwrap_or("");
@@ -5162,7 +5163,7 @@ impl App {
         let mut p = prob;
         for tok in weapon_class.split_whitespace() {
             if weak.split_whitespace().any(|w| w == tok) || added_weak.contains(&tok) {
-                p *= 2;
+                p += 10;
                 break;
             }
             if resist.split_whitespace().any(|r| r == tok) {
@@ -11144,17 +11145,17 @@ mod tests {
         assert_eq!(app.adjust_proc_for_resistance(def_idx, "火 痺", 50), 25);
         // 非一致属性 (氷) なら変化なし。
         assert_eq!(app.adjust_proc_for_resistance(def_idx, "氷 痺", 50), 50);
-        // 弱点=火 → 倍 (100 上限)。
+        // 弱点=火 → +10 (SRC: 弱点はクリ率 +10、100 上限)。
         app.database_mut().unit_instances[def_idx].active_features =
             vec![crate::feature::ActiveFeature::new("弱点", "火")];
-        assert_eq!(app.adjust_proc_for_resistance(def_idx, "火 痺", 40), 80);
-        assert_eq!(app.adjust_proc_for_resistance(def_idx, "火 痺", 80), 100);
+        assert_eq!(app.adjust_proc_for_resistance(def_idx, "火 痺", 40), 50);
+        assert_eq!(app.adjust_proc_for_resistance(def_idx, "火 痺", 95), 100);
 
-        // 弱/効 属性で付加された一時的弱点 (condition `弱点:火`) も倍率に効く。
+        // 弱/効 属性で付加された一時的弱点 (condition `弱点:火`) も +10 に効く。
         app.database_mut().unit_instances[def_idx].active_features = vec![];
         app.database_mut().unit_instances[def_idx]
             .add_condition(crate::Condition::new("弱点:火", 3));
-        assert_eq!(app.adjust_proc_for_resistance(def_idx, "火 痺", 40), 80);
+        assert_eq!(app.adjust_proc_for_resistance(def_idx, "火 痺", 40), 50);
         assert_eq!(app.adjust_proc_for_resistance(def_idx, "氷 痺", 40), 40);
     }
 
