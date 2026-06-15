@@ -179,7 +179,8 @@ fn terrain_adaptation_mults(
 /// | `不屈` (defender) | ダメージ 1 |
 /// | `鉄壁` (defender) | ダメージ 1/4 |
 /// | `毒` (defender) | 命中 +10 |
-/// | `麻痺` / `凍結` (defender) | 命中 100、ダメージ 1.5 倍 |
+/// | `麻痺` / `睡眠` / `凍結` (defender) | 命中 100、ダメージ 1.5 倍 |
+/// | `石化` / `行動不能` (defender) | 命中 100 |
 /// | `分身` (defender) | 命中 -40 |
 /// | `ステルス` (defender) | 命中 -30 (距離情報なしの近似) |
 /// | `バリア` (defender) | ダメージ 1/2 |
@@ -284,11 +285,15 @@ pub fn predict_with_status_terrain(
     if has(def_statuses, "盲目") || has(def_statuses, "狂戦士") {
         hit_chance = (hit_chance * 3 / 2).min(95);
     }
-    // 必中 (attacker) / 捨て身 (defender=無防備) / 麻痺 / 凍結 → 命中 100。
+    // 必中 (attacker) / 捨て身 (defender=無防備) / 行動不能系 (麻痺/睡眠/凍結/石化/行動不能)
+    // → 命中 100 (SRC `Unit.cs`: 「動けなければ絶対に命中」)。
     if has(atk_statuses, "必中")
         || has(def_statuses, "捨て身")
         || has(def_statuses, "麻痺")
+        || has(def_statuses, "睡眠")
         || has(def_statuses, "凍結")
+        || has(def_statuses, "石化")
+        || has(def_statuses, "行動不能")
     {
         hit_chance = 100;
     }
@@ -385,7 +390,8 @@ pub fn predict_with_status_terrain(
     {
         raw_dmg = (raw_dmg as f64 * 0.8) as i64;
     }
-    if has(def_statuses, "麻痺") || has(def_statuses, "凍結") {
+    // 行動不能の防御側 (睡眠=寝こみを襲う ×1.5、`Unit.cs::Damage`。本実装は麻痺/凍結 も同様)。
+    if has(def_statuses, "麻痺") || has(def_statuses, "凍結") || has(def_statuses, "睡眠") {
         raw_dmg = (raw_dmg as f64 * 1.5) as i64;
     }
     if has(def_statuses, "鉄壁") {
@@ -1382,6 +1388,53 @@ mod tests {
         assert_eq!(
             below.damage, below_plain.damage,
             "気力 130 未満では潜在力開放は非発動"
+        );
+    }
+
+    /// 行動不能の防御側 (睡眠/石化/行動不能) は命中 100、睡眠は与ダメージ ×1.5。
+    #[test]
+    fn disabled_defender_is_always_hit_and_sleep_takes_extra_damage() {
+        let ap = p(0, 0, 100);
+        let au = u(0, vec![]);
+        let w = weapon(500, 1, 1, 0);
+        // 高回避の防御側でも、睡眠/石化/行動不能 なら命中 100。
+        let dodgy = p(0, 200, 0);
+        let du = u(0, vec![]);
+        for st in ["睡眠", "石化", "行動不能"] {
+            let pred = predict_with_status(
+                &ap,
+                &au,
+                &w,
+                &dodgy,
+                &du,
+                0,
+                0,
+                100,
+                100,
+                &[],
+                &[st.to_string()],
+            );
+            assert_eq!(pred.hit_chance, 100, "{st} の防御側は命中 100");
+        }
+        // 睡眠 の防御側は与ダメージ ×1.5。
+        let normal = predict_with_status(&ap, &au, &w, &p(0, 0, 0), &du, 0, 0, 100, 100, &[], &[]);
+        let asleep = predict_with_status(
+            &ap,
+            &au,
+            &w,
+            &p(0, 0, 0),
+            &du,
+            0,
+            0,
+            100,
+            100,
+            &[],
+            &["睡眠".to_string()],
+        );
+        assert_eq!(
+            asleep.damage,
+            (normal.damage as f64 * 1.5) as i64,
+            "睡眠 の防御側は与ダメージ ×1.5"
         );
     }
 
