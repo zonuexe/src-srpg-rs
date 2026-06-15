@@ -3159,12 +3159,13 @@ impl App {
         let r = self.next_u32();
         let roll = (r % 100) as i32;
         let hit = roll < effective_hit;
-        // クリティカル判定 (命中時のみ)。防御選択でクリ率が半減する
-        // (SRC `戦闘システム詳細.md`「防御」: クリティカル率 ×0.5)。
+        // クリティカル判定 (命中時のみ)。技能補正 (超反応/超能力/底力) を base へ加算した後、
+        // 防御選択でクリ率が半減する (SRC `戦闘システム詳細.md`「防御」: クリティカル率 ×0.5)。
+        let crit_base = preview.critical_chance + self.crit_skill_bonus(atk_idx, def_idx);
         let crit_chance = if def_mode == "防御" {
-            preview.critical_chance / 2
+            crit_base / 2
         } else {
-            preview.critical_chance
+            crit_base
         };
         let crit_roll = ((r / 100) % 100) as i32;
         // 特殊効果攻撃属性 (CC 属性) を持つ武器では通常のクリティカルは発生しない。
@@ -5430,19 +5431,26 @@ impl App {
     /// ユニットの主パイロットの「切り払い」技能レベル (PilotInstance 優先、無ければ
     /// `PilotData.features` の「切り払いLv<n>」から)。0 = 切り払い不可。
     fn unit_parry_level(&self, idx: usize) -> i32 {
+        self.unit_pilot_skill_level(idx, "切り払い")
+    }
+
+    /// 主パイロット (`pilot_ids` 先頭、無ければ `pilot_name`) の指定技能レベルを返す。
+    /// `PilotInstance` を優先し、無ければ静的 `PilotData.features` から末尾の数字を抽出する
+    /// (レベル表記が無ければ 1、技能が無ければ 0)。技能名は部分一致 (`skill_level` 同様)。
+    fn unit_pilot_skill_level(&self, idx: usize, skill: &str) -> i32 {
         let u = &self.database.unit_instances[idx];
         let from_inst = u
             .pilot_ids
             .first()
             .and_then(|id| self.database.pilot_instance_by_id(id))
-            .map(|p| p.skill_level("切り払い"))
+            .map(|p| p.skill_level(skill))
             .unwrap_or(0);
         if from_inst > 0 {
             return from_inst;
         }
         self.database
             .pilot_by_name(&u.pilot_name)
-            .and_then(|pd| pd.features.iter().find(|(n, _)| n.contains("切り払い")))
+            .and_then(|pd| pd.features.iter().find(|(n, _)| n.contains(skill)))
             .map(|(n, _)| {
                 n.rfind(|c: char| c.is_ascii_digit())
                     .and_then(|pos| {
@@ -5455,6 +5463,33 @@ impl App {
                     .unwrap_or(1)
             })
             .unwrap_or(0)
+    }
+
+    /// クリティカル発生率へのパイロット技能補正 (`Unit.cs` クリティカル発生率計算準拠)。
+    /// 超反応 (攻撃側 +2×Lv / 防御側 −2×Lv)・超能力 (攻撃側 +5)・底力/超底力/覚悟
+    /// (攻撃側 HP が最大の 1/4 以下で +50) の合計を返す。これらの補正は `weapon.critical`
+    /// が特殊効果攻撃属性の発動率計算と共有されるため `combat::critical_probability` には
+    /// 含めず、命中/クリティカルロール直前に `crit_chance` へ加算する (proc 率への漏れ防止)。
+    fn crit_skill_bonus(&self, atk_idx: usize, def_idx: usize) -> i32 {
+        let mut bonus = 0;
+        // 超反応: 攻撃側 +2×Lv / 防御側 −2×Lv。
+        bonus += 2 * self.unit_pilot_skill_level(atk_idx, "超反応");
+        bonus -= 2 * self.unit_pilot_skill_level(def_idx, "超反応");
+        // 超能力: 攻撃側が持てば +5。
+        if self.unit_pilot_skill_level(atk_idx, "超能力") > 0 {
+            bonus += 5;
+        }
+        // 底力 / 超底力 / 覚悟: 攻撃側 HP が最大の 1/4 以下なら +50。
+        let atk = &self.database.unit_instances[atk_idx];
+        let max_hp = self.database.effective_max_hp(atk);
+        if max_hp > 0
+            && (max_hp - atk.damage) * 4 <= max_hp
+            && (self.unit_pilot_skill_level(atk_idx, "底力") > 0
+                || self.unit_pilot_skill_level(atk_idx, "覚悟") > 0)
+        {
+            bonus += 50;
+        }
+        bonus
     }
 
     /// 切り払い判定 (SRC `Unit.cs::CheckParryFeature`)。格闘系 (武/格/突/接) の攻撃を、
@@ -9210,6 +9245,36 @@ mod tests {
             .register_unit(UnitInstance::new(name, "PILOT", Party::Player, x, y));
     }
 
+    /// 指定名・指定 features のパイロットを DB に追加する (技能テスト用)。
+    /// 同名が既にあれば何もしない。ユニットデータは別途 (`place_player_unit` 等) で用意する。
+    fn push_pilot_with_features(app: &mut App, name: &str, features: Vec<(String, String)>) {
+        use crate::data::pilot::{Adaption, PilotData, Sex};
+        if app.database().pilot_by_name(name).is_some() {
+            return;
+        }
+        app.database_mut().pilots.push(PilotData {
+            spirit_commands: Vec::new(),
+            name: name.into(),
+            nickname: name.into(),
+            kana_name: name.into(),
+            sex: Sex::Unspecified,
+            class: String::new(),
+            adaption: Adaption::parse("AAAA").unwrap(),
+            exp_value: 0,
+            infight: 100,
+            shooting: 100,
+            hit: 10,
+            dodge: 10,
+            intuition: 10,
+            technique: 10,
+            personality: None,
+            sp: None,
+            bgm: None,
+            bitmap: None,
+            features,
+        });
+    }
+
     #[test]
     fn battle_click_opens_unit_menu() {
         let mut app = App::new();
@@ -11644,6 +11709,87 @@ mod tests {
         };
         assert_eq!(low.hit, 50, "超底力: HP 1/4 以下で命中 +50");
         assert_eq!(low.dodge, 50, "超底力: HP 1/4 以下で回避 +50");
+    }
+
+    /// 超反応 はクリティカル率を 攻撃側 +2×Lv / 防御側 −2×Lv で増減する (非対称)。
+    #[test]
+    fn crit_skill_bonus_super_reaction_is_asymmetric() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6); // Hero unit_data を用意
+        push_pilot_with_features(&mut app, "ATKP", vec![("超反応L3".into(), String::new())]);
+        push_pilot_with_features(&mut app, "DEFP", vec![("超反応L1".into(), String::new())]);
+        let atk = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "ATKP",
+            crate::Party::Player,
+            3,
+            6,
+        ));
+        let def = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "DEFP",
+            crate::Party::Enemy,
+            4,
+            6,
+        ));
+        let ai = app.database().idx_by_uid(&atk).unwrap();
+        let di = app.database().idx_by_uid(&def).unwrap();
+        assert_eq!(
+            app.crit_skill_bonus(ai, di),
+            4,
+            "超反応: 2×3(攻) − 2×1(防) = 4"
+        );
+    }
+
+    /// 超能力 (攻撃側 +5) と 底力 (攻撃側 HP1/4以下で +50) のクリティカル率補正。
+    #[test]
+    fn crit_skill_bonus_psychic_and_guts() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6);
+        push_pilot_with_features(
+            &mut app,
+            "ESP",
+            vec![
+                ("超能力".into(), String::new()),
+                ("底力".into(), String::new()),
+            ],
+        );
+        push_pilot_with_features(&mut app, "PLAIN", Vec::new());
+        let atk = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "ESP",
+            crate::Party::Player,
+            3,
+            6,
+        ));
+        let def = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "PLAIN",
+            crate::Party::Enemy,
+            4,
+            6,
+        ));
+        let ai = app.database().idx_by_uid(&atk).unwrap();
+        let di = app.database().idx_by_uid(&def).unwrap();
+        // 全 HP: 超能力 +5 のみ (底力 非発動)。
+        assert_eq!(
+            app.crit_skill_bonus(ai, di),
+            5,
+            "超能力 +5 / 底力 は全 HP で非発動"
+        );
+        // HP を 1/4 以下に減らす。
+        let max_hp = {
+            let u = app.database().unit_by_uid(&atk).unwrap();
+            app.database().effective_max_hp(u)
+        };
+        app.database_mut().unit_by_uid_mut(&atk).unwrap().damage = max_hp * 3 / 4 + 1;
+        assert_eq!(
+            app.crit_skill_bonus(ai, di),
+            55,
+            "超能力 +5 + 底力 +50 = 55"
+        );
     }
 
     /// ChangeMode「逃亡」の敵 AI も恐怖と同様に味方から遠ざかる。
