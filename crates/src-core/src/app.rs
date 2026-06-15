@@ -5803,7 +5803,52 @@ impl App {
     /// を成長させ、レベルが上がれば `レベルアップ / LevelUp` イベントを発火する。資金は
     /// `victim_value / 2` を基準に、撃破側の「獲得資金増加」技能で +10%/Lv、「幸運」で
     /// 2 倍 (消費) して `App.money` に加算する。獲得資金額を返す (0 なら無し)。
+    /// `idx` のユニットの主パイロット (静的 `PilotData`) の性格が `機械` か。
+    /// 気力変動の対象外判定に使う (`機械` は気力が動かない)。
+    fn main_pilot_is_mecha(&self, idx: usize) -> bool {
+        self.database
+            .unit_instances
+            .get(idx)
+            .and_then(|u| self.database.pilot_by_name(&u.pilot_name))
+            .and_then(|p| p.personality.as_deref())
+            == Some("機械")
+    }
+
+    /// 撃墜による気力上昇 (`Unit.cs`: 撃破したユニットのパイロットはトータル +4、その陣営の
+    /// 他の出撃中パイロットは +1。性格「機械」は変動しない)。マップ攻撃の撃破は
+    /// `award_kill_rewards` を経由しないため対象外 (原典どおり)。被撃破側陣営の性格別変動
+    /// (超強気 +2 / 弱気 -1 等) は victim_party の引き回しが要るため未対応。
+    fn apply_kill_morale(&mut self, killer_idx: usize) {
+        let killer_party = self.database.unit_instances[killer_idx].party;
+        for i in 0..self.database.unit_instances.len() {
+            let u = &self.database.unit_instances[i];
+            if u.off_map || u.party != killer_party {
+                continue;
+            }
+            // 撃破者本人は +3 (常時) ＋ 陣営加算 +1 (機械以外) = 機械なら +3 / それ以外 +4。
+            // 他の味方は +1 (機械以外)。
+            let mecha = self.main_pilot_is_mecha(i);
+            let delta = if i == killer_idx {
+                if mecha {
+                    3
+                } else {
+                    4
+                }
+            } else if mecha {
+                0
+            } else {
+                1
+            };
+            if delta != 0 {
+                let m = &mut self.database.unit_instances[i];
+                m.morale = (m.morale + delta).clamp(0, 150);
+            }
+        }
+    }
+
     fn award_kill_rewards(&mut self, killer_idx: usize, exp: i32, victim_value: i64) -> i64 {
+        // 撃墜による気力上昇 (撃破者 +4 / 同陣営 +1、機械は不動)。
+        self.apply_kill_morale(killer_idx);
         // 経験値: UnitInstance.total_exp + メインパイロットの PilotInstance 成長。
         let old_level = (self.database.unit_instances[killer_idx].total_exp / 100).max(0) + 1;
         self.database.unit_instances[killer_idx].total_exp += exp;
@@ -11109,6 +11154,69 @@ mod tests {
         assert!(
             !app.database().unit_instances[idx].has_condition("幸運"),
             "幸運 は撃破時に消費される"
+        );
+    }
+
+    /// 撃墜による気力上昇: 撃破者 +4 / 同陣営の他ユニット +1 (`Unit.cs` 準拠)。
+    #[test]
+    fn kill_raises_morale_killer_plus4_faction_plus1() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6); // [0] 撃破者
+        place_player_unit(&mut app, "Ally", 4, 6); // [1] 同陣営
+        app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "PILOT",
+            crate::Party::Enemy,
+            10,
+            10,
+        )); // [2] 敵 (別陣営、対象外)
+        let k0 = app.database().unit_instances[0].morale;
+        let a0 = app.database().unit_instances[1].morale;
+        let e0 = app.database().unit_instances[2].morale;
+        app.award_kill_rewards(0, 0, 0);
+        assert_eq!(
+            app.database().unit_instances[0].morale,
+            k0 + 4,
+            "撃破者は気力 +4"
+        );
+        assert_eq!(
+            app.database().unit_instances[1].morale,
+            a0 + 1,
+            "同陣営の他ユニットは気力 +1"
+        );
+        assert_eq!(
+            app.database().unit_instances[2].morale,
+            e0,
+            "別陣営は変動しない"
+        );
+    }
+
+    /// 性格「機械」のパイロットは撃墜による気力上昇の対象外 (撃破者は +3 のみ)。
+    #[test]
+    fn kill_morale_skips_mecha_pilots() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6);
+        place_player_unit(&mut app, "Ally", 4, 6);
+        app.database_mut()
+            .pilots
+            .iter_mut()
+            .find(|p| p.name == "PILOT")
+            .unwrap()
+            .personality = Some("機械".into());
+        let k0 = app.database().unit_instances[0].morale;
+        let a0 = app.database().unit_instances[1].morale;
+        app.award_kill_rewards(0, 0, 0);
+        assert_eq!(
+            app.database().unit_instances[0].morale,
+            k0 + 3,
+            "機械の撃破者は陣営加算を受けず +3 のみ"
+        );
+        assert_eq!(
+            app.database().unit_instances[1].morale,
+            a0,
+            "機械の同陣営は気力が動かない"
         );
     }
 
