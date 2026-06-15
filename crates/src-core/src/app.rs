@@ -4331,6 +4331,10 @@ impl App {
             self.database.unit_instances[idx].y,
         );
         self.map_cursor = Some(new_pos);
+        // 敵 AI: 射程内に攻撃対象が居れば、攻撃前に攻撃補助の精神コマンドを使う。
+        if self.ai_nearest_target_tile(idx, new_pos).is_some() {
+            self.ai_use_offensive_spirit(idx);
+        }
         // 逐次演出かつ手動反撃モードのとき、攻撃対象が味方なら反撃手段の選択を出して
         // 中断する (応答後に attack を解決)。対象が味方以外/自動反撃モードなら自動解決。
         if self.animate_ai && !self.auto_counter {
@@ -4343,6 +4347,38 @@ impl App {
             }
         }
         let _ = self.attack_target();
+    }
+
+    /// 敵 AI の攻撃補助精神コマンド使用。パイロットが習得済み (SP/気力/レベル充足) の
+    /// 攻撃補助系精神 (魂 > 熱血 > 必中 の優先順) を 1 つ発動する。既に攻撃補助状態を
+    /// 持つ場合や該当精神を習得していない場合は何もしない。テスト用ユニットは
+    /// `spirit_commands` が空なので無効 (= 既存テストへ影響なし)。
+    fn ai_use_offensive_spirit(&mut self, idx: usize) {
+        if self.database.unit_instances[idx].has_condition("魂")
+            || self.database.unit_instances[idx].has_condition("熱血")
+            || self.database.unit_instances[idx].has_condition("必中")
+        {
+            return;
+        }
+        let uid = self.database.unit_instances[idx].uid.clone();
+        let opts = self.spirit_command_options(&uid);
+        if opts.is_empty() {
+            return;
+        }
+        for name in ["魂", "熱血", "必中"] {
+            if let Some((_, cost)) = opts.iter().find(|(n, _)| n == name) {
+                // 気力条件 (魂=120 / 熱血=80 等) を満たすこと。
+                if !self.database.unit_instances[idx].morale_sufficient_for_power(name) {
+                    continue;
+                }
+                let cost = *cost;
+                self.consume_unit_sp(&uid, cost);
+                self.database.unit_instances[idx].add_condition(crate::Condition::new(name, 1));
+                let nick = self.database.unit_instances[idx].pilot_name.clone();
+                self.push_message(format!("{nick} は精神コマンド【{name}】を使用！"));
+                return;
+            }
+        }
     }
 
     /// 移動スライド演出を仕込む (逐次演出時のみ)。`reachable` から `start`→`dest` の
@@ -10890,6 +10926,69 @@ mod tests {
             "恐怖の敵は味方 (5,5) から遠ざかる (移動後距離={dist_after})"
         );
         assert!(c.has_acted, "逃走後は行動終了");
+    }
+
+    /// 敵 AI は射程内に対象が居るとき、攻撃前に攻撃補助の精神 (熱血) を使う。
+    #[test]
+    fn ai_uses_offensive_spirit_before_attacking() {
+        use crate::data::pilot::SpiritCommand;
+        use crate::data::unit::WeaponData;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 5, 5); // 攻撃対象 (味方)
+                                                   // Hero unit_data に隣接武器を持たせる (敵もこの機体を使う)。
+        app.database_mut()
+            .units
+            .iter_mut()
+            .find(|d| d.name == "Hero")
+            .unwrap()
+            .weapons
+            .push(WeaponData {
+                name: "パンチ".into(),
+                power: 50,
+                min_range: 1,
+                max_range: 1,
+                precision: 50,
+                bullet: -1,
+                en_consumption: 0,
+                necessary_morale: 0,
+                adaption: "AAAA".into(),
+                critical: 0,
+                class: String::new(),
+                extras: Vec::new(),
+            });
+        let enemy = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "PILOT",
+            crate::Party::Enemy,
+            6,
+            5,
+        ));
+        // PILOT に 熱血 を習得させ SP を与える。
+        {
+            let p = app
+                .database_mut()
+                .pilots
+                .iter_mut()
+                .find(|p| p.name == "PILOT")
+                .unwrap();
+            p.sp = Some(100);
+            p.spirit_commands = vec![SpiritCommand {
+                name: "熱血".into(),
+                cost: Some(20),
+                level: 1,
+            }];
+        }
+        app.set_stage_state(crate::stage::StageState::Battle);
+        let idx = app.database().idx_by_uid(&enemy).unwrap();
+        app.ai_act_unit(idx);
+        assert!(
+            app.database()
+                .unit_by_uid(&enemy)
+                .unwrap()
+                .has_condition("熱血"),
+            "AI が攻撃前に精神コマンド 熱血 を使う"
+        );
     }
 
     /// 写/化 (能力コピー) はクリティカル時に発動者を対象の形態へ変える。写はサイズ制限あり。
