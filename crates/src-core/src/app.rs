@@ -2862,21 +2862,27 @@ impl App {
         charged: bool,
         post_move: bool,
         totsugeki: bool,
+        firable: impl Fn(&crate::data::unit::WeaponData) -> bool,
     ) -> Option<crate::data::unit::WeaponData> {
         let legal = |w: &crate::data::unit::WeaponData| {
             combat::weapon_in_range(w, dist)
                 && (charged || !combat::is_charge_weapon(w))
                 && Self::weapon_usable_post_move(w, post_move, totsugeki)
+                && firable(w)
         };
         match forced {
-            Some(w) => legal(w).then(|| w.clone()),
-            None if post_move => atk_unit
+            // 強制武器 (プレイヤーが武器選択した場合) は資源を満たさなくても発射を許す
+            // (UI 側で選択可否を制御する想定。射程・移動後制約のみ確認)。
+            Some(w) => (combat::weapon_in_range(w, dist)
+                && (charged || !combat::is_charge_weapon(w))
+                && Self::weapon_usable_post_move(w, post_move, totsugeki))
+            .then(|| w.clone()),
+            None => atk_unit
                 .weapons
                 .iter()
                 .filter(|w| legal(w))
                 .max_by_key(|w| w.power)
                 .cloned(),
-            None => combat::best_weapon_in_range_with_charge(atk_unit, dist, charged).cloned(),
         }
     }
 
@@ -2994,6 +3000,7 @@ impl App {
                 atk_charged,
                 post_move,
                 atk_totsugeki,
+                |w| self.weapon_firable(atk_idx, w),
             ) else {
                 self.push_message(format!(
                     "{}: 射程内に使用可能な武器がありません.",
@@ -3017,6 +3024,7 @@ impl App {
                     atk_charged,
                     post_move,
                     atk_totsugeki,
+                    |w| self.weapon_firable(atk_idx, w),
                 )
                 .is_some()
                 {
@@ -3044,6 +3052,7 @@ impl App {
                 atk_charged,
                 post_move,
                 atk_totsugeki,
+                |w| self.weapon_firable(atk_idx, w),
             ) else {
                 return false;
             };
@@ -3635,7 +3644,7 @@ impl App {
             ),
             (def_x, def_y),
         );
-        let weapon = combat::best_weapon_in_range(&sup_unit, dist).cloned()?;
+        let weapon = self.best_firable_weapon_in_range(sup_idx, &sup_unit, dist)?;
         // 援護武器の EN・残弾消費 (撃破前=index 失効前に消費)。
         if let Some(wi) = sup_unit.weapons.iter().position(|w| w.name == weapon.name) {
             self.consume_weapon_resources(sup_idx, wi);
@@ -3907,7 +3916,7 @@ impl App {
         let (def_pilot, def_unit) = self.database.effective_combat_data(def_idx)?;
         let (atk_pilot, atk_unit) = self.database.effective_combat_data(atk_idx)?;
         let dist = combat::manhattan((dx, dy), target);
-        let weapon = combat::best_weapon_in_range(&def_unit, dist).cloned()?;
+        let weapon = self.best_firable_weapon_in_range(def_idx, &def_unit, dist)?;
         let t_id = self
             .database
             .map
@@ -4882,7 +4891,11 @@ impl App {
             }
             let d = combat::manhattan(cursor, (def.x, def.y));
             // post_move=false なので 突撃 (totsugeki) は影響しない。
-            if Self::pick_attack_weapon(atk_unit, d, forced, atk_charged, false, false).is_some() {
+            if Self::pick_attack_weapon(atk_unit, d, forced, atk_charged, false, false, |w| {
+                self.weapon_firable(atk_idx, w)
+            })
+            .is_some()
+            {
                 match best {
                     None => best = Some((i, d)),
                     Some((_, bd)) if d < bd => best = Some((i, d)),
@@ -5903,6 +5916,51 @@ impl App {
                 m.morale = (m.morale + delta).clamp(0, 150);
             }
         }
+    }
+
+    /// `unit_idx` が `wd` (武器データ) を今発射できるか (残弾・EN・必要気力)。実行時資源を見る。
+    /// 該当 UnitWeapon が無い (未 populate) 場合は弾無制限とみなす (= 既存テストへ無影響)。
+    fn weapon_firable(&self, unit_idx: usize, wd: &crate::data::unit::WeaponData) -> bool {
+        let u = &self.database.unit_instances[unit_idx];
+        // 必要気力。
+        if wd.necessary_morale > 0 && u.morale < wd.necessary_morale {
+            return false;
+        }
+        // EN。
+        let max_en = self.database.effective_max_en(u);
+        if max_en - u.en_consumed < wd.en_consumption {
+            return false;
+        }
+        // 残弾 (有限弾のみ)。武器を名前で unit_data → index 解決し、該当 UnitWeapon を見る。
+        if let Some(di) = self
+            .database
+            .unit_by_name(&u.unit_data_name)
+            .and_then(|d| d.weapons.iter().position(|w| w.name == wd.name))
+        {
+            if let Some(uw) = u.weapons.iter().find(|w| w.weapon_index == di) {
+                if !uw.has_ammo() {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// 射程内かつ発射可能 (残弾/EN/気力) な最高威力武器を選ぶ。`combat::best_weapon_in_range`
+    /// の実行時資源を考慮する版 (反撃 / 援護 / AI 自動選択用)。チャージ武器は除外。
+    fn best_firable_weapon_in_range(
+        &self,
+        unit_idx: usize,
+        unit: &crate::data::unit::UnitData,
+        dist: u32,
+    ) -> Option<crate::data::unit::WeaponData> {
+        unit.weapons
+            .iter()
+            .filter(|w| combat::weapon_in_range(w, dist))
+            .filter(|w| !combat::is_charge_weapon(w))
+            .filter(|w| self.weapon_firable(unit_idx, w))
+            .max_by_key(|w| w.power)
+            .cloned()
     }
 
     /// 武器発射時の資源消費 (EN・残弾)。`Unit.cs` 同様、命中の有無に関わらず発射で消費する。
@@ -12856,6 +12914,47 @@ mod tests {
         let u = app.database().unit_by_uid(&shooter).unwrap();
         assert_eq!(u.en_consumed, 10, "発射で EN を 10 消費");
         assert_eq!(u.weapons[0].bullet_remaining, 2, "発射で残弾 3→2");
+    }
+
+    /// 残弾 0 の武器は自動選択 (反撃 / 援護 / AI) で選ばれず、発射されない。
+    #[test]
+    fn empty_weapon_is_not_auto_selected() {
+        use crate::data::unit::WeaponData;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6);
+        let mut gunner = app.database().unit_by_name("Hero").cloned().unwrap();
+        gunner.name = "Gunner".into();
+        gunner.weapons = vec![WeaponData {
+            name: "空砲".into(),
+            power: 50,
+            min_range: 1,
+            max_range: 1,
+            precision: 100,
+            bullet: 1,
+            en_consumption: 0,
+            necessary_morale: 0,
+            adaption: "AAAA".into(),
+            critical: 0,
+            class: String::new(),
+            extras: Vec::new(),
+        }];
+        app.database_mut().units.push(gunner);
+        let shooter = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Gunner",
+            "PILOT",
+            crate::Party::Enemy,
+            3,
+            6,
+        ));
+        // 残弾 0 の UnitWeapon を attach (空)。
+        {
+            let u = app.database_mut().unit_by_uid_mut(&shooter).unwrap();
+            u.weapons = vec![crate::unit_weapon::UnitWeapon::from_data("空砲", 0, 0)];
+        }
+        // 唯一の武器が残弾 0 → 反撃不成立。
+        let res = app.try_counterattack(3, 6, (2, 6));
+        assert!(res.is_none(), "残弾 0 の武器は自動選択されず反撃しない");
     }
 
     /// 援護攻撃武器の特殊効果攻撃属性が、援護の命中・生存時に防御側へ proc する。
