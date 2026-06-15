@@ -3202,7 +3202,9 @@ impl App {
         //  - "反撃"/"回避"/"防御": 個別反撃を選んだ → 援護防御は発動しない。
         //  - ""(自動/ヘッドレス/行動不能の素通り): 従来どおり 敵/中立/ＮＰＣ フェイズの
         //    攻撃時のみ自動発動 (味方が自分から攻撃した Player フェイズは無効)。
-        let guard_idx = if !hit {
+        // 直撃 (精神コマンド): サポートガード (援護防御) を無効化する (§0.8 / SRC)。
+        let atk_chokugeki = atk_statuses.iter().any(|s| s.contains("直撃"));
+        let guard_idx = if !hit || atk_chokugeki {
             None
         } else {
             match def_mode {
@@ -14085,6 +14087,81 @@ End
             guard_damaged_or_dead,
             "Guard should have taken damage (support guarded Target)"
         );
+    }
+
+    /// 直撃 (精神コマンド) を持つ攻撃側はサポートガード (援護防御) を無効化する。
+    /// Target が直接ダメージを受け、Guard は無傷になる。
+    #[test]
+    fn chokugeki_disables_support_guard() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Target", 3, 6);
+        place_player_unit(&mut app, "Guard", 4, 6);
+        app.database_mut()
+            .unit_instances
+            .iter_mut()
+            .find(|u| u.unit_data_name == "Guard")
+            .unwrap()
+            .add_condition(crate::Condition::new("サポートガード", -1));
+        app.database_mut().register_unit(crate::UnitInstance::new(
+            "Target",
+            "PILOT",
+            crate::Party::Enemy,
+            2,
+            6,
+        ));
+        app.database_mut()
+            .units
+            .iter_mut()
+            .find(|u| u.name == "Target")
+            .unwrap()
+            .weapons
+            .push(crate::data::unit::WeaponData {
+                name: "バルカン".to_string(),
+                power: 50,
+                min_range: 1,
+                max_range: 1,
+                precision: 100,
+                bullet: -1,
+                en_consumption: 0,
+                necessary_morale: 0,
+                adaption: String::new(),
+                critical: 0,
+                class: String::new(),
+                extras: Vec::new(),
+            });
+        // 敵に 必中 + 直撃。
+        {
+            let enemy = app
+                .database_mut()
+                .unit_instances
+                .iter_mut()
+                .find(|u| u.party == crate::Party::Enemy)
+                .unwrap();
+            enemy.add_condition(crate::Condition::new("必中", -1));
+            enemy.add_condition(crate::Condition::new("直撃", -1));
+        }
+        app.set_stage_state(crate::stage::StageState::Battle);
+        app.handle_input(Input::EndPhase); // 敵フェイズ → AI が Target を攻撃
+        let target_damage = app
+            .database()
+            .unit_instances
+            .iter()
+            .find(|u| u.unit_data_name == "Target" && u.party == crate::Party::Player)
+            .map(|u| u.damage)
+            .unwrap_or(0);
+        let guard_damage = app
+            .database()
+            .unit_instances
+            .iter()
+            .find(|u| u.unit_data_name == "Guard")
+            .map(|u| u.damage)
+            .unwrap_or(-1);
+        assert!(
+            target_damage > 0,
+            "直撃でサポートガードが無効 → Target が被弾"
+        );
+        assert_eq!(guard_damage, 0, "Guard は肩代わりしない (無傷)");
     }
 
     #[test]
