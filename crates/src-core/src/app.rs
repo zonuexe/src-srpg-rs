@@ -4191,8 +4191,12 @@ impl App {
             self.database.unit_instances[idx].has_acted = true;
             return;
         }
-        // 回復アビリティを持つ AI は、射程内に負傷した味方が居れば回復を優先する。
+        // 回復/補給アビリティを持つ AI は、射程内に支援を要する味方が居れば優先する。
         if self.ai_use_support_ability(idx) {
+            return;
+        }
+        // 敵対象アビリティ (脱=気力減少 等) を持つ AI は、射程内に敵が居れば使う。
+        if self.ai_use_offensive_ability(idx) {
             return;
         }
         // マップ兵器を持つ AI は、2 体以上の敵を巻き込める照準があれば優先発射する。
@@ -4493,36 +4497,43 @@ impl App {
         false
     }
 
-    /// 敵 AI の回復アビリティ使用。回復系アビリティ (効果に `回復`、霊力/ＳＰ 回復は除く) を
-    /// 持ち、射程内に負傷した味方が居れば、最も負傷の大きい味方へ回復を発動する。発動したら
-    /// `true`。テスト用ユニットはアビリティ無しなので無効 (= 既存テストへ影響なし)。
+    /// 敵 AI の支援アビリティ使用。回復 (HP、効果に `回復`、霊力/ＳＰ は除く) または
+    /// 補給 (EN、効果に `補給`) を提供するアビリティを持ち、射程内にその支援を必要とする
+    /// 味方が居れば、最も必要度の高い味方へ発動する。発動したら `true`。回復対象は最大
+    /// ダメージ、補給対象は最大 EN 消費で選ぶ。テスト用ユニットはアビリティ無しなので
+    /// 無効 (= 既存テストへ影響なし)。
     fn ai_use_support_ability(&mut self, idx: usize) -> bool {
         let caster = self.database.unit_instances[idx].uid.clone();
         let unit_name = self.database.unit_instances[idx].unit_data_name.clone();
-        let heal_idxs: Vec<usize> = match self.database.unit_by_name(&unit_name) {
+        // (アビリティ index, 回復するか, 補給するか) を収集。
+        let support_idxs: Vec<(usize, bool, bool)> = match self.database.unit_by_name(&unit_name) {
             Some(d) => d
                 .abilities
                 .iter()
                 .enumerate()
-                .filter(|(_, a)| {
-                    a.effect.contains("回復")
+                .filter_map(|(i, a)| {
+                    let heals = a.effect.contains("回復")
                         && !a.effect.contains("霊力")
-                        && !a.effect.contains("ＳＰ")
+                        && !a.effect.contains("ＳＰ");
+                    let supplies = a.effect.contains("補給");
+                    (heals || supplies).then_some((i, heals, supplies))
                 })
-                .map(|(i, _)| i)
                 .collect(),
             None => return false,
         };
-        for ab_idx in heal_idxs {
+        for (ab_idx, heals, supplies) in support_idxs {
             if !self.ability_usable(&caster, ab_idx) {
                 continue;
             }
-            // 射程内で最も負傷した味方を対象にする。
+            // 射程内で最も支援を必要とする味方を対象にする
+            // (回復=最大ダメージ / 補給=最大 EN 消費)。
             let target_uids: Vec<String> = self
                 .database
                 .unit_instances
                 .iter()
-                .filter(|u| !u.off_map && u.damage > 0)
+                .filter(|u| {
+                    !u.off_map && ((heals && u.damage > 0) || (supplies && u.en_consumed > 0))
+                })
                 .map(|u| u.uid.clone())
                 .collect();
             let mut best: Option<(String, i64)> = None;
@@ -4530,13 +4541,77 @@ impl App {
                 if !self.ability_target_valid(&caster, ab_idx, &tuid) {
                     continue;
                 }
-                let dmg = self
+                let need = self
                     .database
                     .unit_by_uid(&tuid)
-                    .map(|u| u.damage)
+                    .map(|u| {
+                        let h = if heals { u.damage } else { 0 };
+                        let s = if supplies {
+                            i64::from(u.en_consumed)
+                        } else {
+                            0
+                        };
+                        h.max(s)
+                    })
                     .unwrap_or(0);
-                if best.as_ref().map(|(_, d)| dmg > *d).unwrap_or(true) {
-                    best = Some((tuid, dmg));
+                if best.as_ref().map(|(_, d)| need > *d).unwrap_or(true) {
+                    best = Some((tuid, need));
+                }
+            }
+            if let Some((tuid, _)) = best {
+                self.apply_ability(&caster, ab_idx, &tuid);
+                if let Some(i) = self.database.idx_by_uid(&caster) {
+                    if self.database.unit_instances[i].has_acted {
+                        crate::event_runtime::fire_action_end_labels(self, i);
+                    }
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    /// 敵 AI の攻撃アビリティ使用。敵対勢力を対象とするアビリティ (`脱`=気力減少 /
+    /// `除`=状態解除 等の属性) を持ち、射程内に有効な敵が居れば、最も気力の高い敵へ
+    /// 発動する (`脱` で気力を削ぐ価値が高い相手を優先)。発動したら `true`。テスト用
+    /// ユニットはアビリティ無しなので無効 (= 既存テストへ影響なし)。
+    fn ai_use_offensive_ability(&mut self, idx: usize) -> bool {
+        let caster = self.database.unit_instances[idx].uid.clone();
+        let unit_name = self.database.unit_instances[idx].unit_data_name.clone();
+        let atk_idxs: Vec<usize> = match self.database.unit_by_name(&unit_name) {
+            Some(d) => d
+                .abilities
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| a.targets_enemy())
+                .map(|(i, _)| i)
+                .collect(),
+            None => return false,
+        };
+        for ab_idx in atk_idxs {
+            if !self.ability_usable(&caster, ab_idx) {
+                continue;
+            }
+            // 射程内で最も気力の高い敵を対象にする。
+            let target_uids: Vec<String> = self
+                .database
+                .unit_instances
+                .iter()
+                .filter(|u| !u.off_map)
+                .map(|u| u.uid.clone())
+                .collect();
+            let mut best: Option<(String, i32)> = None;
+            for tuid in target_uids {
+                if !self.ability_target_valid(&caster, ab_idx, &tuid) {
+                    continue;
+                }
+                let morale = self
+                    .database
+                    .unit_by_uid(&tuid)
+                    .map(|u| u.morale)
+                    .unwrap_or(0);
+                if best.as_ref().map(|(_, m)| morale > *m).unwrap_or(true) {
+                    best = Some((tuid, morale));
                 }
             }
             if let Some((tuid, _)) = best {
@@ -11376,6 +11451,92 @@ mod tests {
         assert!(
             app.database().unit_by_uid(&healer).unwrap().has_acted,
             "回復で行動終了"
+        );
+    }
+
+    /// 補給アビリティを持つ敵 AI は、射程内に EN を消費した味方が居れば補給する。
+    #[test]
+    fn ai_uses_supply_ability_on_low_en_ally() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Healer", 9, 9); // Healer unit_data + PILOT を用意
+        let supplier = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Healer",
+            "PILOT",
+            crate::Party::Enemy,
+            5,
+            5,
+        ));
+        let ally = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Healer",
+            "PILOT",
+            crate::Party::Enemy,
+            6,
+            5,
+        ));
+        app.database_mut()
+            .unit_by_uid_mut(&ally)
+            .unwrap()
+            .en_consumed = 40;
+        give_ability(
+            &mut app,
+            "Healer",
+            &supplier,
+            mk_ability("補給装置", "補給Lv1", 3, None),
+        );
+        app.set_stage_state(crate::stage::StageState::Battle);
+        let idx = app.database().idx_by_uid(&supplier).unwrap();
+        app.ai_act_unit(idx);
+        assert_eq!(
+            app.database().unit_by_uid(&ally).unwrap().en_consumed,
+            0,
+            "AI が射程内の EN 不足の味方を補給する (補給Lv1 = EN 50 回復)"
+        );
+        assert!(
+            app.database().unit_by_uid(&supplier).unwrap().has_acted,
+            "補給で行動終了"
+        );
+    }
+
+    /// 敵対象アビリティ (脱=気力減少) を持つ敵 AI は、射程内の最も気力の高い敵へ使う。
+    #[test]
+    fn ai_uses_offensive_ability_on_highest_morale_enemy() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Healer", 9, 9); // Healer unit_data + PILOT を用意
+                                                     // 対象になる味方 2 機を攻撃側の射程内に配置し、気力差を付ける。
+        place_player_unit(&mut app, "Ally", 6, 6); // 低気力
+        place_player_unit(&mut app, "Ally", 6, 5); // 高気力
+        let low = app.database().unit_instances[1].uid.clone();
+        let high = app.database().unit_instances[2].uid.clone();
+        app.database_mut().unit_by_uid_mut(&low).unwrap().morale = 100;
+        app.database_mut().unit_by_uid_mut(&high).unwrap().morale = 130;
+        let attacker = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Healer",
+            "PILOT",
+            crate::Party::Enemy,
+            5,
+            5,
+        ));
+        let mut ab = mk_ability("脱力", "状態", 3, None);
+        ab.attributes = "脱".into();
+        give_ability(&mut app, "Healer", &attacker, ab);
+        app.set_stage_state(crate::stage::StageState::Battle);
+        let idx = app.database().idx_by_uid(&attacker).unwrap();
+        app.ai_act_unit(idx);
+        assert_eq!(
+            app.database().unit_by_uid(&high).unwrap().morale,
+            120,
+            "最も気力の高い敵が 脱 で -10 される"
+        );
+        assert_eq!(
+            app.database().unit_by_uid(&low).unwrap().morale,
+            100,
+            "気力の低い敵は対象にならない"
+        );
+        assert!(
+            app.database().unit_by_uid(&attacker).unwrap().has_acted,
+            "アビリティ発動で行動終了"
         );
     }
 
