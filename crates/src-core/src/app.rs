@@ -3205,6 +3205,16 @@ impl App {
             ));
         }
         let applied_damage = if parried { 0 } else { applied_damage };
+        // 防御特性 (耐性 ÷2 / 無効化 0 / 吸収 回復) を最終ダメージへ適用する。
+        let dmg_before_def = applied_damage;
+        let applied_damage = self.defense_attribute_damage(def_idx, &weapon.class, applied_damage);
+        if applied_damage != dmg_before_def {
+            if applied_damage < 0 {
+                self.push_message(format!("{} は攻撃を吸収した！", def_pilot.nickname));
+            } else if applied_damage == 0 {
+                self.push_message(format!("{} には効かない (無効化)", def_pilot.nickname));
+            }
+        }
 
         // 援護防御チェック。`def_mode` で挙動を切替える (SRC 反撃モードの「援護防御
         // ON/OFF」):
@@ -5172,6 +5182,37 @@ impl App {
             }
         }
         p.clamp(1, 100)
+    }
+
+    /// 防御特性 (`耐性` / `無効化` / `吸収`) を与ダメージへ適用する (SRC `Unit.cs::Damage`)。
+    /// 武器属性が対象の防御特性属性に一致するとき: 無効化→0、耐性→÷2、吸収→`-damage/2`(回復)。
+    /// 弱点 / 有効 が一致する場合はいずれも適用しない (与ダメージは変化なし、クリ率のみ)。
+    /// 対象が該当特性を持たなければ `damage` をそのまま返す。
+    fn defense_attribute_damage(&self, def_idx: usize, weapon_class: &str, damage: i64) -> i64 {
+        let inst = &self.database.unit_instances[def_idx];
+        let feat = |name: &str| -> &str {
+            crate::feature::feature_value(&inst.active_features, name).unwrap_or("")
+        };
+        let matches = |list: &str| -> bool {
+            !list.is_empty()
+                && weapon_class
+                    .split_whitespace()
+                    .any(|t| list.split_whitespace().any(|e| e == t))
+        };
+        // 弱点 / 有効 が一致するときは防御特性 (耐性/無効化/吸収) を適用しない。
+        if matches(feat("弱点")) || matches(feat("有効")) {
+            return damage;
+        }
+        if matches(feat("無効化")) {
+            return 0;
+        }
+        if damage > 0 && matches(feat("吸収")) {
+            return -(damage / 2);
+        }
+        if matches(feat("耐性")) {
+            return damage / 2;
+        }
+        damage
     }
 
     /// ユニットの主パイロットの「切り払い」技能レベル (PilotInstance 優先、無ければ
@@ -14335,6 +14376,40 @@ End
             !app.roll_parry(atk_idx, def_idx, "射"),
             "射撃は切り払い対象外"
         );
+    }
+
+    /// 防御特性 (耐性 ÷2 / 無効化 0 / 吸収 -1/2) を与ダメージへ適用。弱点/有効が一致すると不適用。
+    #[test]
+    fn defense_attributes_modify_damage() {
+        use crate::feature::ActiveFeature;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Tank", 2, 6);
+        let idx = app.database().idx_by_uid(&first_player_uid(&app)).unwrap();
+        let set = |app: &mut App, feats: Vec<ActiveFeature>| {
+            app.database_mut().unit_instances[idx].active_features = feats;
+        };
+        // 属性なし → 変化なし。
+        assert_eq!(app.defense_attribute_damage(idx, "火 実", 100), 100);
+        // 耐性=火 → ÷2。非一致 (氷) は変化なし。
+        set(&mut app, vec![ActiveFeature::new("耐性", "火")]);
+        assert_eq!(app.defense_attribute_damage(idx, "火 実", 100), 50);
+        assert_eq!(app.defense_attribute_damage(idx, "氷 実", 100), 100);
+        // 無効化=火 → 0。
+        set(&mut app, vec![ActiveFeature::new("無効化", "火")]);
+        assert_eq!(app.defense_attribute_damage(idx, "火 実", 100), 0);
+        // 吸収=火 → -50 (回復)。
+        set(&mut app, vec![ActiveFeature::new("吸収", "火")]);
+        assert_eq!(app.defense_attribute_damage(idx, "火 実", 100), -50);
+        // 弱点優先: 弱点=火 があれば耐性は適用しない (与ダメ変化なし)。
+        set(
+            &mut app,
+            vec![
+                ActiveFeature::new("弱点", "火"),
+                ActiveFeature::new("耐性", "火"),
+            ],
+        );
+        assert_eq!(app.defense_attribute_damage(idx, "火 実", 100), 100);
     }
 
     #[test]
