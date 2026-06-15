@@ -361,8 +361,10 @@ pub fn predict_with_status_terrain(
     if has(def_statuses, "鉄壁") {
         raw_dmg /= 4;
     }
-    // バリア: 攻撃側 `直撃` で無効化 (シールド防御の無効化)。
-    if has(def_statuses, "バリア") && !has(atk_statuses, "直撃") {
+    // バリア: 攻撃側 `直撃` で無効化 (シールド防御の無効化)。`バリア中和` 状態
+    // (特殊効果攻撃属性 中) の防御側はバリア / フィールドが無効化される。
+    if has(def_statuses, "バリア") && !has(atk_statuses, "直撃") && !has(def_statuses, "バリア中和")
+    {
         raw_dmg /= 2;
     }
 
@@ -411,7 +413,7 @@ pub fn critical_probability(
 /// 武器の `class` 文字列から特殊効果攻撃属性 (`特殊効果攻撃属性.md`) を抽出し、
 /// 命中時に防御側へ付与する `(状態異常名, lifetime)` の列を返す。
 ///
-/// 代表的な行動阻害・状態異常属性に対応 (Ｓ/縛/痺/眠/乱/凍/石/毒/不/止/劣/低防/低攻/低運/盲/撹/害/ゾ/黙/狂)。
+/// 代表的な行動阻害・状態異常属性に対応 (Ｓ/縛/痺/眠/乱/凍/石/毒/不/止/劣/低防/低攻/低運/盲/撹/害/ゾ/黙/狂/中)。
 /// `属性L<n>` でターン数を上書きできる。lifetime は「効果ターン数 + 1」を返す:
 /// `begin_phase` が当該陣営フェイズ開始時に lifetime を 1 減らすため、相手の N
 /// フェイズに効かせるには N+1 が必要 (L0 = 戦闘中のみ → 最小 lifetime 1)。
@@ -446,6 +448,8 @@ pub fn weapon_special_effects(class: &str) -> Vec<(String, i32)> {
             // 狂=狂戦士 (3T): 与ダメージ ×1.25 / 被命中 ×1.5。AI 制御喪失部分 (味方の
             // 操作不能・暴走ターゲティング) は未モデルだが、戦闘修正と援護除外は反映。
             "狂" => Some(("狂戦士", 3)),
+            // 中=バリア中和 (1T): 相手のバリア / フィールドを 1 ターン無効化する。
+            "中" => Some(("バリア中和", 1)),
             _ => None,
         };
         if let Some((name, default_turns)) = mapped {
@@ -849,6 +853,49 @@ mod tests {
         assert_eq!(
             weapon_special_effects("狂"),
             vec![("狂戦士".to_string(), 4)]
+        );
+        // バリア中和 (中=バリア中和1T)。
+        assert_eq!(
+            weapon_special_effects("中"),
+            vec![("バリア中和".to_string(), 2)]
+        );
+    }
+
+    /// バリア中和 (中) の防御側はバリアによるダメージ半減が無効化される。
+    #[test]
+    fn barrier_neutralize_disables_barrier() {
+        let with_barrier = predict_with_status(
+            &p(0, 0, 100),
+            &u(0, vec![]),
+            &weapon(800, 1, 1, 0),
+            &p(0, 0, 0),
+            &u(0, vec![]),
+            0,
+            0,
+            100,
+            100,
+            &[],
+            &["バリア".to_string()],
+        )
+        .damage;
+        let neutralized = predict_with_status(
+            &p(0, 0, 100),
+            &u(0, vec![]),
+            &weapon(800, 1, 1, 0),
+            &p(0, 0, 0),
+            &u(0, vec![]),
+            0,
+            0,
+            100,
+            100,
+            &[],
+            &["バリア".to_string(), "バリア中和".to_string()],
+        )
+        .damage;
+        assert_eq!(
+            neutralized,
+            with_barrier * 2,
+            "バリア中和でバリアの半減が無効 (ダメージ 2 倍)"
         );
     }
 
