@@ -3396,6 +3396,8 @@ impl App {
                             &weapon,
                         ));
                         d.extend(self.apply_weapon_crit_copy(atk_idx, def_idx, &weapon));
+                        // 習: クリティカル時に対象の「ラーニング可能技」を習得する。
+                        d.extend(self.apply_weapon_learning(atk_idx, def_idx, &weapon));
                         d
                     } else {
                         Vec::new()
@@ -5588,6 +5590,30 @@ impl App {
             .unwrap_or(0)
     }
 
+    /// 撃破者のメインパイロットの撃墜数を +1 する (SRC `Pilot.Kills`)。撃墜数は
+    /// パイロット用特殊能力として扱われ (`撃墜数LvN`)、`(撃墜数Lv20)` 等の必要技能
+    /// ゲートが読む。これにより「規定数撃墜でエース専用武器が解禁される」原典の挙動を再現。
+    /// 現値 (静的 features ＋ 実体 skills の最大) を基準に +1 し `PilotInstance.skills` へ
+    /// `撃墜数 N` 形式で書き戻す (SetSkill と同形式)。
+    fn increment_kill_count(&mut self, killer_idx: usize) {
+        let cur = self.unit_pilot_skill_level(killer_idx, "撃墜数");
+        let Some(pid) = self.database.unit_instances[killer_idx]
+            .pilot_ids
+            .first()
+            .cloned()
+        else {
+            return;
+        };
+        if let Some(pi) = self.database.pilot_instance_by_id_mut(&pid) {
+            let entry = format!("撃墜数 {}", cur + 1);
+            if let Some(pos) = pi.skills.iter().position(|s| s.contains("撃墜数")) {
+                pi.skills[pos] = entry;
+            } else {
+                pi.skills.push(entry);
+            }
+        }
+    }
+
     /// クリティカル発生率へのパイロット技能補正 (`Unit.cs` クリティカル発生率計算準拠)。
     /// 超反応 (攻撃側 +2×Lv / 防御側 −2×Lv)・超能力 (攻撃側 +5)・底力/超底力/覚悟
     /// (攻撃側 HP が最大の 1/4 以下で +50) の合計を返す。これらの補正は `weapon.critical`
@@ -5860,6 +5886,62 @@ impl App {
         }
     }
 
+    /// ラーニング技 (`習`): クリティカル時に対象 (`def_idx`) が持つユニット用特殊能力
+    /// `ラーニング可能技=<技名称> [表示]` を攻撃側 (`atk_idx`) のメインパイロットが習得する
+    /// (`特殊効果攻撃属性.md` 習 / `その他の特殊能力 ラーニング可能技`)。習得した技は
+    /// レベル無しのパイロット用特殊能力として `PilotInstance.skills` に追加され、`(技名称)`
+    /// を必要技能とする武器/アビリティのゲートが解禁される。
+    ///
+    /// `習` は class 内で他属性と連結されうる (`無習` 等) ため文字単位で検出する。
+    /// 既に保有 (静的/習得済) の技は再習得しない。適用メッセージを返す。
+    fn apply_weapon_learning(
+        &mut self,
+        atk_idx: usize,
+        def_idx: usize,
+        weapon: &crate::data::unit::WeaponData,
+    ) -> Vec<String> {
+        if !weapon.class.contains('習') {
+            return Vec::new();
+        }
+        // 対象ユニットの「ラーニング可能技」を列挙 (value の先頭トークンが技名称、
+        // 続く "表示" は表示フラグ。本実装は技名のみ使用)。
+        let def_name = self.database.unit_instances[def_idx].unit_data_name.clone();
+        let learnable: Vec<String> = self
+            .database
+            .unit_by_name(&def_name)
+            .map(|d| {
+                d.features
+                    .iter()
+                    .filter(|(n, _)| n == "ラーニング可能技")
+                    .filter_map(|(_, v)| v.split_whitespace().next())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if learnable.is_empty() {
+            return Vec::new();
+        }
+        let Some(pid) = self.database.unit_instances[atk_idx]
+            .pilot_ids
+            .first()
+            .cloned()
+        else {
+            return Vec::new();
+        };
+        let mut msgs = Vec::new();
+        for skill in learnable {
+            // 既に保有 (静的 features / 習得済 skills) していれば再習得しない。
+            if self.unit_pilot_skill_level(atk_idx, &skill) > 0 {
+                continue;
+            }
+            if let Some(pi) = self.database.pilot_instance_by_id_mut(&pid) {
+                pi.skills.push(skill.clone());
+                msgs.push(format!("ラーニング！ {skill} を習得"));
+            }
+        }
+        msgs
+    }
+
     /// 引き寄せ / 強制転移 (`引` / `転`): クリティカル時に対象の位置を移す
     /// (`特殊効果攻撃属性.md`)。`引`=攻撃側に隣接する空きマスへ、`転`=現在地から
     /// 属性レベル距離内のランダムな空きマスへ。対象 XL / 移動力 0 では不発。
@@ -6112,6 +6194,8 @@ impl App {
     ) -> i64 {
         // 撃墜による気力変動 (撃破者 +4 / 同陣営 +1、被撃破陣営は性格別、機械は不動)。
         self.apply_kill_morale(killer_idx, victim_party);
+        // 撃墜数 +1 (撃破者メインパイロット)。撃墜数Lv* の必要技能ゲートが読む。
+        self.increment_kill_count(killer_idx);
         // 経験値: UnitInstance.total_exp + メインパイロットの PilotInstance 成長。
         let old_level = (self.database.unit_instances[killer_idx].total_exp / 100).max(0) + 1;
         self.database.unit_instances[killer_idx].total_exp += exp;
@@ -11696,6 +11780,35 @@ mod tests {
         );
     }
 
+    /// 撃破でメインパイロットの撃墜数が +1 され、必要技能ゲートが読む値が上がる。
+    #[test]
+    fn kill_increments_pilot_kill_count() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6);
+        let idx = {
+            let uid = first_player_uid(&app);
+            app.database().idx_by_uid(&uid).unwrap()
+        };
+        // place_player_unit は pilot_ids を張らないので実体を作って紐付ける。
+        app.database_mut().create_pilot_instance("PILOT", "p1");
+        app.database_mut().unit_instances[idx].pilot_ids = vec!["p1".to_string()];
+        assert_eq!(app.unit_pilot_skill_level(idx, "撃墜数"), 0);
+        app.award_kill_rewards(idx, 0, 0, crate::Party::Enemy);
+        assert_eq!(
+            app.unit_pilot_skill_level(idx, "撃墜数"),
+            1,
+            "1 撃破で撃墜数 1"
+        );
+        app.award_kill_rewards(idx, 0, 0, crate::Party::Enemy);
+        app.award_kill_rewards(idx, 0, 0, crate::Party::Enemy);
+        assert_eq!(
+            app.unit_pilot_skill_level(idx, "撃墜数"),
+            3,
+            "3 撃破で撃墜数 3"
+        );
+    }
+
     /// 撃墜による気力上昇: 撃破者 +4 / 同陣営の他ユニット +1 (`Unit.cs` 準拠)。
     #[test]
     fn kill_raises_morale_killer_plus4_faction_plus1() {
@@ -12830,6 +12943,69 @@ mod tests {
             !app.apply_weapon_crit_copy(atk_idx, def_idx, &mk("化"))
                 .is_empty(),
             "化 はサイズ制限なしで変化"
+        );
+    }
+
+    /// 習 (ラーニング): クリティカル時に対象の「ラーニング可能技」を攻撃側メイン
+    /// パイロットが習得し、(技名称) 必要技能ゲートが解禁される。再習得はしない。
+    #[test]
+    fn learning_weapon_teaches_skill_on_crit() {
+        use crate::data::unit::WeaponData;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Learner", 2, 6);
+        place_player_unit(&mut app, "Master", 4, 6);
+        // Master の UnitData に「ラーニング可能技」を付与。
+        app.database_mut()
+            .units
+            .iter_mut()
+            .find(|d| d.name == "Master")
+            .unwrap()
+            .features
+            .push(("ラーニング可能技".into(), "はりせんぼん".into()));
+        // 攻撃側にパイロット実体を紐付ける (習得先)。
+        app.database_mut()
+            .create_pilot_instance("PILOT", "learner_p");
+        let atk = first_player_uid(&app);
+        let atk_idx = app.database().idx_by_uid(&atk).unwrap();
+        app.database_mut().unit_instances[atk_idx].pilot_ids = vec!["learner_p".into()];
+        let def_idx = app
+            .database()
+            .unit_instances
+            .iter()
+            .position(|u| u.x == 4 && u.y == 6)
+            .unwrap();
+        let mk = |class: &str| WeaponData {
+            name: "ラーニング".into(),
+            power: 0,
+            min_range: 1,
+            max_range: 1,
+            precision: 0,
+            bullet: -1,
+            en_consumption: 0,
+            necessary_morale: 0,
+            adaption: "AAAA".into(),
+            critical: 0,
+            class: class.into(),
+            extras: Vec::new(),
+        };
+        // 習なし → 習得しない。
+        assert!(app
+            .apply_weapon_learning(atk_idx, def_idx, &mk("無"))
+            .is_empty());
+        assert_eq!(app.unit_pilot_skill_level(atk_idx, "はりせんぼん"), 0);
+        // 習あり (無習 で連結検出) → 習得。
+        let msgs = app.apply_weapon_learning(atk_idx, def_idx, &mk("無習"));
+        assert_eq!(msgs.len(), 1, "ラーニングメッセージが 1 件");
+        assert!(
+            app.unit_pilot_skill_level(atk_idx, "はりせんぼん") > 0,
+            "はりせんぼん を習得"
+        );
+        // 既習得は再習得しない。
+        assert!(
+            app.apply_weapon_learning(atk_idx, def_idx, &mk("無習"))
+                .is_empty(),
+            "既習得は再習得しない"
         );
     }
 
