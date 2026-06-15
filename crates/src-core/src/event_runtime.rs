@@ -10298,8 +10298,11 @@ fn weapon_info(data: &crate::data::unit::UnitData, sub: &[&str], app: &App) -> S
         "地形適応" => weapon.adaption.clone(),
         "クリティカル率" => weapon.critical.to_string(),
         "属性" => weapon.class.clone(),
-        // 必要技能 / 必要条件 / 属性所有 等は extras に格納されているのみ
-        "必要技能" | "必要条件" => weapon.extras.first().cloned().unwrap_or_default(),
+        // 必要技能 → extras[0] / 必要条件 → extras[1] (生文字列を返す簡易対応。
+        // 原典 Info(武器,…,必要技能) は満足判定の 1/0 を返すが、本ヘルパは静的 UnitData
+        // のみでユニット実体が無いため文字列で代替する)。
+        "必要技能" => weapon.necessary_skill().to_string(),
+        "必要条件" => weapon.necessary_condition().to_string(),
         "使用可" | "修得" => "1".to_string(),
         _ => String::new(),
     }

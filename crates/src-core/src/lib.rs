@@ -28,6 +28,7 @@ pub mod flow;
 pub mod item_slot;
 pub mod modal;
 pub mod movement;
+pub mod necessary_skill;
 pub mod pilot_instance;
 pub mod scene;
 pub mod script_overlay;

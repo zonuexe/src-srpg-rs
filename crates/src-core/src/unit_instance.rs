@@ -834,6 +834,16 @@ impl UnitInstance {
             return false;
         }
 
+        // 必要技能 / 必要条件 ((念力Lv3) 形式の括弧条件)。満たさない武器は使用不可。
+        let ns = weapon_data.necessary_skill();
+        if !ns.is_empty() && !crate::necessary_skill::is_satisfied(ns, self, db) {
+            return false;
+        }
+        let nc = weapon_data.necessary_condition();
+        if !nc.is_empty() && !crate::necessary_skill::is_satisfied(nc, self, db) {
+            return false;
+        }
+
         true
     }
 

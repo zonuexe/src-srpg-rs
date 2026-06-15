@@ -2855,6 +2855,7 @@ impl App {
     /// 距離 `dist` の敵に対し使用する武器を選ぶ。`forced` 指定時はその武器が
     /// 合法 (射程内・チャージ・移動後制限) なら採用、不可なら `None`。自動選択時は
     /// 合法武器のうち威力最大 (移動後制限なしは従来の `best_weapon_in_range_with_charge`)。
+    #[allow(clippy::too_many_arguments)] // 武器選択の制約 (射程/チャージ/移動後/突撃/資源/必要技能) を素直に列挙。
     fn pick_attack_weapon(
         atk_unit: &crate::data::unit::UnitData,
         dist: u32,
@@ -2863,6 +2864,7 @@ impl App {
         post_move: bool,
         totsugeki: bool,
         firable: impl Fn(&crate::data::unit::WeaponData) -> bool,
+        skill_ok: impl Fn(&crate::data::unit::WeaponData) -> bool,
     ) -> Option<crate::data::unit::WeaponData> {
         let legal = |w: &crate::data::unit::WeaponData| {
             combat::weapon_in_range(w, dist)
@@ -2871,11 +2873,13 @@ impl App {
                 && firable(w)
         };
         match forced {
-            // 強制武器 (プレイヤーが武器選択した場合) は資源を満たさなくても発射を許す
-            // (UI 側で選択可否を制御する想定。射程・移動後制約のみ確認)。
+            // 強制武器 (プレイヤーが武器選択した場合) は資源 (EN/弾/気力) を満たさなくても
+            // 発射を許す (UI 側で選択可否を制御する想定)。ただし必要技能/条件は資源ではなく
+            // 使用資格そのものなので強制でも必須 (満たさない武器は撃てない)。
             Some(w) => (combat::weapon_in_range(w, dist)
                 && (charged || !combat::is_charge_weapon(w))
-                && Self::weapon_usable_post_move(w, post_move, totsugeki))
+                && Self::weapon_usable_post_move(w, post_move, totsugeki)
+                && skill_ok(w))
             .then(|| w.clone()),
             None => atk_unit
                 .weapons
@@ -3001,6 +3005,7 @@ impl App {
                 post_move,
                 atk_totsugeki,
                 |w| self.weapon_firable(atk_idx, w),
+                |w| self.weapon_skill_ok(atk_idx, w),
             ) else {
                 self.push_message(format!(
                     "{}: 射程内に使用可能な武器がありません.",
@@ -3025,6 +3030,7 @@ impl App {
                     post_move,
                     atk_totsugeki,
                     |w| self.weapon_firable(atk_idx, w),
+                    |w| self.weapon_skill_ok(atk_idx, w),
                 )
                 .is_some()
                 {
@@ -3053,6 +3059,7 @@ impl App {
                 post_move,
                 atk_totsugeki,
                 |w| self.weapon_firable(atk_idx, w),
+                |w| self.weapon_skill_ok(atk_idx, w),
             ) else {
                 return false;
             };
@@ -4949,9 +4956,16 @@ impl App {
             }
             let d = combat::manhattan(cursor, (def.x, def.y));
             // post_move=false なので 突撃 (totsugeki) は影響しない。
-            if Self::pick_attack_weapon(atk_unit, d, forced, atk_charged, false, false, |w| {
-                self.weapon_firable(atk_idx, w)
-            })
+            if Self::pick_attack_weapon(
+                atk_unit,
+                d,
+                forced,
+                atk_charged,
+                false,
+                false,
+                |w| self.weapon_firable(atk_idx, w),
+                |w| self.weapon_skill_ok(atk_idx, w),
+            )
             .is_some()
             {
                 match best {
@@ -5979,7 +5993,26 @@ impl App {
 
     /// `unit_idx` が `wd` (武器データ) を今発射できるか (残弾・EN・必要気力)。実行時資源を見る。
     /// 該当 UnitWeapon が無い (未 populate) 場合は弾無制限とみなす (= 既存テストへ無影響)。
+    /// 武器の必要技能 / 必要条件 ((念力Lv3) 形式の括弧条件) を満たすか。資源 (EN/弾/
+    /// 気力) は判定しない使用「資格」のみのゲート。強制武器選択時にも必須。
+    fn weapon_skill_ok(&self, unit_idx: usize, wd: &crate::data::unit::WeaponData) -> bool {
+        let u = &self.database.unit_instances[unit_idx];
+        let ns = wd.necessary_skill();
+        if !ns.is_empty() && !crate::necessary_skill::is_satisfied(ns, u, &self.database) {
+            return false;
+        }
+        let nc = wd.necessary_condition();
+        if !nc.is_empty() && !crate::necessary_skill::is_satisfied(nc, u, &self.database) {
+            return false;
+        }
+        true
+    }
+
     fn weapon_firable(&self, unit_idx: usize, wd: &crate::data::unit::WeaponData) -> bool {
+        // 必要技能 / 必要条件 (使用資格)。
+        if !self.weapon_skill_ok(unit_idx, wd) {
+            return false;
+        }
         let u = &self.database.unit_instances[unit_idx];
         // 必要気力。
         if wd.necessary_morale > 0 && u.morale < wd.necessary_morale {
@@ -6543,6 +6576,14 @@ impl App {
         // 沈黙 (特殊効果攻撃属性 黙): 術 / 音 属性のアビリティは使用不能。
         if u.has_condition("沈黙") && (ab.attributes.contains('術') || ab.attributes.contains('音'))
         {
+            return false;
+        }
+        // 必要技能 / 必要条件 (属性末尾の括弧条件)。武器同様、満たさないと使用不可。
+        let (_class, ns, nc) = crate::necessary_skill::split_necessary(&ab.attributes);
+        if !ns.is_empty() && !crate::necessary_skill::is_satisfied(&ns, u, &self.database) {
+            return false;
+        }
+        if !nc.is_empty() && !crate::necessary_skill::is_satisfied(&nc, u, &self.database) {
             return false;
         }
         true

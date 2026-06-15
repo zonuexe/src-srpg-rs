@@ -102,10 +102,24 @@ pub struct WeaponData {
     pub adaption: String,
     /// 元: `.Critical` (クリティカル補正)。
     pub critical: i32,
-    /// 元: `.Class` (属性: "実"/"B"/"必"/etc)。
+    /// 元: `.Class` (属性: "実"/"B"/"必"/etc)。末尾の `<必要条件>` / `(必要技能)` は
+    /// パース時に剥がして `extras` へ分離するため、ここには純粋な武器属性のみ残る。
     pub class: String,
-    /// 上記以降の未解釈フィールド (`NecessarySkill` / `NecessaryCondition`)。
+    /// `[必要技能, 必要条件]`。SRC 武器書式 `… 武器属性 <必要条件> (必要技能)` の末尾。
+    /// `necessary_skill()` / `necessary_condition()` でアクセスする (空なら制限なし)。
     pub extras: Vec<String>,
+}
+
+impl WeaponData {
+    /// 必要技能 (満たさないと使用不可・一覧非表示)。空文字は制限なし。
+    pub fn necessary_skill(&self) -> &str {
+        self.extras.first().map(String::as_str).unwrap_or("")
+    }
+
+    /// 必要条件 (満たさないと使用不可だが一覧には表示)。空文字は制限なし。
+    pub fn necessary_condition(&self) -> &str {
+        self.extras.get(1).map(String::as_str).unwrap_or("")
+    }
 }
 
 /// アビリティ (ユニット補助能力) のデータ。`===` 区切り以降の行
@@ -475,11 +489,21 @@ fn try_parse_weapon(text: &str) -> Option<WeaponData> {
         .get(9)
         .and_then(|s| parse_signed_or_dash(s))
         .unwrap_or(0);
-    let class = toks.get(10).map(|s| (*s).to_string()).unwrap_or_default();
-    let extras = if toks.len() > 11 {
-        toks[11..].iter().map(|s| (*s).to_string()).collect()
+    // 武器属性フィールド (toks[10] 以降) は本来「武器属性 <必要条件> (必要技能)」が
+    // 半角スペースで連結されている。トークナイザがカンマ分割するため、剰余トークンを
+    // スペースで再結合して原典どおり 1 つの属性文字列に戻し、末尾の必要技能/条件を剥がす。
+    let raw_class = if toks.len() > 10 {
+        toks[10..].join(" ")
     } else {
+        String::new()
+    };
+    let (class, necessary_skill, necessary_condition) =
+        crate::necessary_skill::split_necessary(&raw_class);
+    let class = if class == "-" { String::new() } else { class };
+    let extras = if necessary_skill.is_empty() && necessary_condition.is_empty() {
         Vec::new()
+    } else {
+        vec![necessary_skill, necessary_condition]
     };
     Some(WeaponData {
         name,
