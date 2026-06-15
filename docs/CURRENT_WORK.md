@@ -116,8 +116,11 @@
 > 乱発抑止、`ai_use_summon_ability`、`575e2c2`)。いずれもテスト用ユニットはアビリティ/精神なしで無影響。
 > さらに **パイロット技能 底力/超底力** を実装 (`e7df0a0`)。`Unit.cs` 命中率計算準拠で HP が最大の 1/4 以下のとき
 > 底力=+30 / 超底力=+50 を命中・回避へ加算 (`combat_bonuses` に HP ゲート＋`guts_hit_bonus`)。命中/回避双方へ
-> 同値を足し原典の対称効果 (攻撃時当てやすく・防御時避けやすい) を再現。クリティカル率への 底力+50 は weapon.critical
-> 共有 (= 特殊効果 proc 率へ漏れる) ため別途・HP 文脈引き回し要として保留 (combat.rs に注記)。回帰テスト計 7 件。
+> 同値を足し原典の対称効果 (攻撃時当てやすく・防御時避けやすい) を再現。さらに **クリティカル率のパイロット技能
+> 補正 超反応/超能力/底力** を実装 (`ac2798a`)。超反応(攻+2×Lv/防-2×Lv)・超能力(攻+5)・底力/超底力/覚悟(攻 HP1/4
+> 以下で+50) を `crit_skill_bonus` に集約し crit ロール直前に加算 (weapon.critical は proc 率と共有のため
+> critical_probability には入れず別途)。クリティカルをロールするのは通常攻撃のみ (反撃/援護はクリ無し) のため適用は
+> 1 箇所で UI 予測との不整合なし。`unit_parry_level` を汎用 `unit_pilot_skill_level` へ一般化。回帰テスト計 11 件。
 > test/clippy/wasm-check 全緑。ブランチ `feat/cc-attrs-recovery` (master 未マージ・push 待ち)。
 
 VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
