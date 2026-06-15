@@ -3859,10 +3859,13 @@ impl App {
         // UnitInstance.statuses から取り出す。
         let counter_atk_morale = self.database.unit_instances[def_idx].morale;
         let counter_def_morale = self.database.unit_instances[atk_idx].morale;
+        // 反撃側の状態。捨て身 は反撃時には無効 (§0.8 / SRC: 自分から攻撃したときのみ
+        // ×3。反撃では適用しない) なので除外する。
         let counter_atk_statuses: Vec<String> = self.database.unit_instances[def_idx]
             .conditions
             .iter()
             .map(|c| c.name.clone())
+            .filter(|n| n != "捨て身")
             .collect();
         let counter_def_statuses: Vec<String> = self.database.unit_instances[atk_idx]
             .conditions
@@ -14162,6 +14165,58 @@ End
             "直撃でサポートガードが無効 → Target が被弾"
         );
         assert_eq!(guard_damage, 0, "Guard は肩代わりしない (無傷)");
+    }
+
+    /// 捨て身 は反撃では無効 (自分から攻撃したときのみ ×3、反撃では適用しない)。
+    #[test]
+    fn sutemi_does_not_apply_on_counterattack() {
+        use crate::data::unit::WeaponData;
+        fn counter_dmg(with_sutemi: bool) -> i64 {
+            let mut app = App::new();
+            enter_mapview_with_demo_map(&mut app);
+            place_player_unit(&mut app, "Hero", 2, 6); // 反撃を受ける側
+            let mut ebot = app.database().unit_by_name("Hero").cloned().unwrap();
+            ebot.name = "Counter".into();
+            ebot.weapons = vec![WeaponData {
+                name: "反撃砲".into(),
+                power: 20,
+                min_range: 1,
+                max_range: 1,
+                precision: 0,
+                bullet: -1,
+                en_consumption: 0,
+                necessary_morale: 0,
+                adaption: "AAAA".into(),
+                critical: 0,
+                class: String::new(),
+                extras: Vec::new(),
+            }];
+            app.database_mut().units.push(ebot);
+            let hero = first_player_uid(&app);
+            let enemy = app.database_mut().register_unit(crate::UnitInstance::new(
+                "Counter",
+                "PILOT",
+                crate::Party::Enemy,
+                3,
+                6,
+            ));
+            app.database_mut()
+                .unit_by_uid_mut(&enemy)
+                .unwrap()
+                .add_condition(crate::Condition::new("必中", -1));
+            if with_sutemi {
+                app.database_mut()
+                    .unit_by_uid_mut(&enemy)
+                    .unwrap()
+                    .add_condition(crate::Condition::new("捨て身", -1));
+            }
+            app.try_counterattack(3, 6, (2, 6));
+            app.database().unit_by_uid(&hero).unwrap().damage
+        }
+        let normal = counter_dmg(false);
+        let with_sutemi = counter_dmg(true);
+        assert!(normal > 0, "反撃が命中している");
+        assert_eq!(with_sutemi, normal, "捨て身 は反撃では ×3 されない");
     }
 
     #[test]
