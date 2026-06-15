@@ -355,6 +355,16 @@ pub fn predict_with_status_terrain(
     if has(atk_statuses, "狂戦士") {
         raw_dmg = (raw_dmg as f64 * 1.25) as i64;
     }
+    // 潜在力開放 (パイロット技能): 高気力 (130 以上) のとき与ダメージ ×1.25 (`Unit.cs::Damage`)。
+    // 静的パイロット features を参照する (effective_combat_data が `..base.clone()` で保持)。
+    if atk_morale >= 130
+        && atk_pilot
+            .features
+            .iter()
+            .any(|(f, _)| f.contains("潜在力開放"))
+    {
+        raw_dmg = (raw_dmg as f64 * 1.25) as i64;
+    }
     if has(def_statuses, "麻痺") || has(def_statuses, "凍結") {
         raw_dmg = (raw_dmg as f64 * 1.5) as i64;
     }
@@ -1280,6 +1290,79 @@ mod tests {
             0,
         );
         assert!(hi.damage > lo.damage);
+    }
+
+    /// 潜在力開放 (パイロット技能): 気力 130 以上で与ダメージ ×1.25。130 未満では非発動。
+    #[test]
+    fn potential_release_boosts_damage_at_high_morale() {
+        let mut esp = p(0, 0, 100);
+        esp.features.push(("潜在力開放".into(), String::new()));
+        let plain = p(0, 0, 100);
+        let w = weapon(500, 1, 1, 0);
+        let dp = p(0, 0, 0);
+        // 気力 130: 潜在力開放 持ちは plain の ×1.25。
+        let with_skill = predict_with_status(
+            &esp,
+            &u(0, vec![]),
+            &w,
+            &dp,
+            &u(0, vec![]),
+            0,
+            0,
+            130,
+            100,
+            &[],
+            &[],
+        );
+        let without = predict_with_status(
+            &plain,
+            &u(0, vec![]),
+            &w,
+            &dp,
+            &u(0, vec![]),
+            0,
+            0,
+            130,
+            100,
+            &[],
+            &[],
+        );
+        assert_eq!(
+            with_skill.damage,
+            (without.damage as f64 * 1.25) as i64,
+            "潜在力開放: 気力 130 で与ダメージ ×1.25"
+        );
+        // 気力 129 では非発動 (技能持ちでも plain と同じ)。
+        let below = predict_with_status(
+            &esp,
+            &u(0, vec![]),
+            &w,
+            &dp,
+            &u(0, vec![]),
+            0,
+            0,
+            129,
+            100,
+            &[],
+            &[],
+        );
+        let below_plain = predict_with_status(
+            &plain,
+            &u(0, vec![]),
+            &w,
+            &dp,
+            &u(0, vec![]),
+            0,
+            0,
+            129,
+            100,
+            &[],
+            &[],
+        );
+        assert_eq!(
+            below.damage, below_plain.damage,
+            "気力 130 未満では潜在力開放は非発動"
+        );
     }
 
     #[test]
