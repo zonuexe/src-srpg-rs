@@ -4877,15 +4877,21 @@ impl App {
     /// (`特殊効果攻撃属性.md`: 弱点属性に対しては発動確率倍、耐性属性に対しては半減)。
     /// 武器 class のいずれかの属性が対象の弱点に一致すれば ×2、耐性に一致すれば ÷2。
     fn adjust_proc_for_resistance(&self, def_idx: usize, weapon_class: &str, prob: i32) -> i32 {
-        let feats = &self.database.unit_instances[def_idx].active_features;
-        let weak = crate::feature::feature_value(feats, "弱点").unwrap_or("");
-        let resist = crate::feature::feature_value(feats, "耐性").unwrap_or("");
-        if weak.is_empty() && resist.is_empty() {
+        let inst = &self.database.unit_instances[def_idx];
+        let weak = crate::feature::feature_value(&inst.active_features, "弱点").unwrap_or("");
+        let resist = crate::feature::feature_value(&inst.active_features, "耐性").unwrap_or("");
+        // 弱/効 属性で付加された一時的弱点 (condition `弱点:<属性>`)。
+        let added_weak: Vec<&str> = inst
+            .conditions
+            .iter()
+            .filter_map(|c| c.name.strip_prefix("弱点:"))
+            .collect();
+        if weak.is_empty() && resist.is_empty() && added_weak.is_empty() {
             return prob;
         }
         let mut p = prob;
         for tok in weapon_class.split_whitespace() {
-            if weak.split_whitespace().any(|w| w == tok) {
+            if weak.split_whitespace().any(|w| w == tok) || added_weak.contains(&tok) {
                 p *= 2;
                 break;
             }
@@ -10744,6 +10750,13 @@ mod tests {
             vec![crate::feature::ActiveFeature::new("弱点", "火")];
         assert_eq!(app.adjust_proc_for_resistance(def_idx, "火 痺", 40), 80);
         assert_eq!(app.adjust_proc_for_resistance(def_idx, "火 痺", 80), 100);
+
+        // 弱/効 属性で付加された一時的弱点 (condition `弱点:火`) も倍率に効く。
+        app.database_mut().unit_instances[def_idx].active_features = vec![];
+        app.database_mut().unit_instances[def_idx]
+            .add_condition(crate::Condition::new("弱点:火", 3));
+        assert_eq!(app.adjust_proc_for_resistance(def_idx, "火 痺", 40), 80);
+        assert_eq!(app.adjust_proc_for_resistance(def_idx, "氷 痺", 40), 40);
     }
 
     /// 盗属性武器のクリティカル時資金奪取: 味方が敵を盗むと修理費の1/4が入り、再取得は不可。

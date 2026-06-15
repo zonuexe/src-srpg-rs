@@ -424,6 +424,20 @@ pub fn weapon_special_effects(class: &str) -> Vec<(String, i32)> {
     let mut out = Vec::new();
     for tok in class.split_whitespace() {
         let (attr, level) = split_attr_level(tok);
+        // 弱<属性> / 効<属性>: 対象に指定属性への弱点 (proc/crit 率増) を 3 ターン付加。
+        // 剋<属性>: 対象の指定属性を持つ武器・アビリティを 3 ターン使用不能にする。
+        if let Some(el) = attr
+            .strip_prefix('弱')
+            .or_else(|| attr.strip_prefix('効'))
+            .filter(|e| !e.is_empty())
+        {
+            out.push((format!("弱点:{el}"), level.unwrap_or(3) + 1));
+            continue;
+        }
+        if let Some(el) = attr.strip_prefix('剋').filter(|e| !e.is_empty()) {
+            out.push((format!("剋:{el}"), level.unwrap_or(3) + 1));
+            continue;
+        }
         let mapped: Option<(&str, i32)> = match attr.as_str() {
             "Ｓ" | "S" => Some(("行動不能", 1)),
             "縛" => Some(("捕縛", 2)),
@@ -913,6 +927,19 @@ mod tests {
         );
         // 踊り (踊=踊り3T)。
         assert_eq!(weapon_special_effects("踊"), vec![("踊り".to_string(), 4)]);
+        // 弱/効 (弱点付加) と 剋 (属性封じ): 属性名を抽出して condition 名に展開。
+        assert_eq!(
+            weapon_special_effects("弱火"),
+            vec![("弱点:火".to_string(), 4)]
+        );
+        assert_eq!(
+            weapon_special_effects("効光L2"),
+            vec![("弱点:光".to_string(), 3)]
+        );
+        assert_eq!(
+            weapon_special_effects("剋火"),
+            vec![("剋:火".to_string(), 4)]
+        );
     }
 
     /// バリア中和 (中) の防御側はバリアによるダメージ半減が無効化される。
