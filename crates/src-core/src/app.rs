@@ -1949,20 +1949,27 @@ impl App {
             if hp_heal.is_none() && hp_drain.is_none() && en_heal.is_none() && en_drain.is_none() {
                 continue;
             }
+            // 回復不能 (特殊効果攻撃属性 害): 特殊能力・地形による HP/EN 自然回復を
+            // 阻害する (アビリティ/精神による回復は別経路なので影響しない)。消費系は継続。
+            let no_regen = inst.has_condition("回復不能");
             let eff_max_hp = self.database.effective_max_hp(inst);
             let eff_max_en = self.database.effective_max_en(inst);
             let u = &mut self.database.unit_instances[i];
             if let Some(lv) = hp_heal {
-                let heal = eff_max_hp * i64::from(10 * lv) / 100;
-                u.damage = (u.damage - heal).max(0);
+                if !no_regen {
+                    let heal = eff_max_hp * i64::from(10 * lv) / 100;
+                    u.damage = (u.damage - heal).max(0);
+                }
             }
             if let Some(lv) = hp_drain {
                 let dmg = eff_max_hp * i64::from(10 * lv) / 100;
                 u.damage = (u.damage + dmg).min((eff_max_hp - 1).max(0));
             }
             if let Some(lv) = en_heal {
-                let rec = eff_max_en * (10 * lv) / 100;
-                u.en_consumed = (u.en_consumed - rec).max(0);
+                if !no_regen {
+                    let rec = eff_max_en * (10 * lv) / 100;
+                    u.en_consumed = (u.en_consumed - rec).max(0);
+                }
             }
             if let Some(lv) = en_drain {
                 let drn = eff_max_en * (10 * lv) / 100;
@@ -4739,7 +4746,18 @@ impl App {
     }
 
     /// `target` の HP を 最大HP/`denom` だけ回復する (撃破はしない / 既に最大なら無効)。
+    /// `uid` がゾンビ状態 (特殊効果攻撃属性 ゾ) で、アビリティ / 精神 / 修理補給 等の
+    /// 能動的な HP/EN 回復を受けられないか。地形・特殊能力による自然回復は別 (回復可)。
+    fn recovery_blocked(&self, uid: &str) -> bool {
+        self.database
+            .unit_by_uid(uid)
+            .is_some_and(|u| u.has_condition("ゾンビ"))
+    }
+
     fn spirit_heal_fraction(&mut self, uid: &str, denom: i64) {
+        if self.recovery_blocked(uid) {
+            return;
+        }
         let Some(idx) = self.database.idx_by_uid(uid) else {
             return;
         };
@@ -4753,6 +4771,9 @@ impl App {
 
     /// `target` の HP を全快する。
     fn spirit_heal_full(&mut self, uid: &str) {
+        if self.recovery_blocked(uid) {
+            return;
+        }
         if let Some(u) = self.database.unit_by_uid_mut(uid) {
             u.damage = 0;
         }
@@ -4912,6 +4933,8 @@ impl App {
         let Some(idx) = self.database.idx_by_uid(uid) else {
             return;
         };
+        // ゾンビは EN 回復を受けられない (弾薬補給は可)。
+        let en_blocked = self.recovery_blocked(uid);
         let unit_name = self.database.unit_instances[idx].unit_data_name.clone();
         let max_bullets: Vec<i32> = self
             .database
@@ -4919,7 +4942,9 @@ impl App {
             .map(|d| d.weapons.iter().map(|w| w.bullet).collect())
             .unwrap_or_default();
         let u = &mut self.database.unit_instances[idx];
-        u.en_consumed = 0;
+        if !en_blocked {
+            u.en_consumed = 0;
+        }
         for w in &mut u.weapons {
             if let Some(b) = max_bullets.get(w.weapon_index) {
                 w.reset_ammo(*b);
@@ -5065,7 +5090,9 @@ impl App {
                     2 => 50,
                     _ => 100,
                 };
-                if let Some(idx) = self.database.idx_by_uid(target) {
+                // ゾンビ状態の対象は能動的な HP 回復を受けられない。
+                let blocked = self.recovery_blocked(target);
+                if let Some(idx) = self.database.idx_by_uid(target).filter(|_| !blocked) {
                     let max_hp = self
                         .database
                         .effective_max_hp(&self.database.unit_instances[idx]);
@@ -5545,6 +5572,8 @@ impl App {
     /// `アビリティ効果.md` の主要効果に対応。未対応効果は無視 (無害)。
     /// `caster` は発動者 (`能力コピー` で発動者自身が変化するため必要)。
     fn apply_ability_effects(&mut self, caster: &str, target: &str, effect: &str) {
+        // ゾンビ状態の対象は能動的な HP/EN 回復 (回復/補給) を受けられない。
+        let recovery_blocked = self.recovery_blocked(target);
         for tok in effect.split_whitespace() {
             let (head, arg) = match tok.split_once('=') {
                 Some((h, a)) => (h, Some(a.trim_matches('"'))),
@@ -5552,17 +5581,26 @@ impl App {
             };
             let (base, lv) = split_effect_level(head);
             match base {
-                // 回復: HP 500×Lv。
+                // 回復: HP 500×Lv。ゾンビ対象は回復不可。
                 "回復" => {
-                    if let Some(ci) = self.database.idx_by_uid(target) {
+                    if let Some(ci) = self
+                        .database
+                        .idx_by_uid(target)
+                        .filter(|_| !recovery_blocked)
+                    {
                         let heal = i64::from((500 * lv).max(0));
                         let u = &mut self.database.unit_instances[ci];
                         u.damage = (u.damage - heal).max(0);
                     }
                 }
-                // 補給: EN 50×Lv。
+                // 補給: EN 50×Lv。ゾンビ対象は回復不可。
                 "補給" => {
-                    if let Some(u) = self.database.unit_by_uid_mut(target) {
+                    if let Some(ci) = self
+                        .database
+                        .idx_by_uid(target)
+                        .filter(|_| !recovery_blocked)
+                    {
+                        let u = &mut self.database.unit_instances[ci];
                         u.en_consumed = (u.en_consumed - (50 * lv).max(0)).max(0);
                     }
                 }
@@ -9180,6 +9218,65 @@ mod tests {
         let u = app.database().unit_by_uid(&uid).unwrap();
         assert_eq!(u.damage, 10, "ＨＰ消費Lv1 = 最大HP 10% (10) 減少");
         assert_eq!(u.en_consumed, 15, "ＥＮ消費Lv3 = 最大EN 30% (15) 減少");
+    }
+
+    /// 回復不能 (特殊効果攻撃属性 害) は特殊能力による HP/EN 自然回復を阻害する。
+    #[test]
+    fn kaifukufunou_blocks_regen_features() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Regenner", 2, 6);
+        app.database_mut().register_unit(crate::UnitInstance::new(
+            "Regenner",
+            "PILOT",
+            crate::Party::Enemy,
+            12,
+            12,
+        ));
+        app.set_stage_state(crate::stage::StageState::Battle);
+        let uid = first_player_uid(&app);
+        {
+            let u = app.database_mut().unit_by_uid_mut(&uid).unwrap();
+            u.active_features = vec![
+                crate::feature::ActiveFeature::new("ＨＰ回復Lv2", ""),
+                crate::feature::ActiveFeature::new("ＥＮ回復Lv2", ""),
+            ];
+            u.damage = 50;
+            u.en_consumed = 20;
+            u.add_condition(crate::Condition::new("回復不能", -1));
+        }
+        app.handle_input(Input::EndPhase);
+        let u = app.database().unit_by_uid(&uid).unwrap();
+        assert_eq!(u.damage, 50, "回復不能で HP 自然回復が阻害される");
+        assert_eq!(u.en_consumed, 20, "回復不能で EN 自然回復が阻害される");
+    }
+
+    /// ゾンビ (特殊効果攻撃属性 ゾ) はアビリティ / 精神による能動的な HP/EN 回復を阻害する。
+    #[test]
+    fn zombie_blocks_active_recovery() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Z", 2, 6);
+        let uid = first_player_uid(&app);
+        {
+            let u = app.database_mut().unit_by_uid_mut(&uid).unwrap();
+            u.damage = 80;
+            u.add_condition(crate::Condition::new("ゾンビ", 3));
+        }
+        // アビリティ回復は無効。
+        app.apply_ability_effects(&uid, &uid, "回復Lv2");
+        assert_eq!(
+            app.database().unit_by_uid(&uid).unwrap().damage,
+            80,
+            "ゾンビはアビリティ回復を受けない"
+        );
+        // 精神 全快 (spirit_heal_full) も無効。
+        app.spirit_heal_full(&uid);
+        assert_eq!(
+            app.database().unit_by_uid(&uid).unwrap().damage,
+            80,
+            "ゾンビは全快回復も受けない"
+        );
     }
 
     /// アビリティをユニットに与えるテストヘルパ (静的 UnitData + ランタイム両方)。

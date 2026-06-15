@@ -407,7 +407,7 @@ pub fn critical_probability(
 /// 武器の `class` 文字列から特殊効果攻撃属性 (`特殊効果攻撃属性.md`) を抽出し、
 /// 命中時に防御側へ付与する `(状態異常名, lifetime)` の列を返す。
 ///
-/// 代表的な行動阻害・状態異常属性に対応 (Ｓ/縛/痺/眠/乱/凍/石/毒/不/止/劣/低防/低攻/低運/盲/撹)。
+/// 代表的な行動阻害・状態異常属性に対応 (Ｓ/縛/痺/眠/乱/凍/石/毒/不/止/劣/低防/低攻/低運/盲/撹/害/ゾ)。
 /// `属性L<n>` でターン数を上書きできる。lifetime は「効果ターン数 + 1」を返す:
 /// `begin_phase` が当該陣営フェイズ開始時に lifetime を 1 減らすため、相手の N
 /// フェイズに効かせるには N+1 が必要 (L0 = 戦闘中のみ → 最小 lifetime 1)。
@@ -433,6 +433,10 @@ pub fn weapon_special_effects(class: &str) -> Vec<(String, i32)> {
             // 命中率低下系。盲=盲目 (3T、攻撃側命中 ×0.5/被攻撃命中 ×1.5)、撹=撹乱 (2T、攻撃側命中 ×0.5)。
             "盲" => Some(("盲目", 3)),
             "撹" => Some(("撹乱", 2)),
+            // 回復阻害系。害=回復不能 (特殊能力/地形による HP/EN 自然回復を阻害)、
+            // ゾ=ゾンビ (アビリティ/精神による HP/EN 回復を阻害)。既定 3 ターン。
+            "害" => Some(("回復不能", 3)),
+            "ゾ" => Some(("ゾンビ", 3)),
             _ => None,
         };
         if let Some((name, default_turns)) = mapped {
@@ -797,6 +801,15 @@ mod tests {
         // 命中率低下系 (盲=盲目3T / 撹=撹乱2T)。
         assert_eq!(weapon_special_effects("盲"), vec![("盲目".to_string(), 4)]);
         assert_eq!(weapon_special_effects("撹"), vec![("撹乱".to_string(), 3)]);
+        // 回復阻害系 (害=回復不能 / ゾ=ゾンビ、各 3T)。
+        assert_eq!(
+            weapon_special_effects("害"),
+            vec![("回復不能".to_string(), 4)]
+        );
+        assert_eq!(
+            weapon_special_effects("ゾ"),
+            vec![("ゾンビ".to_string(), 4)]
+        );
     }
 
     /// 攻撃力ＤＯＷＮ 状態は与ダメージを ×0.75 に、攻撃力ＵＰ は ×1.25 にする。
