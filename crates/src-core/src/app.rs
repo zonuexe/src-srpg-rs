@@ -5908,7 +5908,7 @@ impl App {
     /// 武器発射時の資源消費 (EN・残弾)。`Unit.cs` 同様、命中の有無に関わらず発射で消費する。
     /// `weapon_di` は `unit_data.weapons` でのインデックス (= `UnitWeapon.weapon_index`)。
     /// EN コスト 0・無限弾 (bullet ≤ 0) の武器は実質無消費 (= テスト用武器へ無影響)。
-    fn consume_weapon_resources(&mut self, unit_idx: usize, weapon_di: usize) {
+    pub(crate) fn consume_weapon_resources(&mut self, unit_idx: usize, weapon_di: usize) {
         let (en_cost, has_ammo) = {
             let u = &self.database.unit_instances[unit_idx];
             match self

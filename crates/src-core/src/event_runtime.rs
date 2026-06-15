@@ -12788,6 +12788,15 @@ pub(crate) fn map_attack(
         .map(|c| c.name.clone())
         .collect();
 
+    // マップ兵器の EN・残弾消費 (撃破による index 失効前に消費)。
+    if let Some(wi) = app
+        .database()
+        .unit_by_name(&atk_unit_name)
+        .and_then(|d| d.weapons.iter().position(|w| w.name == weapon_name))
+    {
+        app.consume_weapon_resources(atk_idx, wi);
+    }
+
     // 対象を後ろから削除するため位置を巻き戻し
     let mut kills = 0usize;
     for &def_idx in targets.iter().rev() {
