@@ -365,6 +365,26 @@ pub fn predict_with_status_terrain(
     {
         raw_dmg = (raw_dmg as f64 * 1.25) as i64;
     }
+    // 得意技 / 不得手 (パイロット技能): 技能データ (`得意技=格射` 等の武器 class 文字列) の
+    // いずれかの文字が使用武器の class に含まれれば、与ダメージ ×1.2 / ×0.8 (`Unit.cs::Damage`)。
+    let class_matches = |data: &str| {
+        data.chars()
+            .any(|c| !c.is_whitespace() && weapon.class.contains(c))
+    };
+    if atk_pilot
+        .features
+        .iter()
+        .any(|(f, d)| f.contains("得意技") && class_matches(d))
+    {
+        raw_dmg = (raw_dmg as f64 * 1.2) as i64;
+    }
+    if atk_pilot
+        .features
+        .iter()
+        .any(|(f, d)| f.contains("不得手") && class_matches(d))
+    {
+        raw_dmg = (raw_dmg as f64 * 0.8) as i64;
+    }
     if has(def_statuses, "麻痺") || has(def_statuses, "凍結") {
         raw_dmg = (raw_dmg as f64 * 1.5) as i64;
     }
@@ -1362,6 +1382,90 @@ mod tests {
         assert_eq!(
             below.damage, below_plain.damage,
             "気力 130 未満では潜在力開放は非発動"
+        );
+    }
+
+    /// 得意技 (×1.2) / 不得手 (×0.8): 武器 class に技能データの文字が含まれるときのみ発動。
+    #[test]
+    fn specialty_weapon_scales_damage() {
+        let mut w_melee = weapon(500, 1, 1, 0);
+        w_melee.class = "格".into();
+        let mut w_shoot = weapon(500, 1, 1, 0);
+        w_shoot.class = "射".into();
+        let dp = p(0, 0, 0);
+        let du = u(0, vec![]);
+        let base = predict_with_status(
+            &p(0, 0, 100),
+            &u(0, vec![]),
+            &w_melee,
+            &dp,
+            &du,
+            0,
+            0,
+            100,
+            100,
+            &[],
+            &[],
+        );
+        // 得意技=格: 格闘武器で ×1.2。
+        let mut good = p(0, 0, 100);
+        good.features.push(("得意技".into(), "格".into()));
+        let good_melee = predict_with_status(
+            &good,
+            &u(0, vec![]),
+            &w_melee,
+            &dp,
+            &du,
+            0,
+            0,
+            100,
+            100,
+            &[],
+            &[],
+        );
+        assert_eq!(
+            good_melee.damage,
+            (base.damage as f64 * 1.2) as i64,
+            "得意技=格: 格闘武器で ×1.2"
+        );
+        // 得意技=格 でも射撃武器 (class 射) には非適用。
+        let good_shoot = predict_with_status(
+            &good,
+            &u(0, vec![]),
+            &w_shoot,
+            &dp,
+            &du,
+            0,
+            0,
+            100,
+            100,
+            &[],
+            &[],
+        );
+        assert_eq!(
+            good_shoot.damage, base.damage,
+            "得意技=格 は射撃武器には効かない"
+        );
+        // 不得手=格: 格闘武器で ×0.8。
+        let mut bad = p(0, 0, 100);
+        bad.features.push(("不得手".into(), "格".into()));
+        let bad_melee = predict_with_status(
+            &bad,
+            &u(0, vec![]),
+            &w_melee,
+            &dp,
+            &du,
+            0,
+            0,
+            100,
+            100,
+            &[],
+            &[],
+        );
+        assert_eq!(
+            bad_melee.damage,
+            (base.damage as f64 * 0.8) as i64,
+            "不得手=格: 格闘武器で ×0.8"
         );
     }
 
