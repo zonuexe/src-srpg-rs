@@ -473,6 +473,9 @@ pub fn weapon_special_effects(class: &str) -> Vec<(String, i32)> {
             "踊" => Some(("踊り", 3)),
             // 恐=恐怖 (3T): AI が敵から逃げ続ける (ai_act_unit の逃走分岐)。
             "恐" => Some(("恐怖", 3)),
+            // 告=死の宣告: 期限切れ (次の自軍フェイズ) で HP が 1 になる。default_turns=0
+            // → lifetime 1 (次の自軍フェイズで発動)。告L<n> で n フェイズ後。
+            "告" => Some(("死の宣告", 0)),
             _ => None,
         };
         if let Some((name, default_turns)) = mapped {
@@ -937,6 +940,15 @@ mod tests {
         assert_eq!(weapon_special_effects("踊"), vec![("踊り".to_string(), 4)]);
         // 恐怖 (恐=恐怖3T)。
         assert_eq!(weapon_special_effects("恐"), vec![("恐怖".to_string(), 4)]);
+        // 死の宣告 (告=死の宣告、default lifetime 1 / 告L2 → 3)。
+        assert_eq!(
+            weapon_special_effects("告"),
+            vec![("死の宣告".to_string(), 1)]
+        );
+        assert_eq!(
+            weapon_special_effects("告L2"),
+            vec![("死の宣告".to_string(), 3)]
+        );
         // 弱/効 (弱点付加) と 剋 (属性封じ): 属性名を抽出して condition 名に展開。
         assert_eq!(
             weapon_special_effects("弱火"),

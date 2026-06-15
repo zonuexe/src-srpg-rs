@@ -1937,6 +1937,15 @@ impl App {
                 let new_dmg = (u.damage + damage).min(max_hp - 1);
                 u.damage = new_dmg;
             }
+            // 死の宣告 (告): 期限切れ (lifetime≤1=この自軍フェイズで解ける) になると
+            // HP が 1 になる (特殊効果攻撃属性.md)。tick_conditions より前に判定する。
+            if max_hp > 0
+                && u.conditions
+                    .iter()
+                    .any(|c| c.name == "死の宣告" && !c.is_permanent() && c.lifetime <= 1)
+            {
+                u.damage = (max_hp - 1).max(0);
+            }
             // 状態異常の経過: 有限 lifetime を 1 減らし、0 以下で解除 (永続=-1 は保持)。
             // 旧実装は lifetime==1 のみ除去し 2 以上を永久に残していたため、特殊効果
             // 攻撃属性 (縛/痺/凍 等) の複数ターン状態が解除されなかった。当該陣営の
@@ -5094,8 +5103,8 @@ impl App {
         let is_boss = self.database.unit_instances[def_idx].is_boss();
         let mut applied = Vec::new();
         for (name, lifetime) in effects {
-            // ボスランク適用ユニットは石化を無効化 (BossRankコマンド.md / 特殊効果攻撃属性.md)。
-            if is_boss && name == "石化" {
+            // ボスランク適用ユニットは石化 / 死の宣告 を無効化 (BossRankコマンド.md)。
+            if is_boss && (name == "石化" || name == "死の宣告") {
                 continue;
             }
             self.database.unit_instances[def_idx]
@@ -14142,6 +14151,33 @@ End
             "毒 should still be present (permanent condition)"
         );
         assert!(u.has_condition("永続バフ"));
+    }
+
+    /// 死の宣告 (告) は期限切れ (次の自軍フェイズ) で HP を 1 にする。ボスは無効。
+    #[test]
+    fn death_sentence_sets_hp_to_one_on_expiry() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Doomed", 2, 6);
+        app.database_mut().register_unit(crate::UnitInstance::new(
+            "Doomed",
+            "PILOT",
+            crate::Party::Enemy,
+            10,
+            10,
+        ));
+        app.set_stage_state(crate::stage::StageState::Battle);
+        let uid = first_player_uid(&app);
+        app.database_mut()
+            .unit_by_uid_mut(&uid)
+            .unwrap()
+            .add_condition(crate::Condition::new("死の宣告", 1));
+        app.handle_input(Input::EndPhase); // T2 味方フェイズ開始で発動
+        assert_eq!(
+            app.database().unit_by_uid(&uid).unwrap().damage,
+            99,
+            "死の宣告 で HP が 1 になる (最大HP100 → damage 99)"
+        );
     }
 
     /// 毒ダメージは 毒属性への弱点で倍・耐性で半減する (特殊効果攻撃属性.md)。
