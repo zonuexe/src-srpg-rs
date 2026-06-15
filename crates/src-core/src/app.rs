@@ -7050,7 +7050,9 @@ impl App {
     // ───────────────────────── 合体 / 分離 ─────────────────────────
 
     /// `host` の `合体` 特殊能力 (`合体=<名称> <合体形態> <相手1> <相手2> …`) を解析し、
-    /// 合体可能なら (合体形態, 2 マス以内の合体相手 uid 列) を返す。
+    /// 合体可能なら (合体形態, 合体相手 uid 列) を返す。原典 (合体.md): 合体に参加する
+    /// ユニット全てが 2 マス以内に居る場合にのみ合体可能なので、列挙された各パートナー
+    /// 形態がそれぞれ 2 マス以内に揃っていなければ `None` を返す。
     fn combine_partners(&self, host_uid: &str) -> Option<(String, Vec<String>)> {
         let host = self.database.unit_by_uid(host_uid)?;
         let val = crate::feature::feature_value(&host.active_features, "合体")?;
@@ -7061,26 +7063,33 @@ impl App {
         let combined_form = toks[1].to_string();
         // 合体形態が DB に存在しなければ不可。
         self.database.unit_by_name(&combined_form)?;
-        let partner_names: std::collections::HashSet<&str> = toks[2..].iter().copied().collect();
         let hpos = (host.x, host.y);
         let hparty = host.party;
-        let partners: Vec<String> = self
-            .database
-            .unit_instances
-            .iter()
-            .filter(|u| {
+        // 列挙されたパートナー形態ごとに、2 マス以内・同陣営・盤上の味方を 1 機ずつ探す。
+        // 1 形態でも揃わなければ合体不可。
+        let mut partners: Vec<String> = Vec::new();
+        for pform in &toks[2..] {
+            let found = self.database.unit_instances.iter().find(|u| {
                 !u.off_map
                     && u.uid != host_uid
                     && u.party == hparty
-                    && partner_names.contains(u.unit_data_name.as_str())
+                    && u.unit_data_name.as_str() == *pform
+                    && !partners.contains(&u.uid)
                     && combat::manhattan(hpos, (u.x, u.y)) <= 2
-            })
-            .map(|u| u.uid.clone())
-            .collect();
-        if partners.is_empty() {
-            return None;
+            });
+            partners.push(found?.uid.clone());
         }
         Some((combined_form, partners))
+    }
+
+    /// `host` の `合体` 特殊能力に列挙されたパートナー形態数を返す (合体能力が無ければ 0)。
+    /// 1 = 2 体合体 (相手ユニット上への移動で合体)、2 以上 = 3 体以上合体 (合体コマンドで合体)。
+    fn combine_partner_count(&self, host_uid: &str) -> usize {
+        self.database
+            .unit_by_uid(host_uid)
+            .and_then(|h| crate::feature::feature_value(&h.active_features, "合体"))
+            .map(|v| v.split_whitespace().skip(2).count())
+            .unwrap_or(0)
     }
 
     /// 合体を実行: 2 マス以内の合体相手を温存 (off_map) して合体形態へ変身する。
@@ -7151,21 +7160,63 @@ impl App {
         self.command_menu = None;
     }
 
-    /// 分離を実行: 内包する構成ユニットを host の隣接空きマスへ復帰させ、host を
-    /// 合体前形態へ戻す。行動は消費しない (原典準拠)。
+    /// 分離を実行する。行動は消費しない (原典準拠)。2 つの経路がある:
+    /// - **実行時合体** (`combined_from` 非空): 温存していた構成ユニットを隣接へ復帰し、
+    ///   host を合体前形態へ戻す。
+    /// - **最初から合体形態** (`combined_from` 空で `分離` 特殊能力あり): `分離` 特殊能力の
+    ///   形態へ分離し、形態 2 以降を新規生成する。
     fn apply_separate(&mut self, host_uid: &str) {
         let components = self
             .database
             .unit_by_uid(host_uid)
             .map(|u| u.combined_from.clone())
             .unwrap_or_default();
-        if components.is_empty() {
-            return;
+        let split_forms: Vec<String> = self
+            .database
+            .unit_by_uid(host_uid)
+            .and_then(|u| crate::feature::feature_value(&u.active_features, "分離"))
+            // `分離=<名称> <形態1> <形態2> …` の先頭 (名称) を除いた形態列。
+            .map(|v| {
+                v.split_whitespace()
+                    .skip(1)
+                    .map(|s| s.to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if !components.is_empty() {
+            self.separate_preserved_components(host_uid, &components);
+        } else if !split_forms.is_empty() {
+            self.separate_into_forms(host_uid, &split_forms);
+        } else {
+            return; // 分離できない
         }
+
+        self.push_message("分離！".to_string());
+        if let Some(i) = self.database.idx_by_uid(host_uid) {
+            let (pn, un, party) = {
+                let u = &self.database.unit_instances[i];
+                (u.pilot_name.clone(), u.unit_data_name.clone(), u.party)
+            };
+            crate::event_runtime::fire_unit_event_labels_public(
+                self,
+                &["分離", "Split"],
+                &pn,
+                &un,
+                party,
+            );
+        }
+        // 分離は行動を消費しないのでメニューを再表示。
+        self.reopen_unit_menu_for(host_uid);
+    }
+
+    /// 実行時合体の分離: 温存していた構成ユニットを host の隣接空きマスへ復帰させ、
+    /// host を合体前形態・合体前の搭乗構成へ戻す。
+    fn separate_preserved_components(&mut self, host_uid: &str, components: &[String]) {
         let Some(hpos) = self.database.unit_by_uid(host_uid).map(|u| (u.x, u.y)) else {
             return;
         };
-        for c in &components {
+        for c in components {
             // 既に他の構成ユニットを置いた分も考慮し、毎回空きマスを取り直す。
             if let Some((tx, ty)) = self.find_empty_adjacent_tile(hpos) {
                 self.database.move_unit(c, tx, ty);
@@ -7198,26 +7249,75 @@ impl App {
             u.pre_combine_form = None;
             u.pre_combine_pilots.clear();
         }
-        self.push_message("分離！".to_string());
-        if let Some(i) = self.database.idx_by_uid(host_uid) {
-            let (pn, un, party) = {
-                let u = &self.database.unit_instances[i];
-                (u.pilot_name.clone(), u.unit_data_name.clone(), u.party)
-            };
-            crate::event_runtime::fire_unit_event_labels_public(
-                self,
-                &["分離", "Split"],
-                &pn,
-                &un,
-                party,
-            );
-        }
-        // 分離は行動を消費しないのでメニューを再表示。
-        self.reopen_unit_menu_for(host_uid);
     }
 
-    /// `host` の `合体` 特殊能力が、合体形態 (DB に存在) と相手 `partner_form` を
-    /// 含むか。合体相手判定に使う。
+    /// 最初から合体形態で配置されたユニットの分離: `分離` 特殊能力
+    /// (`分離=<名称> <形態1> <形態2> …`) の形態へ分離する。host は形態 1 になり、
+    /// 形態 2 以降は隣接空きマスへ新規生成する。原典 (分離.md / 変形系特殊能力.md):
+    /// パイロットは形態の順に乗り移り、サポートパイロット (形態数を超える分) は全て
+    /// 1 号機 (形態 1) に乗せられる。MVP: 形態順の主パイロット割当のみ、複数形態への
+    /// 主/副の細かい配分は形態 1 へ集約する単純化。
+    fn separate_into_forms(&mut self, host_uid: &str, forms: &[String]) {
+        let Some((hpos, party, pilots)) = self
+            .database
+            .unit_by_uid(host_uid)
+            .map(|u| ((u.x, u.y), u.party, u.pilot_ids.clone()))
+        else {
+            return;
+        };
+        // 形態 1 = host。形態 2 以降を隣接空きマスへ生成。
+        // 形態 i (0 基点) の主パイロット = pilots[i] (あれば)。形態数を超えるパイロットは
+        // サポートとして形態 1 (host) に集約する。
+        for (i, form) in forms.iter().enumerate().skip(1) {
+            // 生成先の形態が DB に無ければスキップ。
+            if self.database.unit_by_name(form).is_none() {
+                continue;
+            }
+            let Some((tx, ty)) = self.find_empty_adjacent_tile(hpos) else {
+                continue; // 空きマスが無ければ生成できない
+            };
+            let pilot_id = pilots.get(i).cloned();
+            let pilot_name = pilot_id
+                .as_deref()
+                .map(|id| self.pilot_name_for_id(id))
+                .unwrap_or_default();
+            let mut inst = crate::UnitInstance::new(form, pilot_name, party, tx, ty);
+            if let Some(pid) = pilot_id {
+                inst.pilot_ids = vec![pid];
+            }
+            let uid = self.database.register_unit(inst);
+            self.set_unit_form(&uid, form);
+        }
+        // host を形態 1 へ変身させ、形態 1 のパイロット (主 pilots[0] + サポート余り) を残す。
+        self.set_unit_form(host_uid, &forms[0]);
+        let mut host_pilots: Vec<String> = Vec::new();
+        if let Some(p0) = pilots.first() {
+            host_pilots.push(p0.clone());
+        }
+        for p in pilots.iter().skip(forms.len()) {
+            host_pilots.push(p.clone());
+        }
+        if let Some(u) = self.database.unit_by_uid_mut(host_uid) {
+            if !host_pilots.is_empty() {
+                u.pilot_ids = host_pilots;
+            }
+        }
+    }
+
+    /// パイロット ID (PilotInstance.id または pilot_data_name) から表示用のパイロット
+    /// データ名を解決する。見つからなければ ID をそのまま返す。
+    fn pilot_name_for_id(&self, pilot_id: &str) -> String {
+        self.database
+            .pilot_instances
+            .iter()
+            .find(|p| p.id == pilot_id || p.pilot_data_name == pilot_id)
+            .map(|p| p.pilot_data_name.clone())
+            .unwrap_or_else(|| pilot_id.to_string())
+    }
+
+    /// `host` の `合体` 特殊能力が **2 体合体** (相手 1 機) で、合体形態 (DB に存在) と
+    /// 相手 `partner_form` を持つか。相手ユニット上への移動による合体の判定に使う。
+    /// 原典 (合体.md): 3 体以上合体は合体コマンド専用で、移動では合体しない。
     fn combine_lists_partner(&self, host_uid: &str, partner_form: &str) -> bool {
         let Some(host) = self.database.unit_by_uid(host_uid) else {
             return false;
@@ -7226,9 +7326,8 @@ impl App {
             return false;
         };
         let toks: Vec<&str> = val.split_whitespace().collect();
-        toks.len() >= 3
-            && self.database.unit_by_name(toks[1]).is_some()
-            && toks[2..].contains(&partner_form)
+        // 名称 + 合体形態 + 相手 1 機 = ちょうど 3 トークン (2 体合体) のみ。
+        toks.len() == 3 && self.database.unit_by_name(toks[1]).is_some() && toks[2] == partner_form
     }
 
     /// `mover` が `target_pos` の隣接マスへ到達できるなら、その (空き) マスを返す。
@@ -7951,19 +8050,26 @@ impl App {
             items.push(UnitMenuItem::Launch);
         }
 
-        // 合体: 合体特殊能力を持ち、2 マス以内に合体相手が居る味方ユニット。
-        // 原典 SRC: 合体は移動前のみ・発動で行動終了。
+        // 合体: 合体特殊能力を持ち、合体相手が全て 2 マス以内に居る味方ユニット。
+        // 原典 SRC (合体.md): 合体コマンドで合体するのは 3 体以上合体 (相手 2 機以上) の
+        // 場合のみ。2 体合体は相手ユニット上への移動で行う (move 経路)。合体は移動前のみ・
+        // 発動で行動終了。
         if u.party == crate::Party::Player
             && !u.has_acted
             && !post_move
+            && self.combine_partner_count(&u.uid) >= 2
             && self.combine_partners(&u.uid).is_some()
         {
             items.push(UnitMenuItem::Combine);
         }
 
-        // 分離: 構成ユニットを内包している (合体した) 味方ユニット。原典 SRC: 分離は
-        // 行動を消費しない。
-        if u.party == crate::Party::Player && !u.combined_from.is_empty() {
+        // 分離: 構成ユニットを内包している (実行時に合体した) 味方ユニット、または `分離`
+        // 特殊能力を持つ味方ユニット (最初から合体形態で `.eve` 配置されたユニット)。
+        // 原典 SRC: 分離は行動を消費しない。
+        if u.party == crate::Party::Player
+            && (!u.combined_from.is_empty()
+                || crate::feature::has_feature(&u.active_features, "分離"))
+        {
             items.push(UnitMenuItem::Separate);
         }
 
@@ -11098,30 +11204,93 @@ mod tests {
         (host, partner)
     }
 
-    /// 合体: 2 マス以内の相手を取り込み合体形態へ変身、相手は温存 (off_map)、行動終了。
+    /// host を 3 体合体能力に拡張し、3 体目の合体相手 (GetterBear) を `pos` に置く。
+    /// 拡張後の 3 体目 uid を返す。
+    fn extend_combine_to_triple(app: &mut App, host: &str, pos: (u32, u32)) -> String {
+        place_player_unit(app, "GetterBear", pos.0, pos.1);
+        let partner2 = app
+            .database()
+            .unit_instances
+            .iter()
+            .find(|u| u.unit_data_name == "GetterBear")
+            .unwrap()
+            .uid
+            .clone();
+        app.database_mut()
+            .unit_by_uid_mut(host)
+            .unwrap()
+            .active_features = vec![crate::feature::ActiveFeature::new(
+            "合体",
+            "合体 GetterRobo GetterJaguar GetterBear",
+        )];
+        partner2
+    }
+
+    /// 3 体合体: 相手が全て 2 マス以内なら『合体』が出て、実行で合体形態へ変身し
+    /// 相手は全員 off_map で温存・行動終了する (原典: 3 体以上は合体コマンド)。
     #[test]
     fn combine_absorbs_partners_into_form() {
         use crate::command_menu::{CommandMenu, MenuActionId, UnitMenuItem};
         let mut app = App::new();
         let (host, partner) = setup_combine(&mut app);
+        let partner2 = extend_combine_to_triple(&mut app, &host, (2, 3));
 
         app.open_unit_menu((3, 3));
         let has = matches!(
             app.command_menu(),
             Some(CommandMenu::Unit { items, .. }) if items.contains(&UnitMenuItem::Combine)
         );
-        assert!(has, "合体相手が2マス以内なら『合体』が出る");
+        assert!(has, "3 体合体で相手が全て 2 マス以内なら『合体』が出る");
 
         app.execute_menu_action(MenuActionId::Unit(UnitMenuItem::Combine));
         let h = app.database().unit_by_uid(&host).unwrap();
         assert_eq!(h.unit_data_name, "GetterRobo", "host が合体形態へ変身");
-        assert!(h.combined_from.contains(&partner), "構成ユニットを記録");
+        assert!(
+            h.combined_from.contains(&partner) && h.combined_from.contains(&partner2),
+            "両方の相手を構成に記録"
+        );
         assert_eq!(h.pre_combine_form.as_deref(), Some("GetterEagle"));
         assert!(h.has_acted, "合体で行動終了");
         assert!(
             app.database().unit_by_uid(&partner).unwrap().off_map,
-            "合体相手は off_map で温存"
+            "合体相手 1 は off_map で温存"
         );
+        assert!(
+            app.database().unit_by_uid(&partner2).unwrap().off_map,
+            "合体相手 2 は off_map で温存"
+        );
+    }
+
+    /// 2 体合体は合体コマンドを使わず移動で合体する (原典 合体.md)。
+    /// → ユニットメニューに『合体』は出さない (移動経路は別テストで検証)。
+    #[test]
+    fn two_unit_combine_hides_menu_item() {
+        use crate::command_menu::{CommandMenu, UnitMenuItem};
+        let mut app = App::new();
+        let _ = setup_combine(&mut app); // 2 体合体 (相手 1 機)
+        app.open_unit_menu((3, 3));
+        let has = matches!(
+            app.command_menu(),
+            Some(CommandMenu::Unit { items, .. }) if items.contains(&UnitMenuItem::Combine)
+        );
+        assert!(!has, "2 体合体では『合体』コマンドを出さない (移動で合体)");
+    }
+
+    /// 3 体合体で相手の 1 機が 2 マス以内に居なければ『合体』は出ない
+    /// (原典: 合体に参加するユニット全てが 2 マス以内に居る場合のみ)。
+    #[test]
+    fn three_unit_combine_requires_all_partners_present() {
+        use crate::command_menu::{CommandMenu, UnitMenuItem};
+        let mut app = App::new();
+        let (host, _partner) = setup_combine(&mut app);
+        // 3 体目 (GetterBear) を遠方 (2 マス超) に置く。
+        let _ = extend_combine_to_triple(&mut app, &host, (10, 10));
+        app.open_unit_menu((3, 3));
+        let has = matches!(
+            app.command_menu(),
+            Some(CommandMenu::Unit { items, .. }) if items.contains(&UnitMenuItem::Combine)
+        );
+        assert!(!has, "相手が全員 2 マス以内に揃わなければ合体不可");
     }
 
     /// 分離: 構成ユニットを隣接マスへ復帰させ、host を合体前形態へ戻す (行動非消費)。
@@ -11262,6 +11431,75 @@ mod tests {
         assert!(
             app.database().unit_by_uid(&partner).unwrap().off_map,
             "mover は構成ユニットとして温存"
+        );
+    }
+
+    /// 最初から合体形態で配置されたユニット (構成 uid 無し) の分離: `分離` 特殊能力の
+    /// 形態へ分離し、host が形態1 になり形態2 以降が隣接へ新規生成される。パイロットは
+    /// 形態順に乗り移る。分離は行動を消費しない。
+    #[test]
+    fn separate_from_initial_combined_form_spawns_components() {
+        use crate::command_menu::{CommandMenu, MenuActionId, UnitMenuItem};
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "CombinedForm", 5, 5);
+        // 分離後の形態 FormA / FormB の UnitData を用意 (インスタンスは作らない)。
+        for form in ["FormA", "FormB"] {
+            let mut ud = app
+                .database()
+                .unit_by_name("CombinedForm")
+                .cloned()
+                .unwrap();
+            ud.name = form.into();
+            app.database_mut().units.push(ud);
+        }
+        app.set_stage_state(crate::stage::StageState::Battle);
+        let host = first_player_uid(&app);
+        {
+            let u = app.database_mut().unit_by_uid_mut(&host).unwrap();
+            // 構成 uid は無く、`分離=<名称> <形態1> <形態2>` だけを持つ。
+            u.active_features = vec![crate::feature::ActiveFeature::new(
+                "分離",
+                "分離 FormA FormB",
+            )];
+            u.pilot_ids = vec!["pa".into(), "pb".into()];
+        }
+
+        // メニューに『分離』が出る (combined_from が空でも `分離` 特殊能力で表示)。
+        app.open_unit_menu((5, 5));
+        let has = matches!(
+            app.command_menu(),
+            Some(CommandMenu::Unit { items, .. }) if items.contains(&UnitMenuItem::Separate)
+        );
+        assert!(has, "`分離` 特殊能力を持つなら『分離』が出る");
+
+        app.execute_menu_action(MenuActionId::Unit(UnitMenuItem::Separate));
+        // host は形態1 (FormA) へ、行動は消費しない。
+        let h = app.database().unit_by_uid(&host).unwrap();
+        assert_eq!(h.unit_data_name, "FormA", "host が形態1 へ");
+        assert!(!h.has_acted, "分離は行動を消費しない");
+        assert_eq!(
+            h.pilot_ids,
+            vec!["pa".to_string()],
+            "形態1 は主パイロットを保持"
+        );
+        // 形態2 (FormB) が host 隣接に新規生成され、形態順にパイロットが乗り移る。
+        let fb = app
+            .database()
+            .unit_instances
+            .iter()
+            .find(|u| u.unit_data_name == "FormB")
+            .expect("形態2 が新規生成される");
+        assert!(
+            (fb.x as i32 - 5).abs() <= 1 && (fb.y as i32 - 5).abs() <= 1,
+            "形態2 は host (5,5) 隣接に生成: ({},{})",
+            fb.x,
+            fb.y
+        );
+        assert_eq!(
+            fb.pilot_ids,
+            vec!["pb".to_string()],
+            "形態順に 2 番目のパイロットが形態2 へ"
         );
     }
 
