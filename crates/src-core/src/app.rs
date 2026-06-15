@@ -3346,6 +3346,11 @@ impl App {
                         m
                     }
                 } else {
+                    // 攻撃を受けて生存したユニットは気力 +1 (SRC `Unit.cs`: 損傷による気力上昇)。
+                    {
+                        let dm = &mut self.database.unit_instances[def_idx];
+                        dm.morale = (dm.morale + 1).clamp(0, 150);
+                    }
                     // 特殊効果攻撃属性: 命中かつ生存時に確率で状態異常を付与。
                     // 切り払いで無効化された攻撃は特殊効果も発動しない。
                     let inflicted = if parried {
@@ -3694,6 +3699,11 @@ impl App {
                     }
                 }
             } else if remaining > 0 {
+                // 攻撃を受けて生存したユニットは気力 +1 (SRC: 損傷による気力上昇)。
+                {
+                    let dm = &mut self.database.unit_instances[def_idx];
+                    dm.morale = (dm.morale + 1).clamp(0, 150);
+                }
                 // 生存: 援護武器の特殊効果攻撃属性 (状態異常付与) を防御側へ proc。
                 let inflicted =
                     self.apply_weapon_special_effects(def_idx, &weapon, &sup_pilot, &def_pilot);
@@ -3960,6 +3970,11 @@ impl App {
                 }
                 m
             } else {
+                // 反撃を受けて生存した攻撃側は気力 +1 (SRC: 損傷による気力上昇)。
+                {
+                    let am = &mut self.database.unit_instances[atk_idx];
+                    am.morale = (am.morale + 1).clamp(0, 150);
+                }
                 // 生存: 反撃武器の特殊効果攻撃属性 (状態異常付与) を被弾側へ proc。
                 // 反撃側 = def (atk_pilot=def_pilot)、被弾側 = atk (def_pilot=atk_pilot)。
                 let inflicted =
@@ -12550,6 +12565,52 @@ mod tests {
                 .unwrap()
                 .has_condition("麻痺"),
             "反撃武器の特殊効果 (麻痺) が被弾側へ proc する"
+        );
+    }
+
+    /// 攻撃を受けて生存したユニットは気力 +1 (SRC: 損傷による気力上昇)。
+    #[test]
+    fn taking_a_hit_and_surviving_raises_morale() {
+        use crate::data::unit::WeaponData;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6); // 反撃を受けて生存する側
+        let mut ebot = app.database().unit_by_name("Hero").cloned().unwrap();
+        ebot.name = "EnemyBot".into();
+        ebot.weapons = vec![WeaponData {
+            name: "パンチ".into(),
+            power: 1, // Hero を撃破しない
+            min_range: 1,
+            max_range: 1,
+            precision: 0,
+            bullet: -1,
+            en_consumption: 0,
+            necessary_morale: 0,
+            adaption: "AAAA".into(),
+            critical: 0,
+            class: String::new(),
+            extras: Vec::new(),
+        }];
+        app.database_mut().units.push(ebot);
+        let hero = first_player_uid(&app);
+        let enemy = app.database_mut().register_unit(crate::UnitInstance::new(
+            "EnemyBot",
+            "PILOT",
+            crate::Party::Enemy,
+            3,
+            6,
+        ));
+        app.database_mut()
+            .unit_by_uid_mut(&enemy)
+            .unwrap()
+            .add_condition(crate::Condition::new("必中", -1));
+        let m0 = app.database().unit_by_uid(&hero).unwrap().morale;
+        let res = app.try_counterattack(3, 6, (2, 6));
+        assert!(res.is_some(), "反撃が成立する");
+        assert_eq!(
+            app.database().unit_by_uid(&hero).unwrap().morale,
+            m0 + 1,
+            "攻撃を受けて生存したユニットは気力 +1"
         );
     }
 
