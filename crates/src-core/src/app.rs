@@ -4439,9 +4439,12 @@ impl App {
             .iter()
             .filter(|((x, y), _)| !occupied.contains(&(*x, *y)))
             .filter(|((x, y), _)| combat::manhattan((*x, *y), target_pos) <= max_range)
-            // 同じ射程到達なら、ターゲットに最も近い / 残 MP 最大を選好
+            // 攻撃可能 (射程内) なマスのうち、防御地形 (森/山/都市など) を選好する
+            // (SRC の戦術判断: 攻撃できるなら守りやすい地形から攻撃する)。同じ防御価値なら
+            // ターゲットに最も近い / 残 MP 最大を選好。
             .min_by_key(|((x, y), rem)| {
                 (
+                    -self.tile_defensive_value(*x, *y), // 防御価値が高いほど優先 (負で最小化)
                     combat::manhattan((*x, *y), target_pos),
                     -*rem, // BinaryHeap と同じ符号反転で大きい方を最小に
                 )
@@ -7607,6 +7610,22 @@ impl App {
         crate::data::terrain::lookup(tid)
             .map(|t| crate::combat::terrain_env(t.class))
             .unwrap_or(1)
+    }
+
+    /// `(x, y)` の地形の防御価値。値が大きいほど守りやすい (被ダメージ軽減 + 回避上昇)。
+    /// 戦闘では `damage_mod` が正値ほど被ダメージを減らし (`(100 - damage_mod)/100`)、
+    /// `hit_mod` が負値ほど被命中を下げる (`(100 + hit_mod)/100`) ため、両者を合わせた
+    /// `damage_mod - hit_mod` を指標とする (平地=0 / 森林=15 / 山=25 / 都市=35)。
+    /// マップ未ロード / 範囲外は 0 (中立)。敵 AI の防御地形選好に使う。
+    fn tile_defensive_value(&self, x: u32, y: u32) -> i32 {
+        let Some(map) = self.database.map.as_ref() else {
+            return 0;
+        };
+        if x >= map.width || y >= map.height {
+            return 0;
+        }
+        let tid = map.cell(x, y).terrain_id;
+        self.database.terrain_damage_mod(tid) - self.database.terrain_hit_mod(tid)
     }
 
     /// 現ステージファイルが `label` を定義しているか (戦闘終了イベントの委譲判定用)。
@@ -16064,6 +16083,47 @@ End
                 t.damage
             );
         }
+    }
+
+    /// 敵 AI は、ターゲットを射程内に収める到達マスが複数あるとき、防御地形 (森/山/都市)
+    /// を選好する (SRC 戦術判断)。安価な平地マスより遠い森林マスを選ぶことを確認する。
+    #[test]
+    fn ai_prefers_defensive_terrain_among_attack_tiles() {
+        let mut app = App::new();
+        app.handle_input(Input::Advance); // Configuration
+        app.handle_input(Input::Advance); // MapView
+                                          // 5x3 平地マップ。(3,0) のみ森林 (damage_mod=5 / hit_mod=-10 → 防御価値 15)。
+        let mut m = crate::data::map::MapData::new(5, 3);
+        let mut forest = m.cell(3, 0);
+        forest.terrain_id = 2; // 森林
+        m.set_cell(3, 0, forest);
+        app.database_mut().replace_map(m);
+
+        // 標的 (味方) を (3,1) に配置 (これが唯一の敵対ターゲット)。
+        place_player_unit(&mut app, "Hero", 3, 1);
+        // 攻撃側 (敵) の UnitData "Foe" を Hero から複製して用意 (インスタンスは作らない)。
+        // 射程1武器・速度5 で、(3,1) を射程に収める複数のマスへ到達できる。
+        let mut foe_ud = app.database().unit_by_name("Hero").cloned().unwrap();
+        foe_ud.name = "Foe".into();
+        foe_ud.speed = 5;
+        app.database_mut().units.push(foe_ud);
+        add_weapon(&mut app, "Foe", 60, 1);
+        let foe = spawn_party(&mut app, "Foe", crate::Party::Enemy, 0, 1);
+
+        app.set_stage_state(crate::stage::StageState::Battle);
+        // 敵フェイズ (同期 AI) を走らせる。
+        app.handle_input(Input::EndPhase);
+
+        // (3,1) を射程に収める到達マス: (2,1)平地[安価] / (3,2)平地 / (4,1)平地 / (3,0)森林[高価]。
+        // 防御選好が無ければ最安・最近接の (2,1) を選ぶが、森林 (3,0) を選好するはず。
+        let f = app.database().unit_by_uid(&foe).unwrap();
+        assert_eq!(
+            (f.x, f.y),
+            (3, 0),
+            "AI は射程内の攻撃マスのうち防御地形 (森林 (3,0)) を選好する (実際: ({},{}))",
+            f.x,
+            f.y
+        );
     }
 
     #[test]
