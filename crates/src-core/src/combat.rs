@@ -501,6 +501,23 @@ pub fn weapon_knockback(class: &str) -> Option<(i32, bool)> {
     None
 }
 
+/// クリティカル時の位置移動属性を武器 class から抽出する (`特殊効果攻撃属性.md`)。
+/// 返り値 `(引き寄せ有無, 強制転移距離)`。`引`=攻撃側に隣接させる、`転L<n>`=ランダムに
+/// `n` 距離テレポート (レベル省略は 1)。いずれも無ければ `(false, None)`。
+pub fn weapon_crit_reposition(class: &str) -> (bool, Option<i32>) {
+    let mut pull = false;
+    let mut teleport = None;
+    for tok in class.split_whitespace() {
+        let (attr, level) = split_attr_level(tok);
+        match attr.as_str() {
+            "引" => pull = true,
+            "転" => teleport = Some(level.unwrap_or(1).max(1)),
+            _ => {}
+        }
+    }
+    (pull, teleport)
+}
+
 /// `"痺L3"` → `("痺", Some(3))`、`"縛"` → `("縛", None)`。`L`/`Ｌ` で区切る。
 fn split_attr_level(tok: &str) -> (String, Option<i32>) {
     let chars: Vec<char> = tok.chars().collect();
@@ -936,6 +953,15 @@ mod tests {
         assert_eq!(weapon_knockback("Ｋ"), Some((1, true)));
         assert_eq!(weapon_knockback("実 吹L3"), Some((3, false)));
         assert_eq!(weapon_knockback("格 射"), None);
+    }
+
+    /// 引き寄せ / 強制転移 属性の抽出。
+    #[test]
+    fn weapon_crit_reposition_parses() {
+        assert_eq!(weapon_crit_reposition("引"), (true, None));
+        assert_eq!(weapon_crit_reposition("転L3"), (false, Some(3)));
+        assert_eq!(weapon_crit_reposition("実 引 転L2"), (true, Some(2)));
+        assert_eq!(weapon_crit_reposition("格"), (false, None));
     }
 
     /// 狂戦士 (狂): 攻撃側で与ダメージ ×1.25、防御側で被命中 ×1.5。

@@ -3295,8 +3295,11 @@ impl App {
                     let inflicted =
                         self.apply_weapon_special_effects(def_idx, &weapon, &atk_pilot, &def_pilot);
                     // 衰 / 滅: クリティカル時に対象の現在 HP / EN を割合減少させる。
+                    // 引 / 転: クリティカル時に対象の位置を移す。
                     let decayed = if critical {
-                        self.apply_weapon_crit_decay(def_idx, &weapon)
+                        let mut d = self.apply_weapon_crit_decay(def_idx, &weapon);
+                        d.extend(self.apply_weapon_crit_reposition(def_idx, (cx, cy), &weapon));
+                        d
                     } else {
                         Vec::new()
                     };
@@ -4951,6 +4954,74 @@ impl App {
             moved = true;
         }
         moved
+    }
+
+    /// 引き寄せ / 強制転移 (`引` / `転`): クリティカル時に対象の位置を移す
+    /// (`特殊効果攻撃属性.md`)。`引`=攻撃側に隣接する空きマスへ、`転`=現在地から
+    /// 属性レベル距離内のランダムな空きマスへ。対象 XL / 移動力 0 では不発。
+    /// 適用したラベル列を返す (メッセージ用)。
+    fn apply_weapon_crit_reposition(
+        &mut self,
+        def_idx: usize,
+        atk_pos: (u32, u32),
+        weapon: &crate::data::unit::WeaponData,
+    ) -> Vec<String> {
+        use crate::data::unit::Size;
+        let (pull, teleport) = crate::combat::weapon_crit_reposition(&weapon.class);
+        if !pull && teleport.is_none() {
+            return Vec::new();
+        }
+        let def_name = self.database.unit_instances[def_idx].unit_data_name.clone();
+        let (def_size, def_speed) = self
+            .database
+            .unit_by_name(&def_name)
+            .map(|d| (d.size, d.speed))
+            .unwrap_or((Size::M, 1));
+        if def_size == Size::XL || def_speed <= 0 {
+            return Vec::new();
+        }
+        let uid = self.database.unit_instances[def_idx].uid.clone();
+        let mut applied = Vec::new();
+        // 引き寄せ: 攻撃側の隣接空きマスへ。
+        if pull {
+            if let Some((nx, ny)) = self.find_empty_adjacent_tile(atk_pos) {
+                self.database.move_unit(&uid, nx, ny);
+                applied.push("引き寄せ".to_string());
+            }
+        }
+        // 強制転移: 現在地から dist マス内のランダムな空きマスへ。
+        if let Some(dist) = teleport {
+            let (px, py) = {
+                let u = &self.database.unit_instances[def_idx];
+                (u.x as i32, u.y as i32)
+            };
+            let (mw, mh) = match self.database.map.as_ref() {
+                Some(m) => (m.width as i32, m.height as i32),
+                None => return applied,
+            };
+            let mut candidates: Vec<(u32, u32)> = Vec::new();
+            for dx in -dist..=dist {
+                for dy in -dist..=dist {
+                    if dx == 0 && dy == 0 || dx.abs() + dy.abs() > dist {
+                        continue;
+                    }
+                    let (nx, ny) = (px + dx, py + dy);
+                    if nx < 0 || ny < 0 || nx >= mw || ny >= mh {
+                        continue;
+                    }
+                    if self.database.uid_at(nx as u32, ny as u32).is_none() {
+                        candidates.push((nx as u32, ny as u32));
+                    }
+                }
+            }
+            if !candidates.is_empty() {
+                let pick = (self.next_u32() as usize) % candidates.len();
+                let (nx, ny) = candidates[pick];
+                self.database.move_unit(&uid, nx, ny);
+                applied.push("強制転移".to_string());
+            }
+        }
+        applied
     }
 
     /// 撃破報酬を撃破側ユニット (`killer_idx`) に付与する。`exp` は 努力 反映済みの最終
@@ -10621,6 +10692,42 @@ mod tests {
             9,
             "障害ユニット (10,5) の手前 (9,5) で停止"
         );
+    }
+
+    /// 引(引き寄せ)武器は対象を攻撃側に隣接する空きマスへ移す。
+    #[test]
+    fn weapon_pull_moves_target_adjacent_to_attacker() {
+        use crate::data::unit::WeaponData;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 5, 5);
+        let target = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "PILOT",
+            crate::Party::Enemy,
+            8,
+            5,
+        ));
+        let def_idx = app.database().idx_by_uid(&target).unwrap();
+        let weapon = WeaponData {
+            name: "引力砲".into(),
+            power: 100,
+            min_range: 1,
+            max_range: 5,
+            precision: 0,
+            bullet: -1,
+            en_consumption: 0,
+            necessary_morale: 0,
+            adaption: "AAAA".into(),
+            critical: 0,
+            class: "引".into(),
+            extras: Vec::new(),
+        };
+        let applied = app.apply_weapon_crit_reposition(def_idx, (5, 5), &weapon);
+        assert_eq!(applied, vec!["引き寄せ".to_string()]);
+        let t = app.database().unit_by_uid(&target).unwrap();
+        let dist = (t.x as i32 - 5).abs() + (t.y as i32 - 5).abs();
+        assert_eq!(dist, 1, "攻撃側 (5,5) に隣接する位置へ移動");
     }
 
     /// 反撃武器の特殊効果攻撃属性 (状態異常) が、反撃の命中・生存時に被弾側へ proc する。
