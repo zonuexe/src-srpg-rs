@@ -4437,16 +4437,37 @@ impl App {
             .filter(|(i, _)| *i != idx)
             .map(|(_, u)| (u.x, u.y))
             .collect();
+        // マップ兵器回避: 敵対勢力がマップ兵器を持つとき、同陣営ユニットとの密集を避けて
+        // 攻撃マスを選ぶ (1 発で複数巻き込まれないよう散開する)。脅威が無ければ密集度は
+        // 常に 0 で従来挙動と同じ (= 既存テストへ影響なし)。
+        let map_threat = self.hostile_has_map_weapon(party);
+        let ally_positions: Vec<(u32, u32)> = if map_threat {
+            self.database
+                .unit_instances
+                .iter()
+                .enumerate()
+                .filter(|(i, u)| *i != idx && !u.off_map && u.party == party)
+                .map(|(_, u)| (u.x, u.y))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let cluster_at = |x: u32, y: u32| -> i64 {
+            ally_positions
+                .iter()
+                .filter(|(ax, ay)| combat::manhattan((x, y), (*ax, *ay)) <= 2)
+                .count() as i64
+        };
         let best_move = reachable
             .iter()
             .filter(|((x, y), _)| !occupied.contains(&(*x, *y)))
             .filter(|((x, y), _)| combat::manhattan((*x, *y), target_pos) <= max_range)
-            // 攻撃可能 (射程内) なマスのうち、防御地形 (森/山/都市など) を選好する
-            // (SRC の戦術判断: 攻撃できるなら守りやすい地形から攻撃する)。同じ防御価値なら
-            // ターゲットに最も近い / 残 MP 最大を選好。
+            // 攻撃可能 (射程内) なマスのうち、防御地形 (森/山/都市など) を選好し、次に
+            // マップ兵器脅威下では密集を避ける。同条件ならターゲットに最も近い / 残 MP 最大を選好。
             .min_by_key(|((x, y), rem)| {
                 (
                     -self.tile_defensive_value(*x, *y), // 防御価値が高いほど優先 (負で最小化)
+                    cluster_at(*x, *y), // マップ兵器脅威下は密集を回避 (脅威無し=常に0)
                     combat::manhattan((*x, *y), target_pos),
                     -*rem, // BinaryHeap と同じ符号反転で大きい方を最小に
                 )
@@ -7660,6 +7681,20 @@ impl App {
         }
         let tid = map.cell(x, y).terrain_id;
         self.database.terrain_damage_mod(tid) - self.database.terrain_hit_mod(tid)
+    }
+
+    /// `party` に敵対する勢力のオンマップユニットがマップ兵器 (武器 class に全角Ｍ) を
+    /// 1 つでも持つか。敵 AI の散開判断 (マップ兵器回避) に使う。マップ兵器を持つ敵が
+    /// 居なければ散開しない (= 通常の攻撃位置選択)。
+    fn hostile_has_map_weapon(&self, party: crate::Party) -> bool {
+        self.database.unit_instances.iter().any(|u| {
+            !u.off_map
+                && u.party.is_hostile_to(party)
+                && self
+                    .database
+                    .unit_by_name(&u.unit_data_name)
+                    .is_some_and(|d| d.weapons.iter().any(|w| w.class.contains('Ｍ')))
+        })
     }
 
     /// 現ステージファイルが `label` を定義しているか (戦闘終了イベントの委譲判定用)。
@@ -16232,6 +16267,68 @@ End
                 .unwrap()
                 .has_condition("復活"),
             "余力のある敵 AI は復活精神を温存する"
+        );
+    }
+
+    /// 敵 AI は、敵対勢力がマップ兵器を持つとき、攻撃マスのうち同陣営との密集を避けた
+    /// マスを選ぶ (1 発で複数巻き込まれないよう散開する)。
+    #[test]
+    fn ai_spreads_to_avoid_enemy_map_weapon() {
+        let mut app = App::new();
+        app.handle_input(Input::Advance); // Configuration
+        app.handle_input(Input::Advance); // MapView
+                                          // 7x3 平地マップ (防御価値は一様 → 密集度が決め手)。
+        app.database_mut()
+            .replace_map(crate::data::map::MapData::new(7, 3));
+
+        // 味方ターゲット兼マップ兵器持ち (脅威源) を (6,1) に。マップ兵器のみ＝反撃しない。
+        place_player_unit(&mut app, "Hero", 6, 1);
+        {
+            let h = app
+                .database_mut()
+                .units
+                .iter_mut()
+                .find(|u| u.name == "Hero")
+                .unwrap();
+            h.weapons.push(crate::data::unit::WeaponData {
+                name: "マップ砲".into(),
+                power: 80,
+                min_range: 1,
+                max_range: 5,
+                precision: 100,
+                bullet: -1,
+                en_consumption: 0,
+                necessary_morale: 0,
+                adaption: String::new(),
+                critical: 0,
+                class: "Ｍ全".into(),
+                extras: Vec::new(),
+            });
+        }
+        // 攻撃側 (敵): 射程1武器・速度8。Hero を射程に収める複数マスへ到達できる。
+        let mut foe_ud = app.database().unit_by_name("Hero").cloned().unwrap();
+        foe_ud.name = "Foe".into();
+        foe_ud.speed = 8;
+        foe_ud.weapons.clear(); // マップ兵器は引き継がない
+        app.database_mut().units.push(foe_ud);
+        add_weapon(&mut app, "Foe", 60, 1);
+        let foe = spawn_party(&mut app, "Foe", crate::Party::Enemy, 0, 1);
+        // 同陣営の僚機を (5,0) に固定配置 → (5,1) が密集マスになる。
+        let ally = spawn_party(&mut app, "Foe", crate::Party::Enemy, 5, 0);
+        app.database_mut().unit_by_uid_mut(&ally).unwrap().ai_mode = "固定".into();
+
+        app.set_stage_state(crate::stage::StageState::Battle);
+        app.handle_input(Input::EndPhase);
+
+        // (6,1) を射程に収める到達マス: (5,1)[僚機(5,0)に近接=密集] / (6,2)[僚機から離れる=非密集]。
+        // マップ兵器脅威下なので密集を避けた (6,2) を選ぶ。
+        let f = app.database().unit_by_uid(&foe).unwrap();
+        assert_eq!(
+            (f.x, f.y),
+            (6, 2),
+            "マップ兵器脅威下では密集を避けた攻撃マス (6,2) を選ぶ (実際: ({},{}))",
+            f.x,
+            f.y
         );
     }
 
