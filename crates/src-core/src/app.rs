@@ -5289,6 +5289,11 @@ impl App {
                 return false;
             }
         }
+        // 沈黙 (特殊効果攻撃属性 黙): 術 / 音 属性のアビリティは使用不能。
+        if u.has_condition("沈黙") && (ab.attributes.contains('術') || ab.attributes.contains('音'))
+        {
+            return false;
+        }
         true
     }
 

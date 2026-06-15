@@ -789,6 +789,13 @@ impl UnitInstance {
             return false;
         };
 
+        // 沈黙 (特殊効果攻撃属性 黙): 術 / 音 属性の武器は使用不能。
+        if self.has_condition("沈黙")
+            && (weapon_data.class.contains('術') || weapon_data.class.contains('音'))
+        {
+            return false;
+        }
+
         // Must have enough EN
         let max_en = db.effective_max_en(self);
         let current_en = max_en - self.en_consumed;
@@ -1723,6 +1730,63 @@ mod tests {
         ));
         unit.add_condition(crate::condition::Condition::with_details("麻痺", 3, 1, ""));
         assert!(!unit.is_weapon_available(0, &db));
+    }
+
+    /// 沈黙 (特殊効果攻撃属性 黙) 中は 術 / 音 属性の武器のみ使用不能になる。
+    #[test]
+    fn weapon_unavailable_when_silenced_for_jutsu_weapon() {
+        let mut db = crate::db::GameDatabase::new();
+        let mk = |name: &str, class: &str| crate::data::unit::WeaponData {
+            name: name.to_string(),
+            power: 1000,
+            min_range: 1,
+            max_range: 5,
+            precision: 10,
+            bullet: 10,
+            en_consumption: 5,
+            necessary_morale: 0,
+            adaption: String::new(),
+            critical: 0,
+            class: class.to_string(),
+            extras: Vec::new(),
+        };
+        let unit_data = crate::data::unit::UnitData {
+            abilities: Vec::new(),
+            name: "テスト機".to_string(),
+            kana_name: "てすとき".to_string(),
+            nickname: "テスト".to_string(),
+            class: "t".to_string(),
+            pilot_num: 1,
+            item_num: 3,
+            transportation: "陸".to_string(),
+            speed: 100,
+            size: crate::data::unit::Size::M,
+            value: 0,
+            exp_value: 0,
+            hp: 5000,
+            en: 100,
+            armor: 500,
+            mobility: 120,
+            adaption: crate::data::pilot::Adaption::parse("AAAA").unwrap(),
+            bitmap: String::new(),
+            weapons: vec![mk("術武器", "術"), mk("通常武器", "")],
+            features: Vec::new(),
+        };
+        db.extend_units(vec![unit_data]);
+        let mut unit = UnitInstance::new("テスト機", "Pilot1", Party::Player, 0, 0);
+        unit.weapons
+            .push(crate::unit_weapon::UnitWeapon::from_data("術武器", 0, 10));
+        unit.weapons
+            .push(crate::unit_weapon::UnitWeapon::from_data("通常武器", 1, 10));
+        unit.add_condition(crate::condition::Condition::with_details("沈黙", 3, 1, ""));
+        assert!(
+            !unit.is_weapon_available(0, &db),
+            "沈黙中は術属性武器が使えない"
+        );
+        assert!(
+            unit.is_weapon_available(1, &db),
+            "沈黙でも非術/音の通常武器は使える"
+        );
     }
 
     #[test]
