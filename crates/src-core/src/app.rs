@@ -3356,6 +3356,8 @@ impl App {
                         let dm = &mut self.database.unit_instances[def_idx];
                         dm.morale = (dm.morale + 1).clamp(0, 150);
                     }
+                    // 命中時/損傷時 気力増加スキル。
+                    self.apply_combat_morale_skills(atk_idx, def_idx, true);
                     // 特殊効果攻撃属性: 命中かつ生存時に確率で状態異常を付与。
                     // 切り払いで無効化された攻撃は特殊効果も発動しない。
                     let inflicted = if parried {
@@ -3418,6 +3420,8 @@ impl App {
                 }
             }
         } else {
+            // 失敗時/回避時 気力増加スキル (攻撃を外した側 / 回避した側)。
+            self.apply_combat_morale_skills(atk_idx, def_idx, false);
             format!(
                 "{} → {} [{}]: ミス (要 {}%, ロール {})",
                 atk_pilot.nickname, def_pilot.nickname, weapon.name, effective_hit, roll
@@ -3711,6 +3715,8 @@ impl App {
                     let dm = &mut self.database.unit_instances[def_idx];
                     dm.morale = (dm.morale + 1).clamp(0, 150);
                 }
+                // 命中時/損傷時 気力増加スキル。
+                self.apply_combat_morale_skills(sup_idx, def_idx, true);
                 // 生存: 援護武器の特殊効果攻撃属性 (状態異常付与) を防御側へ proc。
                 let inflicted =
                     self.apply_weapon_special_effects(def_idx, &weapon, &sup_pilot, &def_pilot);
@@ -3719,6 +3725,8 @@ impl App {
                 }
             }
         } else {
+            // 失敗時/回避時 気力増加スキル。
+            self.apply_combat_morale_skills(sup_idx, def_idx, false);
             self.push_message(format!("{} のサポートアタックはミス", sup_pilot.nickname));
         }
         Some(sup_uid)
@@ -3984,6 +3992,8 @@ impl App {
                     let am = &mut self.database.unit_instances[atk_idx];
                     am.morale = (am.morale + 1).clamp(0, 150);
                 }
+                // 命中時/損傷時 気力増加スキル (反撃側=def が命中、被弾側=atk が損傷)。
+                self.apply_combat_morale_skills(def_idx, atk_idx, true);
                 // 生存: 反撃武器の特殊効果攻撃属性 (状態異常付与) を被弾側へ proc。
                 // 反撃側 = def (atk_pilot=def_pilot)、被弾側 = atk (def_pilot=atk_pilot)。
                 let inflicted =
@@ -3998,6 +4008,8 @@ impl App {
                 m
             }
         } else {
+            // 失敗時/回避時 気力増加スキル (反撃側=def が失敗、被弾側=atk が回避)。
+            self.apply_combat_morale_skills(def_idx, atk_idx, false);
             format!(
                 "  ↩ 反撃: {} → {} [{}]: ミス",
                 def_pilot.nickname, atk_pilot.nickname, weapon.name
@@ -5882,6 +5894,28 @@ impl App {
                 let m = &mut self.database.unit_instances[i];
                 m.morale = (m.morale + delta).clamp(0, 150);
             }
+        }
+    }
+
+    /// 命中/損傷/失敗/回避 時の気力増加スキルを適用する (`Unit.cs` 17078-17138)。
+    /// `hit=true`: 攻撃側に 命中時気力増加 / 被弾側に 損傷時気力増加 をスキルLv分加算。
+    /// `hit=false`: 攻撃側に 失敗時気力増加 / 回避側に 回避時気力増加 を加算。テスト用
+    /// ユニットは該当スキルを持たないため無影響 (= 既存テストへ影響なし)。
+    fn apply_combat_morale_skills(&mut self, atk_idx: usize, def_idx: usize, hit: bool) {
+        let (atk_skill, def_skill) = if hit {
+            ("命中時気力増加", "損傷時気力増加")
+        } else {
+            ("失敗時気力増加", "回避時気力増加")
+        };
+        let atk_lv = self.unit_pilot_skill_level(atk_idx, atk_skill);
+        if atk_lv > 0 {
+            let m = &mut self.database.unit_instances[atk_idx];
+            m.morale = (m.morale + atk_lv).clamp(0, 150);
+        }
+        let def_lv = self.unit_pilot_skill_level(def_idx, def_skill);
+        if def_lv > 0 {
+            let m = &mut self.database.unit_instances[def_idx];
+            m.morale = (m.morale + def_lv).clamp(0, 150);
         }
     }
 
@@ -12691,6 +12725,58 @@ mod tests {
             app.database().unit_by_uid(&hero).unwrap().morale,
             m0 + 1,
             "攻撃を受けて生存したユニットは気力 +1"
+        );
+    }
+
+    /// 損傷時気力増加スキルは、被弾時の基本 +1 に加えてスキルLv分の気力を上乗せする。
+    #[test]
+    fn damage_morale_skill_adds_on_top_of_base_hit_gain() {
+        use crate::data::unit::WeaponData;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6); // 被弾側 (生存)
+        app.database_mut()
+            .pilots
+            .iter_mut()
+            .find(|p| p.name == "PILOT")
+            .unwrap()
+            .features
+            .push(("損傷時気力増加L2".into(), String::new()));
+        let mut ebot = app.database().unit_by_name("Hero").cloned().unwrap();
+        ebot.name = "EnemyBot".into();
+        ebot.weapons = vec![WeaponData {
+            name: "パンチ".into(),
+            power: 1,
+            min_range: 1,
+            max_range: 1,
+            precision: 0,
+            bullet: -1,
+            en_consumption: 0,
+            necessary_morale: 0,
+            adaption: "AAAA".into(),
+            critical: 0,
+            class: String::new(),
+            extras: Vec::new(),
+        }];
+        app.database_mut().units.push(ebot);
+        let hero = first_player_uid(&app);
+        let enemy = app.database_mut().register_unit(crate::UnitInstance::new(
+            "EnemyBot",
+            "PILOT",
+            crate::Party::Enemy,
+            3,
+            6,
+        ));
+        app.database_mut()
+            .unit_by_uid_mut(&enemy)
+            .unwrap()
+            .add_condition(crate::Condition::new("必中", -1));
+        let m0 = app.database().unit_by_uid(&hero).unwrap().morale;
+        app.try_counterattack(3, 6, (2, 6));
+        assert_eq!(
+            app.database().unit_by_uid(&hero).unwrap().morale,
+            m0 + 3,
+            "被弾 +1 ＋ 損傷時気力増加L2 +2 = +3"
         );
     }
 
