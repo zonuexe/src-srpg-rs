@@ -4245,6 +4245,40 @@ impl App {
             None => std::collections::HashMap::new(),
         };
 
+        // 恐怖 (特殊効果攻撃属性 恐): コントロール不能となり敵から逃げ続ける。
+        // 到達マスのうち敵への最小距離が最大のマスへ移動し、攻撃はしない。
+        if self.database.unit_instances[idx].has_condition("恐怖") {
+            let enemies: Vec<(u32, u32)> = candidates.iter().map(|(p, _, _)| *p).collect();
+            let occ: std::collections::HashSet<(u32, u32)> = self
+                .database
+                .unit_instances
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != idx)
+                .map(|(_, u)| (u.x, u.y))
+                .collect();
+            let flee = reachable
+                .iter()
+                .filter(|((x, y), _)| !occ.contains(&(*x, *y)))
+                .max_by_key(|((x, y), _)| {
+                    enemies
+                        .iter()
+                        .map(|e| combat::manhattan((*x, *y), *e))
+                        .min()
+                        .unwrap_or(0)
+                })
+                .map(|((x, y), _)| (*x, *y));
+            if let Some(dest) = flee {
+                if dest != unit_pos {
+                    let uid = self.database.unit_instances[idx].uid.clone();
+                    self.begin_move_anim(&uid, &reachable, unit_pos, dest);
+                    self.database.move_unit(&uid, dest.0, dest.1);
+                }
+            }
+            self.database.unit_instances[idx].has_acted = true;
+            return;
+        }
+
         // ターゲットを射程内に収める最良の到達マス: ターゲット直近 ≤ max_range
         // のマスのうち、占有されていない / 自分の現在位置 OK を選ぶ。
         let occupied: std::collections::HashSet<(u32, u32)> = self
@@ -10827,6 +10861,35 @@ mod tests {
         app.database_mut().unit_instances[idx]
             .add_condition(crate::Condition::new("移動力ＵＰ", 3));
         assert_eq!(speed(&app), 4, "移動力ＵＰ で +1");
+    }
+
+    /// 恐怖 (特殊効果攻撃属性 恐) の敵 AI は味方から遠ざかり、攻撃しない。
+    #[test]
+    fn fear_makes_ai_flee_from_enemies() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 5, 5);
+        let coward = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "PILOT",
+            crate::Party::Enemy,
+            6,
+            5,
+        ));
+        app.database_mut()
+            .unit_by_uid_mut(&coward)
+            .unwrap()
+            .add_condition(crate::Condition::new("恐怖", 3));
+        app.set_stage_state(crate::stage::StageState::Battle);
+        let idx = app.database().idx_by_uid(&coward).unwrap();
+        app.ai_act_unit(idx);
+        let c = app.database().unit_by_uid(&coward).unwrap();
+        let dist_after = (c.x as i32 - 5).abs() + (c.y as i32 - 5).abs();
+        assert!(
+            dist_after > 1,
+            "恐怖の敵は味方 (5,5) から遠ざかる (移動後距離={dist_after})"
+        );
+        assert!(c.has_acted, "逃走後は行動終了");
     }
 
     /// 写/化 (能力コピー) はクリティカル時に発動者を対象の形態へ変える。写はサイズ制限あり。

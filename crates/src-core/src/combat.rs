@@ -471,6 +471,8 @@ pub fn weapon_special_effects(class: &str) -> Vec<(String, i32)> {
             "中" => Some(("バリア中和", 1)),
             // 踊=踊り (3T): 行動不能 (常時回避ニュアンスは未モデル)。
             "踊" => Some(("踊り", 3)),
+            // 恐=恐怖 (3T): AI が敵から逃げ続ける (ai_act_unit の逃走分岐)。
+            "恐" => Some(("恐怖", 3)),
             _ => None,
         };
         if let Some((name, default_turns)) = mapped {
@@ -933,6 +935,8 @@ mod tests {
         );
         // 踊り (踊=踊り3T)。
         assert_eq!(weapon_special_effects("踊"), vec![("踊り".to_string(), 4)]);
+        // 恐怖 (恐=恐怖3T)。
+        assert_eq!(weapon_special_effects("恐"), vec![("恐怖".to_string(), 4)]);
         // 弱/効 (弱点付加) と 剋 (属性封じ): 属性名を抽出して condition 名に展開。
         assert_eq!(
             weapon_special_effects("弱火"),
