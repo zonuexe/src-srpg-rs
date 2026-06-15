@@ -3309,6 +3309,7 @@ impl App {
                         self.apply_weapon_special_effects(def_idx, &weapon, &atk_pilot, &def_pilot);
                     // 衰 / 滅: クリティカル時に対象の現在 HP / EN を割合減少させる。
                     // 引 / 転: クリティカル時に対象の位置を移す。盗: 資金を奪う。
+                    // 写 / 化: 発動者が対象のユニットへ変化する。
                     let decayed = if critical {
                         let mut d = self.apply_weapon_crit_decay(def_idx, &weapon);
                         d.extend(self.apply_weapon_crit_reposition(def_idx, (cx, cy), &weapon));
@@ -3318,6 +3319,7 @@ impl App {
                             def_unit.value,
                             &weapon,
                         ));
+                        d.extend(self.apply_weapon_crit_copy(atk_idx, def_idx, &weapon));
                         d
                     } else {
                         Vec::new()
@@ -5040,6 +5042,50 @@ impl App {
         self.add_money(amount);
         self.database.unit_instances[def_idx].add_condition(crate::Condition::new("被盗", -1));
         vec![format!("資金奪取 +{amount}")]
+    }
+
+    /// 写 / 化 (能力コピー): クリティカル時に発動者を対象のユニットへ変化させる
+    /// (`特殊効果攻撃属性.md`)。`写` はサイズ 2 段階以上差で無効、`化` は制限なし。
+    /// パイロットは `set_unit_form` が保持する。適用したラベル列を返す。
+    fn apply_weapon_crit_copy(
+        &mut self,
+        atk_idx: usize,
+        def_idx: usize,
+        weapon: &crate::data::unit::WeaponData,
+    ) -> Vec<String> {
+        use crate::data::unit::Size;
+        let has_sha = weapon.class.split_whitespace().any(|t| t == "写");
+        let has_ka = weapon.class.split_whitespace().any(|t| t == "化");
+        if !has_sha && !has_ka {
+            return Vec::new();
+        }
+        let atk_name = self.database.unit_instances[atk_idx].unit_data_name.clone();
+        let def_name = self.database.unit_instances[def_idx].unit_data_name.clone();
+        if def_name == atk_name {
+            return Vec::new();
+        }
+        // 写 (化 でない) はサイズ 2 段階以上差で無効。
+        if has_sha && !has_ka {
+            let asize = self
+                .database
+                .unit_by_name(&atk_name)
+                .map(|d| d.size)
+                .unwrap_or(Size::M);
+            let dsize = self
+                .database
+                .unit_by_name(&def_name)
+                .map(|d| d.size)
+                .unwrap_or(Size::M);
+            if asize.step_diff(dsize) >= 2 {
+                return Vec::new();
+            }
+        }
+        let atk_uid = self.database.unit_instances[atk_idx].uid.clone();
+        if self.set_unit_form(&atk_uid, &def_name) {
+            vec![format!("能力コピー → {def_name}")]
+        } else {
+            Vec::new()
+        }
     }
 
     /// 引き寄せ / 強制転移 (`引` / `転`): クリティカル時に対象の位置を移す
@@ -10781,6 +10827,74 @@ mod tests {
         app.database_mut().unit_instances[idx]
             .add_condition(crate::Condition::new("移動力ＵＰ", 3));
         assert_eq!(speed(&app), 4, "移動力ＵＰ で +1");
+    }
+
+    /// 写/化 (能力コピー) はクリティカル時に発動者を対象の形態へ変える。写はサイズ制限あり。
+    #[test]
+    fn weapon_copy_transforms_attacker_with_size_limit() {
+        use crate::data::unit::{Size, WeaponData};
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Mimic", 2, 6);
+        place_player_unit(&mut app, "Model", 4, 6); // 同サイズ M
+        let atk = first_player_uid(&app);
+        let model = app
+            .database()
+            .unit_instances
+            .iter()
+            .find(|u| u.x == 4 && u.y == 6)
+            .unwrap()
+            .uid
+            .clone();
+        let atk_idx = app.database().idx_by_uid(&atk).unwrap();
+        let def_idx = app.database().idx_by_uid(&model).unwrap();
+        let mk = |class: &str| WeaponData {
+            name: "コピー光線".into(),
+            power: 100,
+            min_range: 1,
+            max_range: 1,
+            precision: 0,
+            bullet: -1,
+            en_consumption: 0,
+            necessary_morale: 0,
+            adaption: "AAAA".into(),
+            critical: 0,
+            class: class.into(),
+            extras: Vec::new(),
+        };
+        // 写 同サイズ → 変化。
+        let applied = app.apply_weapon_crit_copy(atk_idx, def_idx, &mk("写"));
+        assert_eq!(applied, vec!["能力コピー → Model".to_string()]);
+        assert_eq!(
+            app.database().unit_by_uid(&atk).unwrap().unit_data_name,
+            "Model"
+        );
+        // Model を XL に変え、Mimic(M) へ戻して再試行: 写 はサイズ差2以上で無効、化 は可。
+        app.database_mut()
+            .unit_by_uid_mut(&atk)
+            .unwrap()
+            .unit_data_name = "Mimic".into();
+        app.database_mut()
+            .units
+            .iter_mut()
+            .find(|d| d.name == "Model")
+            .unwrap()
+            .size = Size::XL;
+        assert!(
+            app.apply_weapon_crit_copy(atk_idx, def_idx, &mk("写"))
+                .is_empty(),
+            "写 はサイズ 2 段階以上差で無効"
+        );
+        assert_eq!(
+            app.database().unit_by_uid(&atk).unwrap().unit_data_name,
+            "Mimic",
+            "写 失敗で形態は変わらない"
+        );
+        assert!(
+            !app.apply_weapon_crit_copy(atk_idx, def_idx, &mk("化"))
+                .is_empty(),
+            "化 はサイズ制限なしで変化"
+        );
     }
 
     /// 盗属性武器のクリティカル時資金奪取: 味方が敵を盗むと修理費の1/4が入り、再取得は不可。
