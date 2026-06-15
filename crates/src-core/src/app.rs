@@ -5611,6 +5611,8 @@ impl App {
     /// 防御側が確率で無効化する。攻撃側が `直撃` を持つときは無効化されない。
     /// 確率: `2×防御側Lv − 攻撃側Lv` が `Dice(1..32)` 以上で発動。防御側が切り払いを
     /// 持たない (Lv0) ときは乱数を消費しない (既存 RNG 列を保つ)。
+    /// 防御側が `見切り` (特殊防御発動の SpecialPower) を持つときは確率を 32 (必ず成功) に
+    /// 上書きする (`Unit.cs::CheckParryFeature`「見切りがあれば必ず発動」、prob=32)。
     fn roll_parry(&mut self, atk_idx: usize, def_idx: usize, weapon_class: &str) -> bool {
         let is_melee = weapon_class.contains('武')
             || weapon_class.contains('格')
@@ -5624,7 +5626,12 @@ impl App {
             return false;
         }
         let atk_parry = self.unit_parry_level(atk_idx);
-        let prob = 2 * def_parry - atk_parry;
+        // 見切り: 切り払いを必ず成功させる (prob=32)。乱数は通常どおり消費して RNG 列を保つ。
+        let prob = if self.database.unit_instances[def_idx].has_condition("見切り") {
+            32
+        } else {
+            2 * def_parry - atk_parry
+        };
         let dice = (self.next_u32() % 32) as i32 + 1; // 1..=32
         prob >= dice
     }
@@ -15816,6 +15823,61 @@ End
         assert!(
             !app.roll_parry(atk_idx, def_idx, "射"),
             "射撃は切り払い対象外"
+        );
+    }
+
+    /// 見切り (特殊防御発動 SpecialPower): 切り払いを必ず成功させる。攻撃側 Lv が高く
+    /// 通常なら発動率が負 (絶対に切り払えない) でも、見切りがあれば必ず切り払う。
+    #[test]
+    fn foresight_guarantees_parry() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Swordsman", 2, 6);
+        // 攻撃側: 切り払いLv16 の別パイロット (防御側 Lv1 では prob=2-16=-14 → 通常は不発)。
+        {
+            let mut p = app.database().pilot_by_name("PILOT").unwrap().clone();
+            p.name = "Master".into();
+            p.nickname = "Master".into();
+            p.features = vec![("切り払いLv16".into(), String::new())];
+            app.database_mut().pilots.push(p);
+        }
+        let attacker = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Swordsman",
+            "Master",
+            crate::Party::Enemy,
+            3,
+            6,
+        ));
+        // 防御側 PILOT に 切り払いLv1 (低レベル)。
+        {
+            let p = app
+                .database_mut()
+                .pilots
+                .iter_mut()
+                .find(|p| p.name == "PILOT")
+                .unwrap();
+            p.features.push(("切り払いLv1".into(), String::new()));
+        }
+        let def_uid = first_player_uid(&app);
+        let def_idx = app.database().idx_by_uid(&def_uid).unwrap();
+        let atk_idx = app.database().idx_by_uid(&attacker).unwrap();
+
+        // 見切り無し: prob = 2×1 − 16 = −14 → 乱数 (1..32) 未満で必ず不発。
+        assert!(
+            !app.roll_parry(atk_idx, def_idx, "武"),
+            "見切り無し・高 Lv 攻撃には切り払えない"
+        );
+        // 見切り付与: prob=32 で必ず切り払う。
+        app.database_mut().unit_instances[def_idx]
+            .add_condition(crate::Condition::new("見切り", 1));
+        assert!(
+            app.roll_parry(atk_idx, def_idx, "武"),
+            "見切りがあれば必ず切り払う"
+        );
+        // 見切りでも切り払い不可武器 (射撃) は無効。
+        assert!(
+            !app.roll_parry(atk_idx, def_idx, "射"),
+            "見切りでも射撃は切り払い対象外"
         );
     }
 
