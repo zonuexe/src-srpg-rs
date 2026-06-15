@@ -58,6 +58,30 @@ MapAttack リオ メガキャノン 6 5
 }
 
 #[test]
+fn mapattack_respects_revive_spirit() {
+    // 精神コマンド「復活」を持つ敵はマップ兵器で撃破されても立ち上がる (通常戦闘と同様)。
+    let app = run(r#"
+Place "ブレイバー" "リオ" 味方 5 5
+Place "ゾルダII" "ガロ" 敵 6 5
+SetStatus ガロ 復活
+MapAttack リオ メガキャノン 6 5
+"#);
+    assert_eq!(
+        alive_count(&app, src_core::Party::Enemy),
+        1,
+        "復活で生存 (除去されない)"
+    );
+    let revived = app
+        .database()
+        .unit_instances
+        .iter()
+        .find(|u| u.pilot_name == "ガロ")
+        .expect("ガロ は復活で残存");
+    assert!(!revived.has_condition("復活"), "復活 は 1 回で消費される");
+    assert_eq!(revived.damage, 0, "復活で HP 全快 (damage=0)");
+}
+
+#[test]
 fn mapattack_spares_friendly_in_area() {
     // 同じマスに味方が居ても、攻撃側陣営 (味方) は対象外。
     let app = run(r#"

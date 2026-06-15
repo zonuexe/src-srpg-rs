@@ -5442,7 +5442,7 @@ impl App {
     /// 全快させ condition を消費して `true` を返す (= 撃破は成立しない)。保持して
     /// いなければ `false` (= 撃破成立) を返す。各撃破サイトで `remove_unit_at` の
     /// 直前に呼ぶ。
-    fn revive_if_possible(&mut self, idx: usize) -> bool {
+    pub(crate) fn revive_if_possible(&mut self, idx: usize) -> bool {
         if self.database.unit_instances[idx].has_condition("復活") {
             let u = &mut self.database.unit_instances[idx];
             u.remove_condition("復活");

@@ -12835,12 +12835,18 @@ pub(crate) fn map_attack(
         app.database_mut().unit_instances[def_idx].damage += preview.damage;
         let remaining = def_unit.hp - app.database().unit_instances[def_idx].damage;
         if remaining <= 0 {
-            // 通常戦闘と同様に 破壊 <name> / 全滅 <party> イベントを発火する。
-            // これが無いとマップ兵器でラスト1機を撃破してもシナリオが進行しない。
-            let (vp, vu) = (def_pilot.name.clone(), def_unit.name.clone());
-            app.database_mut().remove_unit_at(def_idx);
-            fire_destruction_labels(app, &vp, &vu);
-            kills += 1;
+            // 精神コマンド「復活」: HP0 でも HP 全快で立ち上がる (1 回で消費)。通常戦闘と
+            // 同様にマップ兵器の撃破でも復活を尊重する (撃破・破壊・全滅を発火しない)。
+            if app.revive_if_possible(def_idx) {
+                app.push_message(format!("{} は【復活】で立ち上がった！", def_unit.name));
+            } else {
+                // 通常戦闘と同様に 破壊 <name> / 全滅 <party> イベントを発火する。
+                // これが無いとマップ兵器でラスト1機を撃破してもシナリオが進行しない。
+                let (vp, vu) = (def_pilot.name.clone(), def_unit.name.clone());
+                app.database_mut().remove_unit_at(def_idx);
+                fire_destruction_labels(app, &vp, &vu);
+                kills += 1;
+            }
         }
     }
     // 勝敗判定 (マップ兵器でラスト1機撃破時の勝利確定)。
