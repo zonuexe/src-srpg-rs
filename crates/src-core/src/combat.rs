@@ -280,8 +280,8 @@ pub fn predict_with_status_terrain(
     if has(atk_statuses, "盲目") || has(atk_statuses, "撹乱") {
         hit_chance /= 2;
     }
-    // 盲目 (防御側): 盲目ユニットへの攻撃の命中率は 1.5 倍 (95 上限)。
-    if has(def_statuses, "盲目") {
+    // 盲目 / 狂戦士 (防御側): これらのユニットへの攻撃の命中率は 1.5 倍 (95 上限)。
+    if has(def_statuses, "盲目") || has(def_statuses, "狂戦士") {
         hit_chance = (hit_chance * 3 / 2).min(95);
     }
     // 必中 (attacker) / 捨て身 (defender=無防備) / 麻痺 / 凍結 → 命中 100。
@@ -351,6 +351,10 @@ pub fn predict_with_status_terrain(
     if has(atk_statuses, "攻撃力ＤＯＷＮ") {
         raw_dmg = (raw_dmg as f64 * 0.75) as i64;
     }
+    // 狂戦士 (特殊効果攻撃属性 狂): 与ダメージ ×1.25 (攻撃側)。
+    if has(atk_statuses, "狂戦士") {
+        raw_dmg = (raw_dmg as f64 * 1.25) as i64;
+    }
     if has(def_statuses, "麻痺") || has(def_statuses, "凍結") {
         raw_dmg = (raw_dmg as f64 * 1.5) as i64;
     }
@@ -407,7 +411,7 @@ pub fn critical_probability(
 /// 武器の `class` 文字列から特殊効果攻撃属性 (`特殊効果攻撃属性.md`) を抽出し、
 /// 命中時に防御側へ付与する `(状態異常名, lifetime)` の列を返す。
 ///
-/// 代表的な行動阻害・状態異常属性に対応 (Ｓ/縛/痺/眠/乱/凍/石/毒/不/止/劣/低防/低攻/低運/盲/撹/害/ゾ/黙)。
+/// 代表的な行動阻害・状態異常属性に対応 (Ｓ/縛/痺/眠/乱/凍/石/毒/不/止/劣/低防/低攻/低運/盲/撹/害/ゾ/黙/狂)。
 /// `属性L<n>` でターン数を上書きできる。lifetime は「効果ターン数 + 1」を返す:
 /// `begin_phase` が当該陣営フェイズ開始時に lifetime を 1 減らすため、相手の N
 /// フェイズに効かせるには N+1 が必要 (L0 = 戦闘中のみ → 最小 lifetime 1)。
@@ -439,6 +443,9 @@ pub fn weapon_special_effects(class: &str) -> Vec<(String, i32)> {
             "ゾ" => Some(("ゾンビ", 3)),
             // 黙=沈黙 (3T): 術 / 音 属性の武器・アビリティを使用不能にする。
             "黙" => Some(("沈黙", 3)),
+            // 狂=狂戦士 (3T): 与ダメージ ×1.25 / 被命中 ×1.5。AI 制御喪失部分 (味方の
+            // 操作不能・暴走ターゲティング) は未モデルだが、戦闘修正と援護除外は反映。
+            "狂" => Some(("狂戦士", 3)),
             _ => None,
         };
         if let Some((name, default_turns)) = mapped {
@@ -814,6 +821,83 @@ mod tests {
         );
         // 沈黙系 (黙=沈黙3T)。
         assert_eq!(weapon_special_effects("黙"), vec![("沈黙".to_string(), 4)]);
+        // 狂戦士 (狂=狂戦士3T)。
+        assert_eq!(
+            weapon_special_effects("狂"),
+            vec![("狂戦士".to_string(), 4)]
+        );
+    }
+
+    /// 狂戦士 (狂): 攻撃側で与ダメージ ×1.25、防御側で被命中 ×1.5。
+    #[test]
+    fn status_kyousenshi_modifies_damage_and_hit() {
+        let dmg_base = predict_with_status(
+            &p(0, 0, 100),
+            &u(0, vec![]),
+            &weapon(800, 1, 1, 0),
+            &p(0, 0, 0),
+            &u(0, vec![]),
+            0,
+            0,
+            100,
+            100,
+            &[],
+            &[],
+        )
+        .damage;
+        let dmg_berserk = predict_with_status(
+            &p(0, 0, 100),
+            &u(0, vec![]),
+            &weapon(800, 1, 1, 0),
+            &p(0, 0, 0),
+            &u(0, vec![]),
+            0,
+            0,
+            100,
+            100,
+            &["狂戦士".to_string()],
+            &[],
+        )
+        .damage;
+        assert_eq!(
+            dmg_berserk,
+            (dmg_base as f64 * 1.25) as i64,
+            "狂戦士 (攻撃側) で与ダメージ ×1.25"
+        );
+        // 被命中 ×1.5。
+        let hit_base = predict_with_status(
+            &p(30, 0, 0),
+            &u(0, vec![]),
+            &weapon(0, 1, 1, 0),
+            &p(0, 0, 0),
+            &u(0, vec![]),
+            0,
+            0,
+            100,
+            100,
+            &[],
+            &[],
+        )
+        .hit_chance;
+        let hit_vs_berserk = predict_with_status(
+            &p(30, 0, 0),
+            &u(0, vec![]),
+            &weapon(0, 1, 1, 0),
+            &p(0, 0, 0),
+            &u(0, vec![]),
+            0,
+            0,
+            100,
+            100,
+            &[],
+            &["狂戦士".to_string()],
+        )
+        .hit_chance;
+        assert_eq!(
+            hit_vs_berserk,
+            (hit_base * 3 / 2).min(95),
+            "狂戦士 (防御側) で被命中 ×1.5"
+        );
     }
 
     /// 攻撃力ＤＯＷＮ 状態は与ダメージを ×0.75 に、攻撃力ＵＰ は ×1.25 にする。
