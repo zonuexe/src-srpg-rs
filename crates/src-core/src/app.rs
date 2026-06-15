@@ -6546,6 +6546,36 @@ impl App {
 
     /// 変形先サブメニューの選択を解決する。`choice` は 1-based。0 / 範囲外は
     /// キャンセルでユニットメニューへ戻る。
+    /// 形態 (`form_name`) の必要技能 / 不必要技能 (`UnitData` の `必要技能=` / `不必要技能=`
+    /// 特殊能力、`必要技能.md` §4) を `unit_idx` の搭乗員が満たすか。変形 / 換装 のゲート。
+    /// 形態側にこれらの宣言が無ければ常に許可 (= 制限なし)。`必要技能` は満たさないと不可、
+    /// `不必要技能` は満たすと不可 (原典: ちょうど逆)。乗り換え / 合体 のクロス搭乗評価は別途。
+    fn form_skill_ok(&self, unit_idx: usize, form_name: &str) -> bool {
+        let Some(ud) = self.database.unit_by_name(form_name) else {
+            return true;
+        };
+        let reqs: Vec<(bool, String)> = ud
+            .features
+            .iter()
+            .filter_map(|(n, v)| match n.as_str() {
+                "必要技能" => Some((true, v.clone())),
+                "不必要技能" => Some((false, v.clone())),
+                _ => None,
+            })
+            .collect();
+        if reqs.is_empty() {
+            return true;
+        }
+        let u = &self.database.unit_instances[unit_idx];
+        for (require, expr) in &reqs {
+            let satisfied = crate::necessary_skill::is_satisfied(expr, u, &self.database);
+            if *require != satisfied {
+                return false;
+            }
+        }
+        true
+    }
+
     fn resolve_transform(&mut self, choice: u32) -> bool {
         let Some(pt) = self.pending_transform.take() else {
             return false;
@@ -6557,6 +6587,14 @@ impl App {
             return true;
         }
         let form = pt.forms[idx - 1].clone();
+        // 形態の必要技能 (搭乗員が満たさないと変形不可)。
+        if let Some(uidx) = self.database.idx_by_uid(&pt.uid) {
+            if !self.form_skill_ok(uidx, &form) {
+                self.push_message(format!("必要技能を満たさないため {form} に変形できません"));
+                self.reopen_unit_menu_for(&pt.uid);
+                return true;
+            }
+        }
         self.transform_unit_by_uid(&pt.uid, &form);
         self.reopen_unit_menu_for(&pt.uid);
         true
@@ -8868,6 +8906,15 @@ impl App {
             .unit_by_uid(uid)
             .map(|u| self.unit_display_name(u))
             .unwrap_or_default();
+        // 換装先の形態の必要技能 (搭乗員が満たさないと換装不可)。
+        if let Some(uidx) = self.database.idx_by_uid(uid) {
+            if !self.form_skill_ok(uidx, new_form) {
+                self.push_message(format!(
+                    "必要技能を満たさないため {new_form} に換装できません"
+                ));
+                return;
+            }
+        }
         if self.set_unit_form(uid, new_form) {
             let new_name = self
                 .database
@@ -13007,6 +13054,44 @@ mod tests {
                 .is_empty(),
             "既習得は再習得しない"
         );
+    }
+
+    /// 形態の必要技能 (`必要技能=` / `不必要技能=`): 搭乗員が満たす形態のみ変形/換装可。
+    #[test]
+    fn form_necessary_skill_gates_transform() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "BaseForm", 2, 6);
+        place_player_unit(&mut app, "SuperForm", 4, 6); // UnitData 用途
+                                                        // SuperForm に 必要技能=念力Lv3、Forbidden に 不必要技能=機械 を付与。
+        app.database_mut()
+            .units
+            .iter_mut()
+            .find(|d| d.name == "SuperForm")
+            .unwrap()
+            .features
+            .push(("必要技能".into(), "念力Lv3".into()));
+        let base = first_player_uid(&app);
+        let idx = app.database().idx_by_uid(&base).unwrap();
+        app.database_mut().create_pilot_instance("PILOT", "p1");
+        app.database_mut().unit_instances[idx].pilot_ids = vec!["p1".into()];
+        // 念力なし → SuperForm へ変形/換装不可。
+        assert!(
+            !app.form_skill_ok(idx, "SuperForm"),
+            "念力なしで SuperForm 不可"
+        );
+        // 念力Lv3 習得 → 可。
+        app.database_mut()
+            .pilot_instance_by_id_mut("p1")
+            .unwrap()
+            .skills
+            .push("念力Lv3".into());
+        assert!(
+            app.form_skill_ok(idx, "SuperForm"),
+            "念力Lv3 で SuperForm 可"
+        );
+        // 必要技能宣言の無い形態は常に可。
+        assert!(app.form_skill_ok(idx, "BaseForm"));
     }
 
     /// 盗属性武器のクリティカル時資金奪取: 味方が敵を盗むと修理費の1/4が入り、再取得は不可。
