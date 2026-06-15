@@ -4842,6 +4842,8 @@ impl App {
         }
         let prob =
             (weapon.critical + (atk_pilot.technique - def_pilot.technique) / 2).clamp(1, 100);
+        // 耐性 / 弱点: 武器の属性に対し対象が耐性を持てば発動率半減、弱点を持てば倍。
+        let prob = self.adjust_proc_for_resistance(def_idx, &weapon.class, prob);
         if (self.next_u32() % 100) as i32 >= prob {
             return Vec::new();
         }
@@ -4858,6 +4860,30 @@ impl App {
             applied.push(format!("気力 -{amount}"));
         }
         applied
+    }
+
+    /// 特殊効果の発動確率を、対象の `耐性` / `弱点` 特殊能力で調整する
+    /// (`特殊効果攻撃属性.md`: 弱点属性に対しては発動確率倍、耐性属性に対しては半減)。
+    /// 武器 class のいずれかの属性が対象の弱点に一致すれば ×2、耐性に一致すれば ÷2。
+    fn adjust_proc_for_resistance(&self, def_idx: usize, weapon_class: &str, prob: i32) -> i32 {
+        let feats = &self.database.unit_instances[def_idx].active_features;
+        let weak = crate::feature::feature_value(feats, "弱点").unwrap_or("");
+        let resist = crate::feature::feature_value(feats, "耐性").unwrap_or("");
+        if weak.is_empty() && resist.is_empty() {
+            return prob;
+        }
+        let mut p = prob;
+        for tok in weapon_class.split_whitespace() {
+            if weak.split_whitespace().any(|w| w == tok) {
+                p *= 2;
+                break;
+            }
+            if resist.split_whitespace().any(|r| r == tok) {
+                p /= 2;
+                break;
+            }
+        }
+        p.clamp(1, 100)
     }
 
     /// 減衰系属性 (`衰`=HP / `滅`=EN) をクリティカル時に適用する。対象の現在 HP / EN を
@@ -10684,6 +10710,29 @@ mod tests {
             m0 - 10,
             "脱 で気力 -10"
         );
+    }
+
+    /// 耐性 / 弱点 は特殊効果の発動確率を半減 / 倍にする (武器属性が一致する場合)。
+    #[test]
+    fn resistance_and_weakness_scale_proc_rate() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6);
+        let uid = first_player_uid(&app);
+        let def_idx = app.database().idx_by_uid(&uid).unwrap();
+        // 属性なし → 変化なし。
+        assert_eq!(app.adjust_proc_for_resistance(def_idx, "火 痺", 50), 50);
+        // 耐性=火 → 火属性武器の発動率半減。
+        app.database_mut().unit_instances[def_idx].active_features =
+            vec![crate::feature::ActiveFeature::new("耐性", "火")];
+        assert_eq!(app.adjust_proc_for_resistance(def_idx, "火 痺", 50), 25);
+        // 非一致属性 (氷) なら変化なし。
+        assert_eq!(app.adjust_proc_for_resistance(def_idx, "氷 痺", 50), 50);
+        // 弱点=火 → 倍 (100 上限)。
+        app.database_mut().unit_instances[def_idx].active_features =
+            vec![crate::feature::ActiveFeature::new("弱点", "火")];
+        assert_eq!(app.adjust_proc_for_resistance(def_idx, "火 痺", 40), 80);
+        assert_eq!(app.adjust_proc_for_resistance(def_idx, "火 痺", 80), 100);
     }
 
     /// 盗属性武器のクリティカル時資金奪取: 味方が敵を盗むと修理費の1/4が入り、再取得は不可。

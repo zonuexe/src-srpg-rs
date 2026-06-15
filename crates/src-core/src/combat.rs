@@ -390,8 +390,9 @@ pub fn predict_with_status_terrain(
 /// 防御側が行動不能 (麻痺 / 凍結 / 睡眠 / 石化 / 行動不能) の場合は +10。
 /// 最終的に [1, 100] にクランプする (SRC は通常武器で最低 1%)。
 ///
-/// 注: 底力 / 超反応 / 超能力 等のスキル補正、バトルコンフィグ、特殊効果武器の
-/// 弱点限定判定は本実装では未対応 (このエンジンが該当データを持たないため)。
+/// 注: 底力 / 超反応 / 超能力 等のスキル補正、バトルコンフィグは本実装では未対応。
+/// 特殊効果武器の発動確率に対する耐性/弱点補正は `App::adjust_proc_for_resistance`
+/// (`apply_weapon_special_effects` 内) で別途反映する。
 pub fn critical_probability(
     atk_pilot: &PilotData,
     def_pilot: &PilotData,
