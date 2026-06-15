@@ -11581,6 +11581,71 @@ mod tests {
         );
     }
 
+    /// 底力 (パイロット技能) は HP が最大の 1/4 以下のとき命中・回避を +30 する。
+    /// 全 HP 時はボーナス無し。`combat_bonuses` 経由で戦闘に反映される。
+    #[test]
+    fn guts_skill_boosts_hit_and_dodge_at_low_hp() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Guts", 2, 6);
+        // PILOT に 底力 技能を付与。
+        app.database_mut()
+            .pilots
+            .iter_mut()
+            .find(|p| p.name == "PILOT")
+            .unwrap()
+            .features
+            .push(("底力".into(), String::new()));
+        let uid = first_player_uid(&app);
+        // 全 HP 時はボーナス無し。
+        let full = {
+            let u = app.database().unit_by_uid(&uid).unwrap();
+            app.database().combat_bonuses(u)
+        };
+        assert_eq!(full.hit, 0, "全 HP では 底力 は発動しない (命中)");
+        assert_eq!(full.dodge, 0, "全 HP では 底力 は発動しない (回避)");
+        // HP を 1/4 以下まで減らす。
+        let max_hp = {
+            let u = app.database().unit_by_uid(&uid).unwrap();
+            app.database().effective_max_hp(u)
+        };
+        app.database_mut().unit_by_uid_mut(&uid).unwrap().damage = max_hp * 3 / 4 + 1;
+        let low = {
+            let u = app.database().unit_by_uid(&uid).unwrap();
+            app.database().combat_bonuses(u)
+        };
+        assert_eq!(low.hit, 30, "底力: HP 1/4 以下で命中 +30");
+        assert_eq!(low.dodge, 30, "底力: HP 1/4 以下で回避 +30");
+    }
+
+    /// 超底力 は 底力 より大きい命中・回避ボーナス (+50) を与える。
+    /// 「超底力」は「底力」を部分文字列に含むが超底力が優先される。
+    #[test]
+    fn super_guts_gives_larger_bonus_than_guts() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "SuperGuts", 2, 6);
+        app.database_mut()
+            .pilots
+            .iter_mut()
+            .find(|p| p.name == "PILOT")
+            .unwrap()
+            .features
+            .push(("超底力".into(), String::new()));
+        let uid = first_player_uid(&app);
+        let max_hp = {
+            let u = app.database().unit_by_uid(&uid).unwrap();
+            app.database().effective_max_hp(u)
+        };
+        app.database_mut().unit_by_uid_mut(&uid).unwrap().damage = max_hp * 3 / 4 + 1;
+        let low = {
+            let u = app.database().unit_by_uid(&uid).unwrap();
+            app.database().combat_bonuses(u)
+        };
+        assert_eq!(low.hit, 50, "超底力: HP 1/4 以下で命中 +50");
+        assert_eq!(low.dodge, 50, "超底力: HP 1/4 以下で回避 +50");
+    }
+
     /// ChangeMode「逃亡」の敵 AI も恐怖と同様に味方から遠ざかる。
     #[test]
     fn change_mode_escape_makes_ai_flee() {

@@ -690,7 +690,51 @@ impl GameDatabase {
                 b.armor += 200;
             }
         }
+        // 底力 / 超底力 (パイロット主技能): 現 HP が最大 HP の 1/4 以下のとき命中・回避を
+        // 底上げする (`Unit.cs` 命中率計算: 底力=+30 / 超底力=+50)。combat::predict は攻撃側の
+        // `hit` を加算し防御側の `dodge` を減算するため、命中・回避の双方へ同値を足すことで
+        // 「攻撃時は当てやすく、防御時は避けやすい」原典の対称な効果を再現する。
+        let max_hp = self.effective_max_hp(inst);
+        if max_hp > 0 && (max_hp - inst.damage) * 4 <= max_hp {
+            let guts = self.guts_hit_bonus(inst);
+            b.hit += guts;
+            b.dodge += guts;
+        }
         b
+    }
+
+    /// 主パイロット (`pilot_ids` 先頭、無ければ `pilot_name`) の 底力 / 超底力 技能による
+    /// 命中・回避ボーナス値を返す (超底力=50 / 底力=30 / 無し=0)。HP 1/4 以下での発動判定は
+    /// 呼び出し側 (`combat_bonuses`) で行う。`超底力` は `底力` を含むため超底力を先に判定する。
+    fn guts_hit_bonus(&self, inst: &UnitInstance) -> i32 {
+        let main = inst
+            .pilot_ids
+            .first()
+            .map(String::as_str)
+            .unwrap_or(inst.pilot_name.as_str());
+        // PilotInstance があれば取り込み済み技能 (from_data が 底力 を skills 化) を見る。
+        if let Some(pi) = self.pilot_instance_by_id(main) {
+            if pi.has_skill("超底力") {
+                return 50;
+            }
+            if pi.has_skill("底力") {
+                return 30;
+            }
+            return 0;
+        }
+        // PilotInstance 無し → 静的 PilotData の features をフォールバック参照する。
+        if let Some(pd) = self
+            .pilot_by_name(main)
+            .or_else(|| self.pilot_by_name(&inst.pilot_name))
+        {
+            if pd.features.iter().any(|(f, _)| f.contains("超底力")) {
+                return 50;
+            }
+            if pd.features.iter().any(|(f, _)| f.contains("底力")) {
+                return 30;
+            }
+        }
+        0
     }
 
     /// 戦闘予測 (`combat::predict*`) に渡す「実行時実効値込み」の `(PilotData, UnitData)`
