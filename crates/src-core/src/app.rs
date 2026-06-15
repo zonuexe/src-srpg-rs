@@ -3337,7 +3337,12 @@ impl App {
                             .iter()
                             .position(|u| u.x == cx && u.y == cy)
                         {
-                            let money = self.award_kill_rewards(killer_idx, exp, victim_value);
+                            let money = self.award_kill_rewards(
+                                killer_idx,
+                                exp,
+                                victim_value,
+                                def_inst.party,
+                            );
                             if money > 0 {
                                 m.push_str(&format!(" 資金 +{money}"));
                             }
@@ -3685,6 +3690,7 @@ impl App {
                 let doubled = self.database.unit_instances[sup_idx].has_condition("努力");
                 let exp = def_pilot.exp_value * if doubled { 2 } else { 1 };
                 let victim_value = def_unit.value;
+                let victim_party = self.database.unit_instances[def_idx].party;
                 self.database.remove_unit_at(def_idx);
                 self.fire_destruction_label(&def_pilot.name, &def_unit.name);
                 if let Some(killer_idx) = self
@@ -3693,7 +3699,8 @@ impl App {
                     .iter()
                     .position(|u| u.x == sx && u.y == sy)
                 {
-                    let money = self.award_kill_rewards(killer_idx, exp, victim_value);
+                    let money =
+                        self.award_kill_rewards(killer_idx, exp, victim_value, victim_party);
                     if money > 0 {
                         self.push_message(format!("  援護撃破: 資金 +{money}"));
                     }
@@ -3952,6 +3959,7 @@ impl App {
                 let doubled = self.database.unit_instances[def_idx].has_condition("努力");
                 let exp = atk_pilot.exp_value * if doubled { 2 } else { 1 };
                 let victim_value = atk_unit.value;
+                let victim_party = self.database.unit_instances[atk_idx].party;
                 let mut m = format!(
                     "  ↩ 反撃: {} → {} [{}]: 撃破！",
                     def_pilot.nickname, atk_pilot.nickname, weapon.name
@@ -3963,7 +3971,8 @@ impl App {
                     .iter()
                     .position(|u| u.x == dx && u.y == dy)
                 {
-                    let money = self.award_kill_rewards(killer_idx, exp, victim_value);
+                    let money =
+                        self.award_kill_rewards(killer_idx, exp, victim_value, victim_party);
                     if money > 0 {
                         m.push_str(&format!(" 資金 +{money}"));
                     }
@@ -5818,41 +5827,56 @@ impl App {
     /// を成長させ、レベルが上がれば `レベルアップ / LevelUp` イベントを発火する。資金は
     /// `victim_value / 2` を基準に、撃破側の「獲得資金増加」技能で +10%/Lv、「幸運」で
     /// 2 倍 (消費) して `App.money` に加算する。獲得資金額を返す (0 なら無し)。
-    /// `idx` のユニットの主パイロット (静的 `PilotData`) の性格が `機械` か。
-    /// 気力変動の対象外判定に使う (`機械` は気力が動かない)。
-    fn main_pilot_is_mecha(&self, idx: usize) -> bool {
+    /// `idx` のユニットの主パイロット (静的 `PilotData`) の性格を返す。
+    fn main_pilot_personality(&self, idx: usize) -> Option<String> {
         self.database
             .unit_instances
             .get(idx)
             .and_then(|u| self.database.pilot_by_name(&u.pilot_name))
-            .and_then(|p| p.personality.as_deref())
-            == Some("機械")
+            .and_then(|p| p.personality.clone())
     }
 
-    /// 撃墜による気力上昇 (`Unit.cs`: 撃破したユニットのパイロットはトータル +4、その陣営の
-    /// 他の出撃中パイロットは +1。性格「機械」は変動しない)。マップ攻撃の撃破は
-    /// `award_kill_rewards` を経由しないため対象外 (原典どおり)。被撃破側陣営の性格別変動
-    /// (超強気 +2 / 弱気 -1 等) は victim_party の引き回しが要るため未対応。
-    fn apply_kill_morale(&mut self, killer_idx: usize) {
+    /// 主パイロットの性格が `機械` か (気力が変動しない)。
+    fn main_pilot_is_mecha(&self, idx: usize) -> bool {
+        self.main_pilot_personality(idx).as_deref() == Some("機械")
+    }
+
+    /// 撃墜による気力変動 (`Unit.cs`)。撃破陣営: 撃破者トータル +4 (機械は +3)、同陣営の他
+    /// 出撃中ユニット +1 (機械は不動)。被撃破陣営: 性格別 (超強気 +2 / 強気 +1 / 弱気 -1 /
+    /// その他・機械 0)。マップ攻撃の撃破は `award_kill_rewards` を経由しないため対象外
+    /// (原典どおり)。`victim_party` は撃破された側の陣営。
+    fn apply_kill_morale(&mut self, killer_idx: usize, victim_party: crate::Party) {
         let killer_party = self.database.unit_instances[killer_idx].party;
         for i in 0..self.database.unit_instances.len() {
-            let u = &self.database.unit_instances[i];
-            if u.off_map || u.party != killer_party {
+            if self.database.unit_instances[i].off_map {
                 continue;
             }
-            // 撃破者本人は +3 (常時) ＋ 陣営加算 +1 (機械以外) = 機械なら +3 / それ以外 +4。
-            // 他の味方は +1 (機械以外)。
-            let mecha = self.main_pilot_is_mecha(i);
-            let delta = if i == killer_idx {
-                if mecha {
-                    3
+            let party = self.database.unit_instances[i].party;
+            let delta = if party == killer_party {
+                // 撃破者本人: +3 (常時) ＋ 陣営加算 +1 (機械以外) = 機械 +3 / それ以外 +4。
+                // 同陣営の他ユニット: +1 (機械以外)。
+                let mecha = self.main_pilot_is_mecha(i);
+                if i == killer_idx {
+                    if mecha {
+                        3
+                    } else {
+                        4
+                    }
+                } else if mecha {
+                    0
                 } else {
-                    4
+                    1
                 }
-            } else if mecha {
-                0
+            } else if party == victim_party {
+                // 被撃破陣営: 性格別 (機械・その他は default 0)。
+                match self.main_pilot_personality(i).as_deref() {
+                    Some("超強気") => 2,
+                    Some("強気") => 1,
+                    Some("弱気") => -1,
+                    _ => 0,
+                }
             } else {
-                1
+                0
             };
             if delta != 0 {
                 let m = &mut self.database.unit_instances[i];
@@ -5861,9 +5885,15 @@ impl App {
         }
     }
 
-    fn award_kill_rewards(&mut self, killer_idx: usize, exp: i32, victim_value: i64) -> i64 {
-        // 撃墜による気力上昇 (撃破者 +4 / 同陣営 +1、機械は不動)。
-        self.apply_kill_morale(killer_idx);
+    fn award_kill_rewards(
+        &mut self,
+        killer_idx: usize,
+        exp: i32,
+        victim_value: i64,
+        victim_party: crate::Party,
+    ) -> i64 {
+        // 撃墜による気力変動 (撃破者 +4 / 同陣営 +1、被撃破陣営は性格別、機械は不動)。
+        self.apply_kill_morale(killer_idx, victim_party);
         // 経験値: UnitInstance.total_exp + メインパイロットの PilotInstance 成長。
         let old_level = (self.database.unit_instances[killer_idx].total_exp / 100).max(0) + 1;
         self.database.unit_instances[killer_idx].total_exp += exp;
@@ -11156,14 +11186,14 @@ mod tests {
         let money0 = app.money();
         let exp0 = app.database().unit_instances[idx].total_exp;
         // 撃破: 経験値 50 / 敵価値 200 → 資金 100。
-        let gained = app.award_kill_rewards(idx, 50, 200);
+        let gained = app.award_kill_rewards(idx, 50, 200, crate::Party::Enemy);
         assert_eq!(gained, 100, "資金 = 敵価値/2");
         assert_eq!(app.money(), money0 + 100);
         assert_eq!(app.database().unit_instances[idx].total_exp, exp0 + 50);
         // 幸運: 資金 2 倍 かつ消費。
         app.database_mut().unit_instances[idx].add_condition(Condition::new("幸運", 1));
         let money1 = app.money();
-        let gained2 = app.award_kill_rewards(idx, 0, 200);
+        let gained2 = app.award_kill_rewards(idx, 0, 200, crate::Party::Enemy);
         assert_eq!(gained2, 200, "幸運 で資金 2 倍");
         assert_eq!(app.money(), money1 + 200);
         assert!(
@@ -11189,7 +11219,7 @@ mod tests {
         let k0 = app.database().unit_instances[0].morale;
         let a0 = app.database().unit_instances[1].morale;
         let e0 = app.database().unit_instances[2].morale;
-        app.award_kill_rewards(0, 0, 0);
+        app.award_kill_rewards(0, 0, 0, crate::Party::Enemy);
         assert_eq!(
             app.database().unit_instances[0].morale,
             k0 + 4,
@@ -11222,7 +11252,7 @@ mod tests {
             .personality = Some("機械".into());
         let k0 = app.database().unit_instances[0].morale;
         let a0 = app.database().unit_instances[1].morale;
-        app.award_kill_rewards(0, 0, 0);
+        app.award_kill_rewards(0, 0, 0, crate::Party::Enemy);
         assert_eq!(
             app.database().unit_instances[0].morale,
             k0 + 3,
@@ -11232,6 +11262,56 @@ mod tests {
             app.database().unit_instances[1].morale,
             a0,
             "機械の同陣営は気力が動かない"
+        );
+    }
+
+    /// 被撃破陣営は性格に応じて気力が変動する (超強気 +2 / 弱気 -1)。
+    #[test]
+    fn kill_morale_victim_faction_changes_by_personality() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6); // [0] 撃破者 (Player)
+        push_pilot_with_features(&mut app, "BRAVE", Vec::new());
+        push_pilot_with_features(&mut app, "TIMID", Vec::new());
+        app.database_mut()
+            .pilots
+            .iter_mut()
+            .find(|p| p.name == "BRAVE")
+            .unwrap()
+            .personality = Some("超強気".into());
+        app.database_mut()
+            .pilots
+            .iter_mut()
+            .find(|p| p.name == "TIMID")
+            .unwrap()
+            .personality = Some("弱気".into());
+        let brave = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "BRAVE",
+            crate::Party::Enemy,
+            8,
+            8,
+        ));
+        let timid = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "TIMID",
+            crate::Party::Enemy,
+            9,
+            9,
+        ));
+        let b0 = app.database().unit_by_uid(&brave).unwrap().morale;
+        let t0 = app.database().unit_by_uid(&timid).unwrap().morale;
+        // Player[0] が Enemy を撃破 (victim_party = Enemy)。
+        app.award_kill_rewards(0, 0, 0, crate::Party::Enemy);
+        assert_eq!(
+            app.database().unit_by_uid(&brave).unwrap().morale,
+            b0 + 2,
+            "超強気は味方撃破で気力 +2"
+        );
+        assert_eq!(
+            app.database().unit_by_uid(&timid).unwrap().morale,
+            t0 - 1,
+            "弱気は味方撃破で気力 -1"
         );
     }
 
