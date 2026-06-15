@@ -4248,6 +4248,8 @@ impl App {
         // 支援精神 (回復系) を持つ AI は、半分以下まで負傷した味方が居れば回復する。
         // 精神は行動を消費しないため、この後も通常の移動・攻撃を続ける。
         self.ai_use_support_spirit(idx);
+        // 瀕死の自ユニットは撃破に備えて「復活」精神を事前発動する (free action)。
+        self.ai_use_revive_spirit(idx);
         // 回復/補給アビリティを持つ AI は、射程内に支援を要する味方が居れば優先する。
         if self.ai_use_support_ability(idx) {
             return;
@@ -4851,6 +4853,38 @@ impl App {
             return true;
         }
         false
+    }
+
+    /// 復活精神の能動 pre-buff: 瀕死 (実効最大 HP の 1/4 以下) の自ユニットが「復活」精神を
+    /// 持ち SP が足りていれば、撃破される前に自分へ「復活」を掛ける。撃破予測の近似として
+    /// 低 HP を用いる (次の敵フェイズ前に死にやすい)。精神は行動を消費しない free action。
+    /// 既に「復活」を保持しているなら再発動しない (SP 温存)。発動したら `true`。テスト用
+    /// ユニットは `spirit_commands` が空なので無効 (= 既存テストへ影響なし)。
+    fn ai_use_revive_spirit(&mut self, idx: usize) -> bool {
+        // 既に復活を保持していれば不要。
+        if self.database.unit_instances[idx].has_condition("復活") {
+            return false;
+        }
+        // 瀕死判定: 実効最大 HP の 1/4 以下。
+        let max_hp = self
+            .database
+            .effective_max_hp(&self.database.unit_instances[idx]);
+        let cur_hp = max_hp - self.database.unit_instances[idx].damage;
+        if cur_hp * 4 > max_hp {
+            return false; // まだ余裕がある
+        }
+        // 復活精神が発動可能か (level / 残 SP)。
+        let uid = self.database.unit_instances[idx].uid.clone();
+        let opts = self.spirit_command_options(&uid);
+        let Some((_, cost)) = opts.iter().find(|(n, _)| n == "復活") else {
+            return false;
+        };
+        let cost = *cost;
+        self.consume_unit_sp(&uid, cost);
+        self.apply_spirit_effect(&uid, "復活");
+        let nick = self.database.unit_instances[idx].pilot_name.clone();
+        self.push_message(format!("{nick} は精神コマンド【復活】を使用！"));
+        true
     }
 
     /// 移動スライド演出を仕込む (逐次演出時のみ)。`reachable` から `start`→`dest` の
@@ -16123,6 +16157,81 @@ End
             "AI は射程内の攻撃マスのうち防御地形 (森林 (3,0)) を選好する (実際: ({},{}))",
             f.x,
             f.y
+        );
+    }
+
+    /// 瀕死 (HP ≤ 1/4) の敵 AI は、撃破される前に「復活」精神を自分へ事前発動する。
+    #[test]
+    fn ai_uses_revive_spirit_when_critical() {
+        use crate::data::pilot::SpiritCommand;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        // 味方ターゲットを 1 体 (敵 AI が攻撃対象を持ち・即決着を防ぐ)。
+        place_player_unit(&mut app, "Hero", 2, 6);
+        // 瀕死の敵を配置。共有パイロット "PILOT" に 復活 精神を与える。
+        let enemy = spawn_party(&mut app, "Hero", crate::Party::Enemy, 10, 10);
+        {
+            let p = app
+                .database_mut()
+                .pilots
+                .iter_mut()
+                .find(|p| p.name == "PILOT")
+                .unwrap();
+            p.sp = Some(50);
+            p.spirit_commands = vec![SpiritCommand {
+                name: "復活".into(),
+                cost: Some(30),
+                level: 1,
+            }];
+        }
+        // 敵を瀕死に: 実効最大 HP 100, damage 80 → 現 HP 20 ≤ 25 (1/4)。
+        app.database_mut().unit_by_uid_mut(&enemy).unwrap().damage = 80;
+        app.set_stage_state(crate::stage::StageState::Battle);
+
+        // 敵フェイズ (同期 AI) を走らせる。
+        app.handle_input(Input::EndPhase);
+
+        assert!(
+            app.database()
+                .unit_by_uid(&enemy)
+                .unwrap()
+                .has_condition("復活"),
+            "瀕死の敵 AI は撃破に備えて復活精神を事前発動する"
+        );
+    }
+
+    /// 余力のある (HP > 1/4) 敵 AI は復活精神を温存する (無駄撃ちしない)。
+    #[test]
+    fn ai_keeps_revive_spirit_when_healthy() {
+        use crate::data::pilot::SpiritCommand;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6);
+        let enemy = spawn_party(&mut app, "Hero", crate::Party::Enemy, 10, 10);
+        {
+            let p = app
+                .database_mut()
+                .pilots
+                .iter_mut()
+                .find(|p| p.name == "PILOT")
+                .unwrap();
+            p.sp = Some(50);
+            p.spirit_commands = vec![SpiritCommand {
+                name: "復活".into(),
+                cost: Some(30),
+                level: 1,
+            }];
+        }
+        // 健全 (damage 0 → 現 HP 100 > 25)。
+        app.set_stage_state(crate::stage::StageState::Battle);
+        app.handle_input(Input::EndPhase);
+
+        assert!(
+            !app.database()
+                .unit_by_uid(&enemy)
+                .unwrap()
+                .has_condition("復活"),
+            "余力のある敵 AI は復活精神を温存する"
         );
     }
 
