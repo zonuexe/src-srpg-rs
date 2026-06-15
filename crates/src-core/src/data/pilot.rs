@@ -294,9 +294,10 @@ fn parse_record(record: &[SourceLine]) -> Result<PilotData, ParseError> {
         }
     }
 
-    // 能力値行より前にある「特殊能力」セクション内の `名前=値` 行を捕捉する。
+    // 能力値行より前にある「特殊能力」セクション内の特殊能力行を捕捉する。
+    // 能力値行 (consumed_to-1) 自体は含めない (数値行を能力として誤取得しないため)。
     let mut features: Vec<(String, String)> = Vec::new();
-    for pre in remaining.iter().take(consumed_to) {
+    for pre in remaining.iter().take(consumed_to.saturating_sub(1)) {
         if let Some(feat) = parse_feature_line(&pre.text) {
             features.push(feat);
         }
@@ -375,14 +376,46 @@ fn parse_sp_line(text: &str) -> Option<(i32, Vec<SpiritCommand>)> {
     Some((max_sp, commands))
 }
 
-/// 「特殊能力」セクション内の `名前=値` 行を `(name, value)` として返す。
+/// 「特殊能力」セクション内の特殊能力行を `(name, value)` として返す。
+///
+/// SRC pilot.txt の特殊能力は 2 形式ある:
+/// - `名前=別名[, レベル/値]` (例 `メッセージ=無口`, `術Lv3=魔法`) — 従来から対応。
+/// - `名前[, レベル/値]` (例 `撃墜数Lv100, 1`, `切り払いLv3, 1`, `成長タイプS, 1`) —
+///   `=` を持たないカンマ形式。旧実装はこれを取りこぼしていたため、必要技能や
+///   底力等のパイロット技能が実データで無効化されていた。
+///
+/// `name` には別名込みの能力指定 (先頭カンマまで) を保持し、レベルは名称中の
+/// `LvN` から解決する (`feature_level` / `skill_level` の部分一致規約)。
 fn parse_feature_line(text: &str) -> Option<(String, String)> {
-    let (name, value) = text.split_once('=')?;
-    let name = name.trim();
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    // 「特殊能力」セクションのマーカ行自体は能力ではない。
+    if text == "特殊能力" {
+        return None;
+    }
+    // 名前=値 形式 (従来挙動を維持。value は末尾の ", N" を含みうる)。
+    if let Some((name, value)) = text.split_once('=') {
+        let name = name.trim();
+        if name.is_empty() {
+            return None;
+        }
+        return Some((name.to_string(), value.trim().to_string()));
+    }
+    // 名前[, レベル] 形式: 先頭カンマまでを能力名、残りを値とみなす。
+    let (name, value) = match text.split_once(',') {
+        Some((n, v)) => (n.trim(), v.trim()),
+        None => (text, ""),
+    };
     if name.is_empty() {
         return None;
     }
-    Some((name.to_string(), value.trim().to_string()))
+    // 能力値行 (先頭 6 トークンが整数) を能力として誤取得しない防御。
+    if try_stats_tokens(text).is_some() {
+        return None;
+    }
+    Some((name.to_string(), value.to_string()))
 }
 
 /// 「能力値行候補」: カンマまたは空白で区切ったとき先頭 6 トークンが整数なら
