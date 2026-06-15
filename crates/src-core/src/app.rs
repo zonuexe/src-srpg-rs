@@ -4245,9 +4245,9 @@ impl App {
             None => std::collections::HashMap::new(),
         };
 
-        // 恐怖 (特殊効果攻撃属性 恐): コントロール不能となり敵から逃げ続ける。
+        // 恐怖 (特殊効果攻撃属性 恐) / ChangeMode「逃亡」: 敵から逃げ続ける。
         // 到達マスのうち敵への最小距離が最大のマスへ移動し、攻撃はしない。
-        if self.database.unit_instances[idx].has_condition("恐怖") {
+        if self.database.unit_instances[idx].has_condition("恐怖") || ai_mode == "逃亡" {
             let enemies: Vec<(u32, u32)> = candidates.iter().map(|(p, _, _)| *p).collect();
             let occ: std::collections::HashSet<(u32, u32)> = self
                 .database
@@ -10989,6 +10989,28 @@ mod tests {
                 .has_condition("熱血"),
             "AI が攻撃前に精神コマンド 熱血 を使う"
         );
+    }
+
+    /// ChangeMode「逃亡」の敵 AI も恐怖と同様に味方から遠ざかる。
+    #[test]
+    fn change_mode_escape_makes_ai_flee() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 5, 5);
+        let runner = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "PILOT",
+            crate::Party::Enemy,
+            6,
+            5,
+        ));
+        app.database_mut().unit_by_uid_mut(&runner).unwrap().ai_mode = "逃亡".into();
+        app.set_stage_state(crate::stage::StageState::Battle);
+        let idx = app.database().idx_by_uid(&runner).unwrap();
+        app.ai_act_unit(idx);
+        let c = app.database().unit_by_uid(&runner).unwrap();
+        let dist = (c.x as i32 - 5).abs() + (c.y as i32 - 5).abs();
+        assert!(dist > 1, "逃亡モードの敵は味方から遠ざかる (距離={dist})");
     }
 
     /// 写/化 (能力コピー) はクリティカル時に発動者を対象の形態へ変える。写はサイズ制限あり。
