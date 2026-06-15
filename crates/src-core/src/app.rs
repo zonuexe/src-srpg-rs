@@ -3300,6 +3300,14 @@ impl App {
                     } else {
                         Vec::new()
                     };
+                    // 吹 / Ｋ: 命中時に対象を遠ざかる方向へ押し出す。
+                    let knocked = self.apply_weapon_knockback(
+                        def_idx,
+                        (cx, cy),
+                        &atk_unit_name,
+                        &weapon,
+                        critical,
+                    );
                     let mut m = format!(
                         "{} → {} [{}]: 命中 {} ダメージ{} (残HP {})",
                         atk_pilot.nickname,
@@ -3318,6 +3326,9 @@ impl App {
                     }
                     if !decayed.is_empty() {
                         m.push_str(&format!(" → {}", decayed.join("・")));
+                    }
+                    if knocked {
+                        m.push_str(" → 吹き飛ばし");
                     }
                     m
                 }
@@ -4862,6 +4873,84 @@ impl App {
             applied.push(format!("ＥＮ減衰 (残{new_en})"));
         }
         applied
+    }
+
+    /// 吹き飛ばし / ノックバック (`吹` / `Ｋ`): 命中時に対象を攻撃側から見て遠ざかる
+    /// 方向へ最大 `マス数` (`critical` 時 +1) だけ押し出す。盤外・占有マスで停止する。
+    /// 対象サイズ XL / 移動力 0 では不発 (`特殊効果攻撃属性.md`)。Ｋ は攻撃側サイズが
+    /// 標的より 2 段階以上小さいと不発。衝突ダメージは未モデル。押し出したら `true`。
+    fn apply_weapon_knockback(
+        &mut self,
+        def_idx: usize,
+        atk_pos: (u32, u32),
+        atk_unit_name: &str,
+        weapon: &crate::data::unit::WeaponData,
+        critical: bool,
+    ) -> bool {
+        use crate::data::unit::Size;
+        let Some((mut tiles, is_k)) = crate::combat::weapon_knockback(&weapon.class) else {
+            return false;
+        };
+        if critical {
+            tiles += 1;
+        }
+        let (tx, ty, def_name) = {
+            let u = &self.database.unit_instances[def_idx];
+            (u.x, u.y, u.unit_data_name.clone())
+        };
+        // 対象サイズ XL / 移動力 0 は固定扱いで不発。
+        let (def_size, def_speed) = self
+            .database
+            .unit_by_name(&def_name)
+            .map(|d| (d.size, d.speed))
+            .unwrap_or((Size::M, 1));
+        if def_size == Size::XL || def_speed <= 0 {
+            return false;
+        }
+        // Ｋ: 攻撃側サイズが標的より 2 段階以上小さいと不発。
+        if is_k {
+            let atk_size = self
+                .database
+                .unit_by_name(atk_unit_name)
+                .map(|d| d.size)
+                .unwrap_or(Size::M);
+            // rank が大きいほど小さいサイズ。攻撃側 rank - 標的 rank >= 2 で「2段階以上小さい」。
+            if atk_size.rank() - def_size.rank() >= 2 {
+                return false;
+            }
+        }
+        // 押し出し方向 (攻撃側→対象の優勢軸)。
+        let ddx = tx as i32 - atk_pos.0 as i32;
+        let ddy = ty as i32 - atk_pos.1 as i32;
+        let (sx, sy) = if ddx.abs() >= ddy.abs() {
+            (ddx.signum(), 0)
+        } else {
+            (0, ddy.signum())
+        };
+        if sx == 0 && sy == 0 {
+            return false;
+        }
+        let (mw, mh) = match self.database.map.as_ref() {
+            Some(m) => (m.width as i32, m.height as i32),
+            None => return false,
+        };
+        let uid = self.database.unit_instances[def_idx].uid.clone();
+        let (mut cx, mut cy) = (tx as i32, ty as i32);
+        let mut moved = false;
+        for _ in 0..tiles {
+            let (nx, ny) = (cx + sx, cy + sy);
+            if nx < 0 || ny < 0 || nx >= mw || ny >= mh {
+                break; // 盤外で停止
+            }
+            if self.database.uid_at(nx as u32, ny as u32).is_some() {
+                break; // 他ユニットで停止
+            }
+            self.database.move_unit(&uid, nx as u32, ny as u32);
+            cx = nx;
+            cy = ny;
+            moved = true;
+        }
+        moved
     }
 
     /// 撃破報酬を撃破側ユニット (`killer_idx`) に付与する。`exp` は 努力 反映済みの最終
@@ -10480,6 +10569,57 @@ mod tests {
             app.database().unit_instances[def_idx].damage,
             60,
             "衰L2 で現在HP が半分 (80→40)"
+        );
+    }
+
+    /// 吹L2 武器は対象を攻撃側から遠ざかる方向へ 2 マス押し出す。占有マスで停止する。
+    #[test]
+    fn weapon_knockback_pushes_and_stops_at_obstacle() {
+        use crate::data::unit::WeaponData;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 5, 5);
+        let target = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "PILOT",
+            crate::Party::Enemy,
+            6,
+            5,
+        ));
+        let def_idx = app.database().idx_by_uid(&target).unwrap();
+        let mk = |class: &str| WeaponData {
+            name: "衝撃砲".into(),
+            power: 100,
+            min_range: 1,
+            max_range: 3,
+            precision: 0,
+            bullet: -1,
+            en_consumption: 0,
+            necessary_morale: 0,
+            adaption: "AAAA".into(),
+            critical: 0,
+            class: class.into(),
+            extras: Vec::new(),
+        };
+        // 攻撃側 (5,5) → 対象 (6,5) → +x 方向へ 2 マス → (8,5)。
+        let moved = app.apply_weapon_knockback(def_idx, (5, 5), "Hero", &mk("吹L2"), false);
+        assert!(moved, "吹L2 で押し出される");
+        assert_eq!(
+            (
+                app.database().unit_by_uid(&target).unwrap().x,
+                app.database().unit_by_uid(&target).unwrap().y
+            ),
+            (8, 5),
+            "(6,5) から +x に 2 マス → (8,5)"
+        );
+        // (10,5) に障害ユニットを置き、(8,5) の対象を 吹L3 → (9,5) で停止 (10,5 不可)。
+        place_player_unit(&mut app, "Blocker", 10, 5);
+        let moved2 = app.apply_weapon_knockback(def_idx, (7, 5), "Hero", &mk("吹L3"), false);
+        assert!(moved2);
+        assert_eq!(
+            app.database().unit_by_uid(&target).unwrap().x,
+            9,
+            "障害ユニット (10,5) の手前 (9,5) で停止"
         );
     }
 

@@ -485,6 +485,22 @@ pub fn crit_decay_keep_numer(level: i32) -> i64 {
     i64::from((4 - level.clamp(1, 3)).max(1))
 }
 
+/// 吹き飛ばし系属性 `吹L<n>` / `ＫL<n>`(ノックバック) を武器 class から抽出し、
+/// `(マス数, is_knockback)` を返す (`特殊効果攻撃属性.md`)。`is_knockback=true` は
+/// Ｋ 属性 (攻撃側サイズが標的より 2 段階以上小さいと不発のサイズ制限あり)。
+/// 該当属性が無ければ `None`。レベル省略時は 1 マス。
+pub fn weapon_knockback(class: &str) -> Option<(i32, bool)> {
+    for tok in class.split_whitespace() {
+        let (attr, level) = split_attr_level(tok);
+        match attr.as_str() {
+            "吹" => return Some((level.unwrap_or(1).max(1), false)),
+            "Ｋ" | "K" => return Some((level.unwrap_or(1).max(1), true)),
+            _ => {}
+        }
+    }
+    None
+}
+
 /// `"痺L3"` → `("痺", Some(3))`、`"縛"` → `("縛", None)`。`L`/`Ｌ` で区切る。
 fn split_attr_level(tok: &str) -> (String, Option<i32>) {
     let chars: Vec<char> = tok.chars().collect();
@@ -911,6 +927,15 @@ mod tests {
         assert_eq!(crit_decay_keep_numer(1), 3);
         assert_eq!(crit_decay_keep_numer(2), 2);
         assert_eq!(crit_decay_keep_numer(3), 1);
+    }
+
+    /// 吹き飛ばし / ノックバック属性のレベル抽出。
+    #[test]
+    fn weapon_knockback_parses_levels() {
+        assert_eq!(weapon_knockback("吹L2"), Some((2, false)));
+        assert_eq!(weapon_knockback("Ｋ"), Some((1, true)));
+        assert_eq!(weapon_knockback("実 吹L3"), Some((3, false)));
+        assert_eq!(weapon_knockback("格 射"), None);
     }
 
     /// 狂戦士 (狂): 攻撃側で与ダメージ ×1.25、防御側で被命中 ×1.5。
