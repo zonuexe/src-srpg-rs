@@ -8695,10 +8695,11 @@ impl App {
             if !self.intermission_swap_rows().is_empty() {
                 items.push(InterItem::EquipSwap);
             }
-            // 乗り換え: 入れ替え先がある (味方ユニット 2 体以上) ときのみ。
-            // 注: 原典は Option コマンドで明示有効化したときのみ表示だが、本実装は
-            // Option コマンド未対応のため「2 体以上」で代替する。
-            if self.intermission_upgrade_units().len() >= 2 {
+            // 乗り換え: シナリオが `Option 乗り換え` で有効化し、かつ入れ替え先がある
+            // (味方ユニット 2 体以上) ときのみ表示 (`乗り換え.md` / `Optionコマンド.md`)。
+            if !self.script_var("Option(乗り換え)").is_empty()
+                && self.intermission_upgrade_units().len() >= 2
+            {
                 items.push(InterItem::RideChange);
             }
             // ステータス: 味方ユニットが居れば部隊ロスター閲覧を出す。
@@ -12130,9 +12131,31 @@ mod tests {
             b.pilot_ids = vec!["marisa".into()];
         }
         app.set_script_var("次ステージ".to_string(), "x.eve".to_string());
+        // 乗り換えは Option コマンドで有効化されたときのみ表示される (原典準拠)。
+        app.set_script_var("Option(乗り換え)".to_string(), "1".to_string());
         app.scene = Scene::Intermission;
         app.intermission_mode = IntermissionMode::Menu;
         (uid_a, uid_b)
+    }
+
+    /// 乗り換えは `Option 乗り換え` 有効時のみ表示される (原典準拠)。
+    #[test]
+    fn intermission_ride_change_hidden_without_option() {
+        let mut app = App::new();
+        let _ = setup_ride_change(&mut app);
+        // setup は Option を立てる → 表示される。
+        assert!(
+            (0..app.intermission_item_count())
+                .any(|n| app.intermission_item_label(n).as_deref() == Some("乗り換え")),
+            "Option 乗り換え 有効時は表示"
+        );
+        // Option を解除 → 2 機以上でも非表示。
+        app.unset_script_var("Option(乗り換え)");
+        assert!(
+            (0..app.intermission_item_count())
+                .all(|n| app.intermission_item_label(n).as_deref() != Some("乗り換え")),
+            "Option 未設定なら 2 機以上でも乗り換えは非表示"
+        );
     }
 
     /// インターミッション「乗り換え」で 2 機の搭乗パイロットを入れ替える。
