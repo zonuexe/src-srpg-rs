@@ -3149,7 +3149,9 @@ impl App {
         let crit_roll = ((r / 100) % 100) as i32;
         // 特殊効果攻撃属性 (CC 属性) を持つ武器では通常のクリティカルは発生しない。
         // 特殊効果の発動がクリティカルの代わりとみなされる (SRC 特殊効果攻撃属性.md)。
-        let has_special_effect = !crate::combat::weapon_special_effects(&weapon.class).is_empty();
+        // 状態異常付与 (weapon_special_effects) と 気力減少 (脱/Ｄ) の双方が該当。
+        let has_special_effect = !crate::combat::weapon_special_effects(&weapon.class).is_empty()
+            || crate::combat::weapon_morale_reduction(&weapon.class).is_some();
         let critical = hit && crit_roll < crit_chance && !has_special_effect;
         let mut defender_killed = false;
         // クリティカルはダメージ 1.5 倍 (SRC)。その後、防御選択でさらに半減する。
@@ -4828,7 +4830,8 @@ impl App {
         def_pilot: &crate::data::pilot::PilotData,
     ) -> Vec<String> {
         let effects = crate::combat::weapon_special_effects(&weapon.class);
-        if effects.is_empty() {
+        let morale_down = crate::combat::weapon_morale_reduction(&weapon.class);
+        if effects.is_empty() && morale_down.is_none() {
             return Vec::new();
         }
         let prob =
@@ -4841,6 +4844,12 @@ impl App {
             self.database.unit_instances[def_idx]
                 .add_condition(crate::Condition::new(&name, lifetime));
             applied.push(name);
+        }
+        // 脱 / Ｄ: 対象の気力を低下 (Ｄ の吸収は未対応)。
+        if let Some(amount) = morale_down {
+            let uid = self.database.unit_instances[def_idx].uid.clone();
+            self.add_unit_morale(&uid, -amount);
+            applied.push(format!("気力 -{amount}"));
         }
         applied
     }
@@ -10599,6 +10608,47 @@ mod tests {
         assert!(
             app.database().unit_instances[def_idx].attack_disabled(),
             "麻痺 は行動不能 (AI / 攻撃ゲートが効く)"
+        );
+    }
+
+    /// 脱属性武器は命中・proc 時に対象の気力を低下させる (Ｄ の吸収は未対応)。
+    #[test]
+    fn weapon_datsu_reduces_target_morale() {
+        use crate::data::unit::WeaponData;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6);
+        let target = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "PILOT",
+            crate::Party::Enemy,
+            3,
+            6,
+        ));
+        let def_idx = app.database().idx_by_uid(&target).unwrap();
+        let pilot = app.database().pilot_by_name("PILOT").unwrap().clone();
+        let m0 = app.database().unit_instances[def_idx].morale;
+        // 脱 + critical 100 → 必ず proc。
+        let weapon = WeaponData {
+            name: "脱力弾".into(),
+            power: 100,
+            min_range: 1,
+            max_range: 1,
+            precision: 0,
+            bullet: -1,
+            en_consumption: 0,
+            necessary_morale: 0,
+            adaption: "AAAA".into(),
+            critical: 100,
+            class: "脱".into(),
+            extras: Vec::new(),
+        };
+        let applied = app.apply_weapon_special_effects(def_idx, &weapon, &pilot, &pilot);
+        assert!(applied.iter().any(|s| s.contains("気力")), "気力減少ラベル");
+        assert_eq!(
+            app.database().unit_instances[def_idx].morale,
+            m0 - 10,
+            "脱 で気力 -10"
         );
     }
 

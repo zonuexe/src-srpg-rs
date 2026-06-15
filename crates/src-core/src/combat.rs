@@ -505,6 +505,20 @@ pub fn weapon_knockback(class: &str) -> Option<(i32, bool)> {
     None
 }
 
+/// 気力減少属性 `脱` / `Ｄ`(気力吸収) を武器 class から抽出し、低下量を返す
+/// (`特殊効果攻撃属性.md`)。低下量は `5×レベル` (レベル省略時 10)。該当が無ければ `None`。
+/// 注: Ｄ の「吸収 (半分を攻撃側へ)」は本実装では未対応で、低下のみ反映する。
+pub fn weapon_morale_reduction(class: &str) -> Option<i32> {
+    for tok in class.split_whitespace() {
+        let (attr, level) = split_attr_level(tok);
+        match attr.as_str() {
+            "脱" | "Ｄ" | "D" => return Some(level.map(|l| 5 * l.max(1)).unwrap_or(10)),
+            _ => {}
+        }
+    }
+    None
+}
+
 /// クリティカル時の位置移動属性を武器 class から抽出する (`特殊効果攻撃属性.md`)。
 /// 返り値 `(引き寄せ有無, 強制転移距離)`。`引`=攻撃側に隣接させる、`転L<n>`=ランダムに
 /// `n` 距離テレポート (レベル省略は 1)。いずれも無ければ `(false, None)`。
@@ -959,6 +973,15 @@ mod tests {
         assert_eq!(weapon_knockback("Ｋ"), Some((1, true)));
         assert_eq!(weapon_knockback("実 吹L3"), Some((3, false)));
         assert_eq!(weapon_knockback("格 射"), None);
+    }
+
+    /// 気力減少属性 (脱 / Ｄ) の低下量抽出。
+    #[test]
+    fn weapon_morale_reduction_parses() {
+        assert_eq!(weapon_morale_reduction("脱"), Some(10)); // 省略時 10
+        assert_eq!(weapon_morale_reduction("脱L3"), Some(15)); // 5×3
+        assert_eq!(weapon_morale_reduction("Ｄ"), Some(10));
+        assert_eq!(weapon_morale_reduction("格 射"), None);
     }
 
     /// 引き寄せ / 強制転移 属性の抽出。
