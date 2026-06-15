@@ -9087,8 +9087,23 @@ impl App {
         }
     }
 
-    /// 乗り換え: 2 ユニットの搭乗パイロット (`pilot_name` + `pilot_ids`) を入れ替える。
+    /// 2 ユニットの搭乗パイロット (`pilot_name` + `pilot_ids`) を入れ替える。
+    fn swap_unit_pilots(&mut self, a: usize, b: usize) {
+        let an = std::mem::take(&mut self.database.unit_instances[a].pilot_name);
+        let ai = std::mem::take(&mut self.database.unit_instances[a].pilot_ids);
+        let bn = std::mem::take(&mut self.database.unit_instances[b].pilot_name);
+        let bi = std::mem::take(&mut self.database.unit_instances[b].pilot_ids);
+        self.database.unit_instances[a].pilot_name = bn;
+        self.database.unit_instances[a].pilot_ids = bi;
+        self.database.unit_instances[b].pilot_name = an;
+        self.database.unit_instances[b].pilot_ids = ai;
+    }
+
+    /// 乗り換え: 2 ユニットの搭乗パイロットを入れ替える。
     /// 片方が無人でも入れ替え可 (空ユニットが生じうる点は SRC と同じ player 責務)。
+    /// 形態の必要技能 (`必要技能.md` §4: 乗り換え先のパイロット制限) を満たさない組合せは
+    /// 入れ替え後にチェックして revert する。インターミッション (off_map) では地形/隣接
+    /// 条件は fail-open となり、実質パイロット技能条件のみが効く (原典の「常に満たす」に整合)。
     fn apply_ride_change(&mut self, src_uid: &str, dst_uid: &str) {
         if src_uid == dst_uid {
             return;
@@ -9101,14 +9116,17 @@ impl App {
         };
         let src_name = self.unit_display_name(&self.database.unit_instances[si]);
         let dst_name = self.unit_display_name(&self.database.unit_instances[di]);
-        let sp = std::mem::take(&mut self.database.unit_instances[si].pilot_name);
-        let sids = std::mem::take(&mut self.database.unit_instances[si].pilot_ids);
-        let dp = std::mem::take(&mut self.database.unit_instances[di].pilot_name);
-        let dids = std::mem::take(&mut self.database.unit_instances[di].pilot_ids);
-        self.database.unit_instances[si].pilot_name = dp;
-        self.database.unit_instances[si].pilot_ids = dids;
-        self.database.unit_instances[di].pilot_name = sp;
-        self.database.unit_instances[di].pilot_ids = sids;
+        self.swap_unit_pilots(si, di);
+        // 入れ替え後の搭乗員が双方の形態の必要技能を満たすか。満たさなければ revert。
+        let src_form = self.database.unit_instances[si].unit_data_name.clone();
+        let dst_form = self.database.unit_instances[di].unit_data_name.clone();
+        if !self.form_skill_ok(si, &src_form) || !self.form_skill_ok(di, &dst_form) {
+            self.swap_unit_pilots(si, di);
+            self.push_message(format!(
+                "必要技能を満たさないため {src_name} と {dst_name} を乗り換えできません"
+            ));
+            return;
+        }
         self.push_message(format!("{src_name} と {dst_name} の搭乗を入れ替えました"));
     }
 
@@ -13092,6 +13110,74 @@ mod tests {
         );
         // 必要技能宣言の無い形態は常に可。
         assert!(app.form_skill_ok(idx, "BaseForm"));
+    }
+
+    /// 乗り換えは形態の必要技能を満たすパイロットのみ。満たさない組合せは入れ替え不成立 (revert)。
+    #[test]
+    fn ride_change_respects_form_necessary_skill() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Normal", 2, 6);
+        place_player_unit(&mut app, "Psychic", 3, 6); // 必要技能=念力Lv3
+        app.database_mut()
+            .units
+            .iter_mut()
+            .find(|d| d.name == "Psychic")
+            .unwrap()
+            .features
+            .push(("必要技能".into(), "念力Lv3".into()));
+        let ua = app
+            .database()
+            .unit_instances
+            .iter()
+            .find(|u| u.unit_data_name == "Normal")
+            .unwrap()
+            .uid
+            .clone();
+        let ub = app
+            .database()
+            .unit_instances
+            .iter()
+            .find(|u| u.unit_data_name == "Psychic")
+            .unwrap()
+            .uid
+            .clone();
+        app.database_mut().create_pilot_instance("PILOT", "plain");
+        app.database_mut().create_pilot_instance("PILOT", "esper");
+        app.database_mut()
+            .pilot_instance_by_id_mut("esper")
+            .unwrap()
+            .skills
+            .push("念力Lv3".into());
+        app.database_mut().unit_by_uid_mut(&ua).unwrap().pilot_ids = vec!["plain".into()];
+        app.database_mut().unit_by_uid_mut(&ub).unwrap().pilot_ids = vec!["esper".into()];
+        // plain は念力なし → Psychic に乗れず乗り換え不成立 (revert)。
+        app.apply_ride_change(&ua, &ub);
+        assert_eq!(
+            app.database().unit_by_uid(&ua).unwrap().pilot_ids,
+            vec!["plain".to_string()],
+            "念力なしは Psychic に乗れず乗り換え不成立"
+        );
+        assert_eq!(
+            app.database().unit_by_uid(&ub).unwrap().pilot_ids,
+            vec!["esper".to_string()]
+        );
+        // plain に念力Lv3 → 双方適格 → 入れ替え成立。
+        app.database_mut()
+            .pilot_instance_by_id_mut("plain")
+            .unwrap()
+            .skills
+            .push("念力Lv3".into());
+        app.apply_ride_change(&ua, &ub);
+        assert_eq!(
+            app.database().unit_by_uid(&ua).unwrap().pilot_ids,
+            vec!["esper".to_string()],
+            "適格なら入れ替え成立"
+        );
+        assert_eq!(
+            app.database().unit_by_uid(&ub).unwrap().pilot_ids,
+            vec!["plain".to_string()]
+        );
     }
 
     /// 盗属性武器のクリティカル時資金奪取: 味方が敵を盗むと修理費の1/4が入り、再取得は不可。
