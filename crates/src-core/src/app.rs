@@ -3162,7 +3162,8 @@ impl App {
         // 特殊効果の発動がクリティカルの代わりとみなされる (SRC 特殊効果攻撃属性.md)。
         // 状態異常付与 (weapon_special_effects) と 気力減少 (脱/Ｄ) の双方が該当。
         let has_special_effect = !crate::combat::weapon_special_effects(&weapon.class).is_empty()
-            || crate::combat::weapon_morale_reduction(&weapon.class).is_some();
+            || crate::combat::weapon_morale_reduction(&weapon.class).is_some()
+            || weapon.class.split_whitespace().any(|t| t == "即");
         let critical = hit && crit_roll < crit_chance && !has_special_effect;
         let mut defender_killed = false;
         // クリティカルはダメージ 1.5 倍 (SRC)。その後、防御選択でさらに半減する。
@@ -3176,6 +3177,15 @@ impl App {
         } else {
             crit_damage.max(0)
         };
+        // 即死 (即): 命中時に特殊効果発動率で proc し、ボス以外を致死化する
+        // (`特殊効果攻撃属性.md`)。proc すると致死ダメージにして撃破サイトへ流す。
+        // 非 即 武器は RNG を消費しない (既存の乱数列を保つ)。
+        let applied_damage =
+            if hit && self.roll_weapon_instakill(def_idx, &weapon, &atk_pilot, &def_pilot) {
+                def_unit.hp.max(applied_damage)
+            } else {
+                applied_damage
+            };
 
         // 援護防御チェック。`def_mode` で挙動を切替える (SRC 反撃モードの「援護防御
         // ON/OFF」):
@@ -5081,8 +5091,13 @@ impl App {
         if (self.next_u32() % 100) as i32 >= prob {
             return Vec::new();
         }
+        let is_boss = self.database.unit_instances[def_idx].is_boss();
         let mut applied = Vec::new();
         for (name, lifetime) in effects {
+            // ボスランク適用ユニットは石化を無効化 (BossRankコマンド.md / 特殊効果攻撃属性.md)。
+            if is_boss && name == "石化" {
+                continue;
+            }
             self.database.unit_instances[def_idx]
                 .add_condition(crate::Condition::new(&name, lifetime));
             applied.push(name);
@@ -5126,6 +5141,29 @@ impl App {
         p.clamp(1, 100)
     }
 
+    /// 即死 (`即`) の発動判定。武器が `即` 属性を持ち対象がボスでないとき、特殊効果
+    /// 発動率 (CT率 + 技量差/2、耐性/弱点補正込み) で proc すれば `true` (= 致死化)。
+    /// `即` を持たない武器では乱数を消費しない (既存の RNG 列を保つため)。
+    fn roll_weapon_instakill(
+        &mut self,
+        def_idx: usize,
+        weapon: &crate::data::unit::WeaponData,
+        atk_pilot: &crate::data::pilot::PilotData,
+        def_pilot: &crate::data::pilot::PilotData,
+    ) -> bool {
+        if !weapon.class.split_whitespace().any(|t| t == "即") {
+            return false;
+        }
+        // ボスランク適用ユニットには無効 (BossRankコマンド.md)。
+        if self.database.unit_instances[def_idx].is_boss() {
+            return false;
+        }
+        let prob =
+            (weapon.critical + (atk_pilot.technique - def_pilot.technique) / 2).clamp(1, 100);
+        let prob = self.adjust_proc_for_resistance(def_idx, &weapon.class, prob);
+        ((self.next_u32() % 100) as i32) < prob
+    }
+
     /// 減衰系属性 (`衰`=HP / `滅`=EN) をクリティカル時に適用する。対象の現在 HP / EN を
     /// 属性レベルに応じた割合 (Lv1=3/4・Lv2=1/2・Lv3=1/4) に減らす (`特殊効果攻撃属性.md`)。
     /// 減衰は撃破せず (常に 1 以上残す)。適用したラベル列を返す (メッセージ用)。
@@ -5135,24 +5173,34 @@ impl App {
         weapon: &crate::data::unit::WeaponData,
     ) -> Vec<String> {
         let (hp_lv, en_lv) = crate::combat::weapon_crit_decay_levels(&weapon.class);
+        let is_boss = self.database.unit_instances[def_idx].is_boss();
+        // 残す割合 (分子, 分母)。ボスは減少率が半減するため残す割合が増える ((4+keep)/8)。
+        let keep_frac = |lv: i32| -> (i64, i64) {
+            let keep = crate::combat::crit_decay_keep_numer(lv);
+            if is_boss {
+                (4 + keep, 8)
+            } else {
+                (keep, 4)
+            }
+        };
         let mut applied = Vec::new();
         if let Some(lv) = hp_lv {
-            let keep = crate::combat::crit_decay_keep_numer(lv); // 分母 4
+            let (num, den) = keep_frac(lv);
             let max_hp = self
                 .database
                 .effective_max_hp(&self.database.unit_instances[def_idx]);
             let cur_hp = (max_hp - self.database.unit_instances[def_idx].damage).max(1);
-            let new_hp = (cur_hp * keep / 4).max(1);
+            let new_hp = (cur_hp * num / den).max(1);
             self.database.unit_instances[def_idx].damage = max_hp - new_hp;
             applied.push(format!("ＨＰ減衰 (残{new_hp})"));
         }
         if let Some(lv) = en_lv {
-            let keep = crate::combat::crit_decay_keep_numer(lv);
+            let (num, den) = keep_frac(lv);
             let max_en = self
                 .database
                 .effective_max_en(&self.database.unit_instances[def_idx]);
             let cur_en = (max_en - self.database.unit_instances[def_idx].en_consumed).max(0);
-            let new_en = (cur_en * keep as i32 / 4).max(0);
+            let new_en = ((i64::from(cur_en) * num / den) as i32).max(0);
             self.database.unit_instances[def_idx].en_consumed = max_en - new_en;
             applied.push(format!("ＥＮ減衰 (残{new_en})"));
         }
@@ -11437,6 +11485,97 @@ mod tests {
             app.database().unit_instances[def_idx].damage,
             60,
             "衰L2 で現在HP が半分 (80→40)"
+        );
+    }
+
+    /// BossRank はステータスを強化し、石化を無効化する。
+    #[test]
+    fn boss_rank_boosts_stats_and_blocks_petrify() {
+        use crate::data::unit::WeaponData;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Boss", 5, 5); // hp 100, armor 10
+        let uid = first_player_uid(&app);
+        let idx = app.database().idx_by_uid(&uid).unwrap();
+        let hp0 = app
+            .database()
+            .effective_max_hp(&app.database().unit_instances[idx]);
+        assert_eq!(hp0, 100);
+        app.database_mut().unit_instances[idx].boss_rank = 2; // HP ×2 / 装甲 +600
+        assert_eq!(
+            app.database()
+                .effective_max_hp(&app.database().unit_instances[idx]),
+            200,
+            "rank2 で HP ×2"
+        );
+        assert_eq!(
+            app.database()
+                .effective_armor(&app.database().unit_instances[idx]),
+            610,
+            "rank2 で 装甲 +600"
+        );
+        // 石化 (critical 100 → 必ず proc) でもボスは無効。
+        let pilot = app.database().pilot_by_name("PILOT").unwrap().clone();
+        let w = WeaponData {
+            name: "石化光線".into(),
+            power: 100,
+            min_range: 1,
+            max_range: 1,
+            precision: 0,
+            bullet: -1,
+            en_consumption: 0,
+            necessary_morale: 0,
+            adaption: "AAAA".into(),
+            critical: 100,
+            class: "石".into(),
+            extras: Vec::new(),
+        };
+        let applied = app.apply_weapon_special_effects(idx, &w, &pilot, &pilot);
+        assert!(applied.is_empty(), "ボスは石化を無効化");
+        assert!(
+            !app.database().unit_instances[idx].has_condition("石化"),
+            "石化 condition が付かない"
+        );
+    }
+
+    /// 即死 (即) は非ボスを致死化し、ボスには無効。
+    #[test]
+    fn instakill_attribute_kills_non_boss_not_boss() {
+        use crate::data::unit::WeaponData;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6);
+        let target = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "PILOT",
+            crate::Party::Enemy,
+            3,
+            6,
+        ));
+        let def_idx = app.database().idx_by_uid(&target).unwrap();
+        let pilot = app.database().pilot_by_name("PILOT").unwrap().clone();
+        let w = WeaponData {
+            name: "即死針".into(),
+            power: 1,
+            min_range: 1,
+            max_range: 1,
+            precision: 0,
+            bullet: -1,
+            en_consumption: 0,
+            necessary_morale: 0,
+            adaption: "AAAA".into(),
+            critical: 100, // proc 率 100
+            class: "即".into(),
+            extras: Vec::new(),
+        };
+        assert!(
+            app.roll_weapon_instakill(def_idx, &w, &pilot, &pilot),
+            "非ボスは即死 proc"
+        );
+        app.database_mut().unit_instances[def_idx].boss_rank = 1;
+        assert!(
+            !app.roll_weapon_instakill(def_idx, &w, &pilot, &pilot),
+            "ボスは即死無効"
         );
     }
 

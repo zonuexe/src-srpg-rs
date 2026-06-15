@@ -570,7 +570,13 @@ impl GameDatabase {
             .map(|d| d.hp)
             .unwrap_or(0);
         let with_items = self.equipped_sum(u, base, |it| it.hp_mod);
-        with_items + i64::from(u.upgrade_level) * UPGRADE_HP_PER_LEVEL
+        let hp = with_items + i64::from(u.upgrade_level) * UPGRADE_HP_PER_LEVEL;
+        if u.boss_rank > 0 {
+            let (num, add) = boss_hp_boost(u.boss_rank);
+            hp * num / 2 + add
+        } else {
+            hp
+        }
     }
 
     /// 装備込みの最大 EN。
@@ -590,7 +596,9 @@ impl GameDatabase {
             .map(|d| d.armor)
             .unwrap_or(0);
         let with_items = self.equipped_sum(u, base, |it| it.armor_mod);
-        with_items + i64::from(u.upgrade_level) * UPGRADE_ARMOR_PER_LEVEL
+        with_items
+            + i64::from(u.upgrade_level) * UPGRADE_ARMOR_PER_LEVEL
+            + boss_armor_boost(u.boss_rank)
     }
 
     /// 装備込みの運動性。
@@ -600,7 +608,7 @@ impl GameDatabase {
             .map(|d| d.mobility)
             .unwrap_or(0);
         let with_items = self.equipped_sum(u, base, |it| it.mobility_mod);
-        with_items + u.upgrade_level * UPGRADE_MOBILITY_PER_LEVEL
+        with_items + u.upgrade_level * UPGRADE_MOBILITY_PER_LEVEL + boss_mobility_boost(u.boss_rank)
     }
 
     /// 装備込みの移動力。
@@ -725,6 +733,13 @@ impl GameDatabase {
                 w.power += w.power * lv / 10;
             }
         }
+        // ボスランク: 全武器の攻撃力に加算 (BossRankコマンド.md)。
+        let boss_atk = boss_attack_boost(inst.boss_rank);
+        if boss_atk > 0 {
+            for w in &mut unit.weapons {
+                w.power += boss_atk;
+            }
+        }
         let b = self.combat_bonuses(inst);
         pilot.infight += b.infight;
         pilot.shooting += b.shooting;
@@ -732,6 +747,50 @@ impl GameDatabase {
         pilot.dodge += b.dodge;
         unit.armor = (unit.armor + b.armor).max(0);
         Some((pilot, unit))
+    }
+}
+
+/// ボスランク (1〜5) による HP 補正 `(分子, 分母=2, 加算)`。`BossRankコマンド.md` の
+/// 通常ユニット基準: rank1=×1.5 / rank2=×2 / rank3-5=×2 に加え flat (+10000/+20000/+40000)。
+pub fn boss_hp_boost(rank: i32) -> (i64, i64) {
+    match rank {
+        1 => (3, 0),
+        2 => (4, 0),
+        3 => (4, 10000),
+        4 => (4, 20000),
+        5 => (4, 40000),
+        _ => (2, 0),
+    }
+}
+/// ボスランクによる装甲加算 (`BossRankコマンド.md` 通常ユニット基準)。
+pub fn boss_armor_boost(rank: i32) -> i64 {
+    match rank {
+        1 => 300,
+        2 => 600,
+        3 => 1000,
+        4 => 1500,
+        5 => 2500,
+        _ => 0,
+    }
+}
+/// ボスランクによる運動性加算。
+pub fn boss_mobility_boost(rank: i32) -> i32 {
+    match rank {
+        1 => 5,
+        2 => 10,
+        3 => 15,
+        4 => 20,
+        5 => 25,
+        _ => 0,
+    }
+}
+/// ボスランクによる攻撃力加算 (全武器の power に加算)。
+pub fn boss_attack_boost(rank: i32) -> i64 {
+    match rank {
+        1 => 100,
+        2 => 200,
+        3..=5 => 300,
+        _ => 0,
     }
 }
 

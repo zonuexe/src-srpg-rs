@@ -447,6 +447,17 @@ pub struct UnitInstance {
     /// ために保持する。構成ユニット側は自身の `pilot_ids` を温存しているため復帰可能。
     #[serde(default)]
     pub pre_combine_pilots: Vec<String>,
+    /// ボスランク (0=通常 / 1〜5=ボス強化、`BossRankコマンド`)。HP/装甲/運動性/攻撃力を
+    /// ランクに応じて強化し、即死/石化/憑依を無効化、衰/滅 の減少率を半減する。
+    #[serde(default)]
+    pub boss_rank: i32,
+}
+
+impl UnitInstance {
+    /// ボスユニットか (即死/石化/憑依 を無効化、衰/滅 半減の判定)。
+    pub fn is_boss(&self) -> bool {
+        self.boss_rank > 0
+    }
 }
 
 fn default_support_attack() -> i32 {
@@ -515,6 +526,7 @@ impl UnitInstance {
             combined_from: Vec::new(),
             pre_combine_form: None,
             pre_combine_pilots: Vec::new(),
+            boss_rank: 0,
         }
     }
 

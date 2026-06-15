@@ -1602,17 +1602,28 @@ fn exec_command_pc(
             return Ok(pc + 1);
         }
         "bossrank" => {
-            // SRC `BossRank unit n` (`BossRankコマンド.md`):
-            // ボスユニットのランク (装甲補正等の倍率) を設定。本実装は
-            // ランク別補正を直接モデル化していないため、script_var
-            // `__rank_<unit>` に値を保存し、Rank() 関数で参照可能にする。
-            // 既存 Rank 関数 (line ~4885) と整合。
-            if xargs.len() < 2 {
-                return Ok(pc + 1);
+            // SRC `BossRank [unit] rank` (`BossRankコマンド.md`): ボスランク (0〜5) を設定。
+            // ユニットの `boss_rank` を更新 (HP/装甲/運動性/攻撃力強化 + 即死/石化/憑依無効 +
+            // 衰/滅 半減は effective_* / 戦闘側が反映)。Rank() 関数互換のため script_var
+            // `__rank_<unit>` にも保存する。unit 省略時は selected_unit_for_event。
+            let (target, rank_str) = match xargs.len() {
+                0 => return Ok(pc + 1),
+                1 => (app.selected_unit_for_event().to_string(), xargs[0].clone()),
+                _ => (xargs[0].clone(), xargs[1].clone()),
+            };
+            let rank: i32 = fn_arg_value(app, &rank_str)
+                .parse()
+                .unwrap_or(0)
+                .clamp(0, 5);
+            app.set_script_var(format!("__rank_{target}"), rank.to_string());
+            if let Some(u) = app
+                .database_mut()
+                .unit_instances
+                .iter_mut()
+                .find(|u| matches_unit_handle(u, &target))
+            {
+                u.boss_rank = rank;
             }
-            let key = format!("__rank_{}", xargs[0]);
-            let value = fn_arg_value(app, &xargs[1]);
-            app.set_script_var(key, value);
             return Ok(pc + 1);
         }
         "win" | "gameclear" => {
@@ -16853,6 +16864,26 @@ MapWeapon リオ メガキャノン 6 5
             .filter(|u| u.party == crate::Party::Enemy)
             .count();
         assert_eq!(alive_enemies, 0);
+    }
+
+    #[test]
+    fn bossrank_command_sets_boss_rank() {
+        let mut app = App::new();
+        let src = "\
+Pilot ガロ ガロ 男性 一般 AAAA 100 100 100 100 100 100 100
+Unit ゾルダ Mass 1 0 陸 5 M 1000 100 2000 80 800 80 BBBB
+Place ゾルダ ガロ 敵 5 5
+BossRank ガロ 3
+";
+        let stmts = event::parse(src).unwrap();
+        execute(&mut app, &stmts).unwrap();
+        let u = app
+            .database()
+            .unit_instances
+            .iter()
+            .find(|u| u.pilot_name == "ガロ")
+            .unwrap();
+        assert_eq!(u.boss_rank, 3, "BossRank コマンドで boss_rank=3");
     }
 
     #[test]
