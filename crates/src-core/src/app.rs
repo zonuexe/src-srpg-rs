@@ -3297,10 +3297,16 @@ impl App {
                     let inflicted =
                         self.apply_weapon_special_effects(def_idx, &weapon, &atk_pilot, &def_pilot);
                     // 衰 / 滅: クリティカル時に対象の現在 HP / EN を割合減少させる。
-                    // 引 / 転: クリティカル時に対象の位置を移す。
+                    // 引 / 転: クリティカル時に対象の位置を移す。盗: 資金を奪う。
                     let decayed = if critical {
                         let mut d = self.apply_weapon_crit_decay(def_idx, &weapon);
                         d.extend(self.apply_weapon_crit_reposition(def_idx, (cx, cy), &weapon));
+                        d.extend(self.apply_weapon_crit_steal(
+                            def_idx,
+                            atk_party,
+                            def_unit.value,
+                            &weapon,
+                        ));
                         d
                     } else {
                         Vec::new()
@@ -4963,6 +4969,34 @@ impl App {
             moved = true;
         }
         moved
+    }
+
+    /// 盗 (`盗`): クリティカル時に相手から資金を奪う (`特殊効果攻撃属性.md`)。
+    /// 「アイテム所有」が無い相手からは修理費の 1/4 の資金。攻撃側が味方のときのみ獲得し、
+    /// 同じ相手からは 1 度だけ (`被盗` 状態で再取得を抑止)。アイテム盗みは未対応。
+    fn apply_weapon_crit_steal(
+        &mut self,
+        def_idx: usize,
+        atk_party: crate::Party,
+        victim_value: i64,
+        weapon: &crate::data::unit::WeaponData,
+    ) -> Vec<String> {
+        if !weapon.class.split_whitespace().any(|t| t == "盗") {
+            return Vec::new();
+        }
+        // 資金は撃破側が味方 (Player) のときのみ。既に盗んだ相手からは再取得しない。
+        if atk_party != crate::Party::Player
+            || self.database.unit_instances[def_idx].has_condition("被盗")
+        {
+            return Vec::new();
+        }
+        let amount = (victim_value / 4).max(0);
+        if amount <= 0 {
+            return Vec::new();
+        }
+        self.add_money(amount);
+        self.database.unit_instances[def_idx].add_condition(crate::Condition::new("被盗", -1));
+        vec![format!("資金奪取 +{amount}")]
     }
 
     /// 引き寄せ / 強制転移 (`引` / `転`): クリティカル時に対象の位置を移す
@@ -10650,6 +10684,46 @@ mod tests {
             m0 - 10,
             "脱 で気力 -10"
         );
+    }
+
+    /// 盗属性武器のクリティカル時資金奪取: 味方が敵を盗むと修理費の1/4が入り、再取得は不可。
+    #[test]
+    fn weapon_steal_grants_money_once() {
+        use crate::data::unit::WeaponData;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6);
+        let target = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "PILOT",
+            crate::Party::Enemy,
+            3,
+            6,
+        ));
+        let def_idx = app.database().idx_by_uid(&target).unwrap();
+        let weapon = WeaponData {
+            name: "盗賊剣".into(),
+            power: 100,
+            min_range: 1,
+            max_range: 1,
+            precision: 0,
+            bullet: -1,
+            en_consumption: 0,
+            necessary_morale: 0,
+            adaption: "AAAA".into(),
+            critical: 0,
+            class: "盗".into(),
+            extras: Vec::new(),
+        };
+        let money0 = app.money();
+        // 修理費 800 → 1/4 = 200。
+        let applied = app.apply_weapon_crit_steal(def_idx, crate::Party::Player, 800, &weapon);
+        assert_eq!(applied, vec!["資金奪取 +200".to_string()]);
+        assert_eq!(app.money(), money0 + 200, "資金 +200");
+        // 再取得は不可 (被盗)。
+        let applied2 = app.apply_weapon_crit_steal(def_idx, crate::Party::Player, 800, &weapon);
+        assert!(applied2.is_empty(), "同じ相手から再取得しない");
+        assert_eq!(app.money(), money0 + 200, "資金は変わらない");
     }
 
     /// 衰L2 武器のクリティカル時減衰: 対象の現在 HP が半分になる (撃破はしない)。
