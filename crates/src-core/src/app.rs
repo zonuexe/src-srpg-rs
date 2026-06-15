@@ -5353,17 +5353,11 @@ impl App {
                     self.add_unit_condition(target, n, 1);
                 }
             }
-            // ── シナリオ独自コマンド (東方夢想伝): 効果は暫定。要確認。 ──
-            "決意" => {
-                self.add_unit_condition(target, "必中", 1);
-                self.add_unit_condition(target, "熱血", 1);
-            }
-            "気迫" => self.add_unit_morale(target, 20),
-            "希望" => {
-                self.add_unit_condition(target, "必中", 1);
-                self.add_unit_condition(target, "集中", 1);
-            }
-            // ── 既定: 未知コマンドは継続 condition として付与 (従来挙動) ──
+            // ── 既定: SRC 標準以外 (シナリオ独自定義) の精神コマンドは継続 condition として
+            //   名前のまま付与するに留める。効果はシナリオ側 (sp.txt の効果種別 / イベント) で
+            //   解決すべきであり、原典 (SRC_20121125 / SRC.Sharp) に定義の無いコマンドの効果を
+            //   エンジンへ独自実装 (推測) しない。例: 東方夢想伝の 決意/気迫/希望 は原典に無く、
+            //   ここでは無害な named condition となる (combat.rs は解釈しない)。 ──
             _ => self.add_unit_condition(target, name, 1),
         }
     }
