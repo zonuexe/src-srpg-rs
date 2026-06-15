@@ -3079,6 +3079,8 @@ impl App {
             "対象ユニット使用武器番号".to_string(),
             atk_weapon_num.to_string(),
         );
+        // 武器発射による EN・残弾消費 (撃破前=index 失効前に消費。命中の有無に依らない)。
+        self.consume_weapon_resources(atk_idx, atk_weapon_num - 1);
         // 攻撃元 = 対象 / 攻撃先 = 相手。`攻撃イベント.md` の解説どおり、ユニットを
         // 陣営名で指定した場合に実ユニットを識別できるよう、パイロット名と
         // 一意 uid (`対象ユニットＩＤ` / `相手ユニットＩＤ`) を発火前に設定する。
@@ -3634,6 +3636,10 @@ impl App {
             (def_x, def_y),
         );
         let weapon = combat::best_weapon_in_range(&sup_unit, dist).cloned()?;
+        // 援護武器の EN・残弾消費 (撃破前=index 失効前に消費)。
+        if let Some(wi) = sup_unit.weapons.iter().position(|w| w.name == weapon.name) {
+            self.consume_weapon_resources(sup_idx, wi);
+        }
         let def_inst = self.database.unit_instances[def_idx].clone();
         let (def_pilot, def_unit) = self.database.effective_combat_data(def_idx)?;
         let terrain_id = self
@@ -3952,6 +3958,8 @@ impl App {
             .map(|i| i + 1)
             .unwrap_or(1);
         let weapon_name = weapon.name.clone();
+        // 反撃武器の EN・残弾消費 (撃破前=index 失効前に消費)。
+        self.consume_weapon_resources(def_idx, weapon_num - 1);
         let roll = (self.next_u32() % 100) as i32;
         let hit = roll < preview.hit_chance;
         let msg = if hit {
@@ -5893,6 +5901,32 @@ impl App {
             if delta != 0 {
                 let m = &mut self.database.unit_instances[i];
                 m.morale = (m.morale + delta).clamp(0, 150);
+            }
+        }
+    }
+
+    /// 武器発射時の資源消費 (EN・残弾)。`Unit.cs` 同様、命中の有無に関わらず発射で消費する。
+    /// `weapon_di` は `unit_data.weapons` でのインデックス (= `UnitWeapon.weapon_index`)。
+    /// EN コスト 0・無限弾 (bullet ≤ 0) の武器は実質無消費 (= テスト用武器へ無影響)。
+    fn consume_weapon_resources(&mut self, unit_idx: usize, weapon_di: usize) {
+        let (en_cost, has_ammo) = {
+            let u = &self.database.unit_instances[unit_idx];
+            match self
+                .database
+                .unit_by_name(&u.unit_data_name)
+                .and_then(|d| d.weapons.get(weapon_di))
+            {
+                Some(wd) => (wd.en_consumption, wd.bullet > 0),
+                None => return,
+            }
+        };
+        let u = &mut self.database.unit_instances[unit_idx];
+        if en_cost > 0 {
+            u.en_consumed += en_cost;
+        }
+        if has_ammo {
+            if let Some(uw) = u.weapons.iter_mut().find(|w| w.weapon_index == weapon_di) {
+                uw.consume_bullet();
             }
         }
     }
@@ -12778,6 +12812,50 @@ mod tests {
             m0 + 3,
             "被弾 +1 ＋ 損傷時気力増加L2 +2 = +3"
         );
+    }
+
+    /// 武器を発射すると EN と残弾を消費する (命中の有無に依らない)。
+    #[test]
+    fn firing_a_weapon_consumes_en_and_ammo() {
+        use crate::data::unit::WeaponData;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6); // 反撃を受けて生存する側
+        let mut gunner = app.database().unit_by_name("Hero").cloned().unwrap();
+        gunner.name = "Gunner".into();
+        gunner.en = 1000; // EN 切れにならないよう十分に
+        gunner.weapons = vec![WeaponData {
+            name: "実弾砲".into(),
+            power: 1, // Hero を撃破しない
+            min_range: 1,
+            max_range: 1,
+            precision: 0,
+            bullet: 3,
+            en_consumption: 10,
+            necessary_morale: 0,
+            adaption: "AAAA".into(),
+            critical: 0,
+            class: String::new(),
+            extras: Vec::new(),
+        }];
+        app.database_mut().units.push(gunner);
+        let shooter = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Gunner",
+            "PILOT",
+            crate::Party::Enemy,
+            3,
+            6,
+        ));
+        {
+            let u = app.database_mut().unit_by_uid_mut(&shooter).unwrap();
+            u.weapons = vec![crate::unit_weapon::UnitWeapon::from_data("実弾砲", 0, 3)];
+            u.add_condition(crate::Condition::new("必中", -1));
+        }
+        // shooter (3,6) が Hero (2,6) を反撃 → 実弾砲を発射。
+        app.try_counterattack(3, 6, (2, 6));
+        let u = app.database().unit_by_uid(&shooter).unwrap();
+        assert_eq!(u.en_consumed, 10, "発射で EN を 10 消費");
+        assert_eq!(u.weapons[0].bullet_remaining, 2, "発射で残弾 3→2");
     }
 
     /// 援護攻撃武器の特殊効果攻撃属性が、援護の命中・生存時に防御側へ proc する。
