@@ -144,6 +144,13 @@
 > 回帰テスト 5 件。**→ SRC の気力経済 (撃墜/被弾の基本変動＋被撃破側性格別変動＋4 種の技能加速) を完全実装**。
 > test/clippy/wasm-check 全緑。残スキル: ハンター (対象カテゴリ別ダメージ＝対象名マッチ要・形式不確定)・見切り (分身看破)。
 
+> **2026-06-15 追記 (続き10 — 武器の EN・残弾消費＝もう一つの大穴)**: **ライブ戦闘経路が武器の EN/弾数を一切消費して
+> おらず弾・EN が無限だった大穴を解消**。`UnitInstance::execute_attack`(消費実装あり) は実戦経路から呼ばれない dead
+> code で、`attack_resolve_and_run`/`try_counterattack`/`try_support_attack`/`map_attack` は predict でダメージのみ適用し
+> 消費していなかった。`consume_weapon_resources` を新設し各攻撃の**発射時 (撃破による index 失効前)** に EN 加算＋残弾
+> デクリメント。`is_weapon_available` の弾/EN ゲートが実際に効くようになり資源管理が成立。EN0・無限弾(bullet≤0)の武器は
+> 無消費＝テスト用武器へ無影響。回帰テスト 1 件・全テスト緑。**気力と並ぶ "配線漏れ大穴" の二つ目を埋めた**。
+
 VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 本ドキュメントは作業継続のための要約。**解決済み課題は §9 に 1 行で要約**し、本文は
 「現状・残課題・恒久リファレンス」に絞る。
