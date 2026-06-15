@@ -1920,9 +1920,20 @@ impl App {
                 .map(|u| u.hp)
                 .unwrap_or(0);
             let u = &mut self.database.unit_instances[i];
-            // 毒
+            // 毒: 最大 HP の 10%。毒属性への弱点で倍・耐性で半減 (特殊効果攻撃属性.md)。
             if u.has_condition("毒") && max_hp > 0 {
-                let damage = (max_hp / 10).max(1);
+                let weak_poison = crate::feature::feature_value(&u.active_features, "弱点")
+                    .is_some_and(|v| v.split_whitespace().any(|t| t == "毒"));
+                let resist_poison = crate::feature::feature_value(&u.active_features, "耐性")
+                    .is_some_and(|v| v.split_whitespace().any(|t| t == "毒"));
+                let base = (max_hp / 10).max(1);
+                let damage = if weak_poison {
+                    base * 2
+                } else if resist_poison {
+                    (base / 2).max(1)
+                } else {
+                    base
+                };
                 let new_dmg = (u.damage + damage).min(max_hp - 1);
                 u.damage = new_dmg;
             }
@@ -13379,6 +13390,36 @@ End
             "毒 should still be present (permanent condition)"
         );
         assert!(u.has_condition("永続バフ"));
+    }
+
+    /// 毒ダメージは 毒属性への弱点で倍・耐性で半減する (特殊効果攻撃属性.md)。
+    #[test]
+    fn poison_damage_scales_with_resistance_and_weakness() {
+        fn poison_tick(features: Vec<crate::feature::ActiveFeature>) -> i64 {
+            let mut app = App::new();
+            enter_mapview_with_demo_map(&mut app);
+            place_player_unit(&mut app, "P", 2, 6);
+            app.database_mut().register_unit(crate::UnitInstance::new(
+                "P",
+                "PILOT",
+                crate::Party::Enemy,
+                10,
+                10,
+            ));
+            app.set_stage_state(crate::stage::StageState::Battle);
+            {
+                let u = &mut app.database_mut().unit_instances[0];
+                u.add_condition(crate::Condition::new("毒", -1));
+                u.active_features = features;
+            }
+            app.handle_input(Input::EndPhase); // T2 Player フェイズ開始で 1 ティック
+            app.database().unit_instances[0].damage
+        }
+        let normal = poison_tick(vec![]);
+        let weak = poison_tick(vec![crate::feature::ActiveFeature::new("弱点", "毒")]);
+        let resist = poison_tick(vec![crate::feature::ActiveFeature::new("耐性", "毒")]);
+        assert_eq!(weak, normal * 2, "弱点=毒 で毒ダメージ倍");
+        assert_eq!(resist, (normal / 2).max(1), "耐性=毒 で毒ダメージ半減");
     }
 
     #[test]
