@@ -3381,7 +3381,9 @@ impl App {
                     let inflicted = if parried {
                         Vec::new()
                     } else {
-                        self.apply_weapon_special_effects(def_idx, &weapon, &atk_pilot, &def_pilot)
+                        self.apply_weapon_special_effects(
+                            def_idx, atk_idx, &weapon, &atk_pilot, &def_pilot,
+                        )
                     };
                     // 衰 / 滅: クリティカル時に対象の現在 HP / EN を割合減少させる。
                     // 引 / 転: クリティカル時に対象の位置を移す。盗: 資金を奪う。
@@ -3742,8 +3744,9 @@ impl App {
                 // 命中時/損傷時 気力増加スキル。
                 self.apply_combat_morale_skills(sup_idx, def_idx, true);
                 // 生存: 援護武器の特殊効果攻撃属性 (状態異常付与) を防御側へ proc。
-                let inflicted =
-                    self.apply_weapon_special_effects(def_idx, &weapon, &sup_pilot, &def_pilot);
+                let inflicted = self.apply_weapon_special_effects(
+                    def_idx, sup_idx, &weapon, &sup_pilot, &def_pilot,
+                );
                 if !inflicted.is_empty() {
                     self.push_message(format!("  → {}", inflicted.join("・")));
                 }
@@ -4022,8 +4025,9 @@ impl App {
                 self.apply_combat_morale_skills(def_idx, atk_idx, true);
                 // 生存: 反撃武器の特殊効果攻撃属性 (状態異常付与) を被弾側へ proc。
                 // 反撃側 = def (atk_pilot=def_pilot)、被弾側 = atk (def_pilot=atk_pilot)。
-                let inflicted =
-                    self.apply_weapon_special_effects(atk_idx, &weapon, &def_pilot, &atk_pilot);
+                let inflicted = self.apply_weapon_special_effects(
+                    atk_idx, def_idx, &weapon, &def_pilot, &atk_pilot,
+                );
                 let mut m = format!(
                     "  ↩ 反撃: {} → {} [{}]: 命中 {} ダメージ (残HP {})",
                     def_pilot.nickname, atk_pilot.nickname, weapon.name, preview.damage, remaining
@@ -5455,6 +5459,7 @@ impl App {
     fn apply_weapon_special_effects(
         &mut self,
         def_idx: usize,
+        firer_idx: usize,
         weapon: &crate::data::unit::WeaponData,
         atk_pilot: &crate::data::pilot::PilotData,
         def_pilot: &crate::data::pilot::PilotData,
@@ -5482,11 +5487,19 @@ impl App {
                 .add_condition(crate::Condition::new(&name, lifetime));
             applied.push(name);
         }
-        // 脱 / Ｄ: 対象の気力を低下 (Ｄ の吸収は未対応)。
+        // 脱 / Ｄ: 対象の気力を低下。Ｄ は低下分の半分を攻撃側 (firer) へ吸収する。
         if let Some(amount) = morale_down {
             let uid = self.database.unit_instances[def_idx].uid.clone();
             self.add_unit_morale(&uid, -amount);
             applied.push(format!("気力 -{amount}"));
+            if crate::combat::weapon_morale_absorbs(&weapon.class) {
+                let gain = amount / 2;
+                if gain > 0 {
+                    let fuid = self.database.unit_instances[firer_idx].uid.clone();
+                    self.add_unit_morale(&fuid, gain);
+                    applied.push(format!("気力吸収 +{gain}"));
+                }
+            }
         }
         applied
     }
@@ -12295,7 +12308,7 @@ mod tests {
             class: "痺".into(),
             extras: Vec::new(),
         };
-        let applied = app.apply_weapon_special_effects(def_idx, &weapon, &pilot, &pilot);
+        let applied = app.apply_weapon_special_effects(def_idx, def_idx, &weapon, &pilot, &pilot);
         assert_eq!(applied, vec!["麻痺".to_string()]);
         assert!(app.database().unit_instances[def_idx].has_condition("麻痺"));
         assert!(
@@ -12304,7 +12317,7 @@ mod tests {
         );
     }
 
-    /// 脱属性武器は命中・proc 時に対象の気力を低下させる (Ｄ の吸収は未対応)。
+    /// 脱属性武器は命中・proc 時に対象の気力を低下させる (吸収は無し)。
     #[test]
     fn weapon_datsu_reduces_target_morale() {
         use crate::data::unit::WeaponData;
@@ -12336,12 +12349,64 @@ mod tests {
             class: "脱".into(),
             extras: Vec::new(),
         };
-        let applied = app.apply_weapon_special_effects(def_idx, &weapon, &pilot, &pilot);
+        let applied = app.apply_weapon_special_effects(def_idx, def_idx, &weapon, &pilot, &pilot);
         assert!(applied.iter().any(|s| s.contains("気力")), "気力減少ラベル");
         assert_eq!(
             app.database().unit_instances[def_idx].morale,
             m0 - 10,
             "脱 で気力 -10"
+        );
+    }
+
+    /// Ｄ属性 (気力吸収) は対象の気力を低下させ、低下分の半分を攻撃側へ移す。
+    #[test]
+    fn weapon_d_absorbs_half_morale_to_firer() {
+        use crate::data::unit::WeaponData;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Drainer", 2, 6); // 攻撃側 (firer)
+        let target = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Drainer",
+            "PILOT",
+            crate::Party::Enemy,
+            3,
+            6,
+        ));
+        let firer = first_player_uid(&app);
+        let firer_idx = app.database().idx_by_uid(&firer).unwrap();
+        let def_idx = app.database().idx_by_uid(&target).unwrap();
+        let pilot = app.database().pilot_by_name("PILOT").unwrap().clone();
+        app.database_mut().unit_instances[firer_idx].morale = 100;
+        app.database_mut().unit_instances[def_idx].morale = 130;
+        // Ｄ + critical 100 → 必ず proc。低下 10 → 対象 -10 / 攻撃側 +5。
+        let weapon = WeaponData {
+            name: "吸収弾".into(),
+            power: 100,
+            min_range: 1,
+            max_range: 1,
+            precision: 0,
+            bullet: -1,
+            en_consumption: 0,
+            necessary_morale: 0,
+            adaption: "AAAA".into(),
+            critical: 100,
+            class: "Ｄ".into(),
+            extras: Vec::new(),
+        };
+        let applied = app.apply_weapon_special_effects(def_idx, firer_idx, &weapon, &pilot, &pilot);
+        assert!(
+            applied.iter().any(|s| s == "気力吸収 +5"),
+            "攻撃側へ +5 吸収: {applied:?}"
+        );
+        assert_eq!(
+            app.database().unit_instances[def_idx].morale,
+            120,
+            "対象 130→120"
+        );
+        assert_eq!(
+            app.database().unit_instances[firer_idx].morale,
+            105,
+            "攻撃側 100→105 (吸収)"
         );
     }
 
@@ -13326,7 +13391,7 @@ mod tests {
             class: "石".into(),
             extras: Vec::new(),
         };
-        let applied = app.apply_weapon_special_effects(idx, &w, &pilot, &pilot);
+        let applied = app.apply_weapon_special_effects(idx, idx, &w, &pilot, &pilot);
         assert!(applied.is_empty(), "ボスは石化を無効化");
         assert!(
             !app.database().unit_instances[idx].has_condition("石化"),

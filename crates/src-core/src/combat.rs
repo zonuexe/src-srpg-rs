@@ -613,7 +613,7 @@ pub fn weapon_knockback(class: &str) -> Option<(i32, bool)> {
 
 /// 気力減少属性 `脱` / `Ｄ`(気力吸収) を武器 class から抽出し、低下量を返す
 /// (`特殊効果攻撃属性.md`)。低下量は `5×レベル` (レベル省略時 10)。該当が無ければ `None`。
-/// 注: Ｄ の「吸収 (半分を攻撃側へ)」は本実装では未対応で、低下のみ反映する。
+/// `Ｄ` の「吸収 (低下分の半分を攻撃側へ)」は [`weapon_morale_absorbs`] で判定する。
 pub fn weapon_morale_reduction(class: &str) -> Option<i32> {
     for tok in class.split_whitespace() {
         let (attr, level) = split_attr_level(tok);
@@ -623,6 +623,15 @@ pub fn weapon_morale_reduction(class: &str) -> Option<i32> {
         }
     }
     None
+}
+
+/// 武器が気力*吸収*属性 (`Ｄ`/`D`) を持つか。`脱` は低下のみ、`Ｄ` は低下分の半分を
+/// 攻撃側の気力へ移す (`特殊効果攻撃属性.md`)。
+pub fn weapon_morale_absorbs(class: &str) -> bool {
+    class.split_whitespace().any(|tok| {
+        let (attr, _) = split_attr_level(tok);
+        attr == "Ｄ" || attr == "D"
+    })
 }
 
 /// クリティカル時の位置移動属性を武器 class から抽出する (`特殊効果攻撃属性.md`)。
