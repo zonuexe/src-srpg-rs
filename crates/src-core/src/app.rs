@@ -4214,6 +4214,27 @@ impl App {
         let Some(&(target_pos, _, _)) = candidates.first() else {
             return;
         };
+        let mut target_pos = target_pos;
+        // ChangeMode「護衛 <対象>」: 指定ユニットの近くへ移動して守る (移動目標を
+        // 守護対象に置換)。攻撃自体は移動後に射程内の敵を狙う (attack_target)。
+        if let Some(name) = ai_mode
+            .strip_prefix("護衛")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+        {
+            if let Some(gpos) = self
+                .database
+                .unit_instances
+                .iter()
+                .find(|u| {
+                    !u.off_map
+                        && (u.unit_data_name == name || u.pilot_name == name || u.uid == name)
+                })
+                .map(|u| (u.x, u.y))
+            {
+                target_pos = gpos;
+            }
+        }
 
         // 移動範囲を Dijkstra で計算 (地形適応・特殊能力を考慮)。
         let move_cost_fn = {
@@ -11234,6 +11255,39 @@ mod tests {
         assert!(
             app.database().unit_by_uid(&bomber).unwrap().has_acted,
             "マップ兵器発射で行動終了"
+        );
+    }
+
+    /// ChangeMode「護衛 <対象>」の敵 AI は守護対象の近くへ移動する。
+    #[test]
+    fn change_mode_escort_moves_toward_protected_unit() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Foe", 11, 11); // 敵対ユニット (candidates 用)
+        place_player_unit(&mut app, "Protectee", 1, 1); // Protectee unit_data を用意 (この個体は遠方)
+        let protectee = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Protectee",
+            "PILOT",
+            crate::Party::Enemy,
+            3,
+            3,
+        ));
+        let guard = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Foe",
+            "PILOT",
+            crate::Party::Enemy,
+            10,
+            10,
+        ));
+        app.database_mut().unit_by_uid_mut(&guard).unwrap().ai_mode = format!("護衛 {protectee}");
+        app.set_stage_state(crate::stage::StageState::Battle);
+        let idx = app.database().idx_by_uid(&guard).unwrap();
+        app.ai_act_unit(idx);
+        let g = app.database().unit_by_uid(&guard).unwrap();
+        let dist_after = (g.x as i32 - 3).abs() + (g.y as i32 - 3).abs();
+        assert!(
+            dist_after < 14,
+            "護衛役は守護対象 (3,3) へ近づく (移動後距離={dist_after})"
         );
     }
 
