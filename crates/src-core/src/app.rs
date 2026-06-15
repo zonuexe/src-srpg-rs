@@ -4202,6 +4202,10 @@ impl App {
         if self.ai_use_offensive_ability(idx) {
             return;
         }
+        // 召喚アビリティを持つ AI は、数的に劣勢なら増援を召喚する。
+        if self.ai_use_summon_ability(idx) {
+            return;
+        }
         // マップ兵器を持つ AI は、2 体以上の敵を巻き込める照準があれば優先発射する。
         if self.ai_use_map_weapon(idx) {
             return;
@@ -4626,6 +4630,62 @@ impl App {
                 }
                 return true;
             }
+        }
+        false
+    }
+
+    /// 敵 AI の召喚アビリティ使用。`召喚` 効果のアビリティを持ち、自陣営がオンマップ数で
+    /// 敵対勢力に劣勢 (味方数 ≤ 敵数) のとき、増援を召喚する。発動したら `true`。劣勢
+    /// ゲートで数的に拮抗すれば止まるため乱発しない (召喚アビリティは多くが回数制限付き
+    /// でさらに有限)。テスト用ユニットはアビリティ無しなので無効 (= 既存テストへ影響なし)。
+    fn ai_use_summon_ability(&mut self, idx: usize) -> bool {
+        let caster = self.database.unit_instances[idx].uid.clone();
+        let party = self.database.unit_instances[idx].party;
+        let unit_name = self.database.unit_instances[idx].unit_data_name.clone();
+        let summon_idxs: Vec<usize> = match self.database.unit_by_name(&unit_name) {
+            Some(d) => d
+                .abilities
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| a.effect.contains("召喚"))
+                .map(|(i, _)| i)
+                .collect(),
+            None => return false,
+        };
+        if summon_idxs.is_empty() {
+            return false;
+        }
+        // 劣勢判定: オンマップの自陣営数 ≤ 敵対勢力数 のときのみ召喚する。
+        let allies = self
+            .database
+            .unit_instances
+            .iter()
+            .filter(|u| !u.off_map && u.party == party)
+            .count();
+        let enemies = self
+            .database
+            .unit_instances
+            .iter()
+            .filter(|u| !u.off_map && u.party.is_hostile_to(party))
+            .count();
+        if allies > enemies {
+            return false;
+        }
+        for ab_idx in summon_idxs {
+            if !self.ability_usable(&caster, ab_idx) {
+                continue;
+            }
+            // 召喚は発動者自身 (隣接空きマスに生成) を対象にする。
+            if !self.ability_target_valid(&caster, ab_idx, &caster) {
+                continue;
+            }
+            self.apply_ability(&caster, ab_idx, &caster);
+            if let Some(i) = self.database.idx_by_uid(&caster) {
+                if self.database.unit_instances[i].has_acted {
+                    crate::event_runtime::fire_action_end_labels(self, i);
+                }
+            }
+            return true;
         }
         false
     }
@@ -11667,6 +11727,47 @@ mod tests {
         assert!(
             app.database().unit_by_uid(&attacker).unwrap().has_acted,
             "アビリティ発動で行動終了"
+        );
+    }
+
+    /// 召喚アビリティを持つ敵 AI は、数的に劣勢 (味方数 ≤ 敵数) のとき増援を召喚する。
+    #[test]
+    fn ai_uses_summon_ability_when_outnumbered() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Healer", 9, 9); // 敵対する味方 1 体 (= 召喚側は劣勢)
+        let summoner = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Healer",
+            "PILOT",
+            crate::Party::Enemy,
+            5,
+            5,
+        ));
+        give_ability(
+            &mut app,
+            "Healer",
+            &summoner,
+            mk_ability("援軍要請", "召喚=Healer", 0, Some(1)),
+        );
+        app.set_stage_state(crate::stage::StageState::Battle);
+        let before = app
+            .database()
+            .unit_instances
+            .iter()
+            .filter(|u| !u.off_map && u.party == crate::Party::Enemy)
+            .count();
+        let idx = app.database().idx_by_uid(&summoner).unwrap();
+        app.ai_act_unit(idx);
+        let after = app
+            .database()
+            .unit_instances
+            .iter()
+            .filter(|u| !u.off_map && u.party == crate::Party::Enemy)
+            .count();
+        assert_eq!(after, before + 1, "劣勢の AI が増援を 1 体召喚する");
+        assert!(
+            app.database().unit_by_uid(&summoner).unwrap().has_acted,
+            "召喚で行動終了"
         );
     }
 
