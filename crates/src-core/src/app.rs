@@ -3294,6 +3294,12 @@ impl App {
                     // 特殊効果攻撃属性: 命中かつ生存時に確率で状態異常を付与。
                     let inflicted =
                         self.apply_weapon_special_effects(def_idx, &weapon, &atk_pilot, &def_pilot);
+                    // 衰 / 滅: クリティカル時に対象の現在 HP / EN を割合減少させる。
+                    let decayed = if critical {
+                        self.apply_weapon_crit_decay(def_idx, &weapon)
+                    } else {
+                        Vec::new()
+                    };
                     let mut m = format!(
                         "{} → {} [{}]: 命中 {} ダメージ{} (残HP {})",
                         atk_pilot.nickname,
@@ -3309,6 +3315,9 @@ impl App {
                     );
                     if !inflicted.is_empty() {
                         m.push_str(&format!(" → {}", inflicted.join("・")));
+                    }
+                    if !decayed.is_empty() {
+                        m.push_str(&format!(" → {}", decayed.join("・")));
                     }
                     m
                 }
@@ -4818,6 +4827,39 @@ impl App {
             self.database.unit_instances[def_idx]
                 .add_condition(crate::Condition::new(&name, lifetime));
             applied.push(name);
+        }
+        applied
+    }
+
+    /// 減衰系属性 (`衰`=HP / `滅`=EN) をクリティカル時に適用する。対象の現在 HP / EN を
+    /// 属性レベルに応じた割合 (Lv1=3/4・Lv2=1/2・Lv3=1/4) に減らす (`特殊効果攻撃属性.md`)。
+    /// 減衰は撃破せず (常に 1 以上残す)。適用したラベル列を返す (メッセージ用)。
+    fn apply_weapon_crit_decay(
+        &mut self,
+        def_idx: usize,
+        weapon: &crate::data::unit::WeaponData,
+    ) -> Vec<String> {
+        let (hp_lv, en_lv) = crate::combat::weapon_crit_decay_levels(&weapon.class);
+        let mut applied = Vec::new();
+        if let Some(lv) = hp_lv {
+            let keep = crate::combat::crit_decay_keep_numer(lv); // 分母 4
+            let max_hp = self
+                .database
+                .effective_max_hp(&self.database.unit_instances[def_idx]);
+            let cur_hp = (max_hp - self.database.unit_instances[def_idx].damage).max(1);
+            let new_hp = (cur_hp * keep / 4).max(1);
+            self.database.unit_instances[def_idx].damage = max_hp - new_hp;
+            applied.push(format!("ＨＰ減衰 (残{new_hp})"));
+        }
+        if let Some(lv) = en_lv {
+            let keep = crate::combat::crit_decay_keep_numer(lv);
+            let max_en = self
+                .database
+                .effective_max_en(&self.database.unit_instances[def_idx]);
+            let cur_en = (max_en - self.database.unit_instances[def_idx].en_consumed).max(0);
+            let new_en = (cur_en * keep as i32 / 4).max(0);
+            self.database.unit_instances[def_idx].en_consumed = max_en - new_en;
+            applied.push(format!("ＥＮ減衰 (残{new_en})"));
         }
         applied
     }
@@ -10397,6 +10439,47 @@ mod tests {
         assert!(
             app.database().unit_instances[def_idx].attack_disabled(),
             "麻痺 は行動不能 (AI / 攻撃ゲートが効く)"
+        );
+    }
+
+    /// 衰L2 武器のクリティカル時減衰: 対象の現在 HP が半分になる (撃破はしない)。
+    #[test]
+    fn weapon_crit_decay_halves_current_hp() {
+        use crate::data::unit::WeaponData;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6);
+        let target = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "PILOT",
+            crate::Party::Enemy,
+            3,
+            6,
+        ));
+        let def_idx = app.database().idx_by_uid(&target).unwrap();
+        // 最大HP=100、ダメージ20 → 現在HP 80。衰L2 で 80→40。
+        app.database_mut().unit_instances[def_idx].damage = 20;
+        let weapon = WeaponData {
+            name: "減衰砲".into(),
+            power: 100,
+            min_range: 1,
+            max_range: 1,
+            precision: 0,
+            bullet: -1,
+            en_consumption: 0,
+            necessary_morale: 0,
+            adaption: "AAAA".into(),
+            critical: 0,
+            class: "衰L2".into(),
+            extras: Vec::new(),
+        };
+        let applied = app.apply_weapon_crit_decay(def_idx, &weapon);
+        assert!(!applied.is_empty(), "衰 でラベルが返る");
+        // 現在HP 80 → 40 → damage = 100 - 40 = 60。
+        assert_eq!(
+            app.database().unit_instances[def_idx].damage,
+            60,
+            "衰L2 で現在HP が半分 (80→40)"
         );
     }
 

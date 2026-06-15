@@ -457,6 +457,30 @@ pub fn weapon_special_effects(class: &str) -> Vec<(String, i32)> {
     out
 }
 
+/// クリティカル時発動の減衰系属性 `衰L<n>`(HP) / `滅L<n>`(EN) を武器 class から抽出し、
+/// `(衰レベル, 滅レベル)` を返す (`特殊効果攻撃属性.md`)。属性が無ければ `None`。
+/// レベルは 1..=3 にクランプ (Lv1=現在値の3/4、Lv2=1/2、Lv3=1/4)。
+pub fn weapon_crit_decay_levels(class: &str) -> (Option<i32>, Option<i32>) {
+    let mut hp = None;
+    let mut en = None;
+    for tok in class.split_whitespace() {
+        let (attr, level) = split_attr_level(tok);
+        let lv = level.unwrap_or(1).clamp(1, 3);
+        match attr.as_str() {
+            "衰" => hp = Some(lv),
+            "滅" => en = Some(lv),
+            _ => {}
+        }
+    }
+    (hp, en)
+}
+
+/// 減衰レベル (1..=3) に対応する「現在値に残す分子」(分母 4)。Lv1→3、Lv2→2、Lv3→1。
+/// 例: 現在値 100 に Lv2 → `100 * 2 / 4 = 50`。
+pub fn crit_decay_keep_numer(level: i32) -> i64 {
+    i64::from((4 - level.clamp(1, 3)).max(1))
+}
+
 /// `"痺L3"` → `("痺", Some(3))`、`"縛"` → `("縛", None)`。`L`/`Ｌ` で区切る。
 fn split_attr_level(tok: &str) -> (String, Option<i32>) {
     let chars: Vec<char> = tok.chars().collect();
@@ -826,6 +850,20 @@ mod tests {
             weapon_special_effects("狂"),
             vec![("狂戦士".to_string(), 4)]
         );
+    }
+
+    /// 衰 / 滅 (クリティカル時の HP / EN 減衰) のレベル抽出と分子計算。
+    #[test]
+    fn weapon_crit_decay_parses_and_keeps_fraction() {
+        // 衰L2 → HP レベル 2、滅 (レベル省略 → 1)。
+        assert_eq!(weapon_crit_decay_levels("衰L2"), (Some(2), None));
+        assert_eq!(weapon_crit_decay_levels("滅"), (None, Some(1)));
+        assert_eq!(weapon_crit_decay_levels("実 衰L3 滅L1"), (Some(3), Some(1)));
+        assert_eq!(weapon_crit_decay_levels("格 射"), (None, None));
+        // 分子 (分母4): Lv1→3 (3/4)、Lv2→2 (1/2)、Lv3→1 (1/4)。
+        assert_eq!(crit_decay_keep_numer(1), 3);
+        assert_eq!(crit_decay_keep_numer(2), 2);
+        assert_eq!(crit_decay_keep_numer(3), 1);
     }
 
     /// 狂戦士 (狂): 攻撃側で与ダメージ ×1.25、防御側で被命中 ×1.5。
