@@ -390,6 +390,51 @@ pub fn predict_with_status_terrain(
     {
         raw_dmg = (raw_dmg as f64 * 0.8) as i64;
     }
+    // ハンター (メインパイロット技能): 攻撃側の `ハンターLv*=別名 ターゲット…` 技能の
+    // ターゲット (別名=先頭トークンを除く) が防御側のユニット名称 / クラス / サイズ
+    // (「Lサイズ」形式) / パイロット名称 / 性別 のいずれかに一致すれば、与ダメージを
+    // ×(1 + Lv×0.1) する (`Unit.cs::Damage`「ハンター能力」、攻撃に関する特殊能力.md)。
+    {
+        let def_size_label = format!("{}サイズ", def_unit.size.label());
+        let def_sex = match def_pilot.sex {
+            crate::data::pilot::Sex::Male => "男性",
+            crate::data::pilot::Sex::Female => "女性",
+            crate::data::pilot::Sex::Unspecified => "",
+        };
+        let matches_target = |tname: &str| {
+            !tname.is_empty()
+                && (tname == def_unit.name
+                    || tname == def_unit.class
+                    || tname == def_size_label
+                    || tname == def_pilot.name
+                    || (!def_sex.is_empty() && tname == def_sex))
+        };
+        for (fname, fdata) in &atk_pilot.features {
+            let Some(rest) = fname.trim().strip_prefix("ハンター") else {
+                continue;
+            };
+            // 別名 (先頭トークン) を除いたターゲット列にマッチするか。
+            if fdata.split_whitespace().skip(1).any(matches_target) {
+                // `ハンターLv<n>` の Lv を抽出 (無印 = Lv1、半角/全角を許容)。
+                let lv: i64 = rest
+                    .strip_prefix("Lv")
+                    .or_else(|| rest.strip_prefix("LV"))
+                    .or_else(|| rest.strip_prefix("lv"))
+                    .or_else(|| rest.strip_prefix("Ｌｖ"))
+                    .or_else(|| rest.strip_prefix("ＬＶ"))
+                    .map(|a| {
+                        a.chars()
+                            .filter(char::is_ascii_digit)
+                            .collect::<String>()
+                            .parse()
+                            .unwrap_or(1)
+                    })
+                    .unwrap_or(1);
+                raw_dmg = ((raw_dmg * (10 + lv)) / 10).max(1);
+                break;
+            }
+        }
+    }
     // 行動不能の防御側 (睡眠=寝こみを襲う ×1.5、`Unit.cs::Damage`。本実装は麻痺/凍結 も同様)。
     if has(def_statuses, "麻痺") || has(def_statuses, "凍結") || has(def_statuses, "睡眠") {
         raw_dmg = (raw_dmg as f64 * 1.5) as i64;
@@ -1519,6 +1564,87 @@ mod tests {
             bad_melee.damage,
             (base.damage as f64 * 0.8) as i64,
             "不得手=格: 格闘武器で ×0.8"
+        );
+    }
+
+    /// ハンター (パイロット技能): 指定ターゲット (ユニット名/クラス/サイズ/パイロット名/性別)
+    /// に一致する相手への与ダメージが Lv×10% 増加。別名 (先頭トークン) はターゲットにしない。
+    #[test]
+    fn hunter_skill_scales_damage_vs_listed_targets() {
+        let w = weapon(500, 1, 1, 0);
+        let dp = p(0, 0, 0); // 防御側パイロット "P"
+        let mut du = u(0, vec![]); // 防御側ユニット: name "U" / size M
+        du.class = "ドラゴン".into();
+        let ap = p(0, 0, 100);
+        let base = predict_with_status(&ap, &u(0, vec![]), &w, &dp, &du, 0, 0, 100, 100, &[], &[]);
+
+        // ハンターLv3=竜狩り(別名) ドラゴン → クラス一致で ×1.3。
+        let mut hunter = p(0, 0, 100);
+        hunter
+            .features
+            .push(("ハンターLv3".into(), "竜狩り ドラゴン".into()));
+        let hit = predict_with_status(
+            &hunter,
+            &u(0, vec![]),
+            &w,
+            &dp,
+            &du,
+            0,
+            0,
+            100,
+            100,
+            &[],
+            &[],
+        );
+        assert_eq!(
+            hit.damage,
+            (base.damage * 13 / 10).max(1),
+            "ハンターLv3: 対象クラスへ ×1.3"
+        );
+
+        // 別名 (先頭トークン=竜狩り) はターゲットにしない: クラス "竜狩り" の相手には非適用。
+        let mut du_alias = u(0, vec![]);
+        du_alias.class = "竜狩り".into();
+        let miss = predict_with_status(
+            &hunter,
+            &u(0, vec![]),
+            &w,
+            &dp,
+            &du_alias,
+            0,
+            0,
+            100,
+            100,
+            &[],
+            &[],
+        );
+        assert_eq!(
+            miss.damage, base.damage,
+            "ハンター: 別名 (先頭トークン) はターゲットにしない"
+        );
+
+        // サイズ指定 (Mサイズ) でも一致する。無印 = Lv1 → ×1.1。
+        let mut hunter_size = p(0, 0, 100);
+        hunter_size
+            .features
+            .push(("ハンター".into(), "サイズ狩り Mサイズ".into()));
+        let hit_size = predict_with_status(
+            &hunter_size,
+            &u(0, vec![]),
+            &w,
+            &dp,
+            &du,
+            0,
+            0,
+            100,
+            100,
+            &[],
+            &[],
+        );
+        assert_eq!(
+            hit_size.damage,
+            (base.damage * 11 / 10).max(1),
+            "ハンター無印 (Lv1): Mサイズへ ×1.1"
         );
     }
 
