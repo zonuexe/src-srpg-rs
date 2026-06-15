@@ -10759,6 +10759,30 @@ mod tests {
         assert_eq!(app.adjust_proc_for_resistance(def_idx, "氷 痺", 40), 40);
     }
 
+    /// 移動力ＵＰ (+1) / 移動力ＤＯＷＮ (半減、特殊効果攻撃属性 低移) が effective_speed に効く。
+    #[test]
+    fn move_status_scales_effective_speed() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Mover", 5, 5); // speed 3
+        let uid = first_player_uid(&app);
+        let idx = app.database().idx_by_uid(&uid).unwrap();
+        let speed = |app: &App| {
+            app.database()
+                .effective_speed(&app.database().unit_instances[idx])
+        };
+        assert_eq!(speed(&app), 3, "基本移動力 3");
+        // 移動力ＤＯＷＮ → 半減 (1)。
+        app.database_mut().unit_instances[idx]
+            .add_condition(crate::Condition::new("移動力ＤＯＷＮ", 3));
+        assert_eq!(speed(&app), 1, "移動力ＤＯＷＮ で半減");
+        app.database_mut().unit_instances[idx].remove_condition("移動力ＤＯＷＮ");
+        // 移動力ＵＰ → +1 (4)。
+        app.database_mut().unit_instances[idx]
+            .add_condition(crate::Condition::new("移動力ＵＰ", 3));
+        assert_eq!(speed(&app), 4, "移動力ＵＰ で +1");
+    }
+
     /// 盗属性武器のクリティカル時資金奪取: 味方が敵を盗むと修理費の1/4が入り、再取得は不可。
     #[test]
     fn weapon_steal_grants_money_once() {

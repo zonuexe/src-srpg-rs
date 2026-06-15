@@ -450,9 +450,11 @@ pub fn weapon_special_effects(class: &str) -> Vec<(String, i32)> {
             "不" => Some(("行動不能", 1)),
             "止" => Some(("足止め", 1)),
             "劣" | "低防" => Some(("装甲低下", 3)),
-            // 能力 DOWN 系 (3 ターン)。攻撃力 DOWN=与ダメ ×0.75 / 運動性 DOWN=命中回避 -15。
+            // 能力 DOWN 系 (3 ターン)。攻撃力 DOWN=与ダメ ×0.75 / 運動性 DOWN=命中回避 -15 /
+            // 移動力 DOWN=移動力半減。
             "低攻" => Some(("攻撃力ＤＯＷＮ", 3)),
             "低運" => Some(("運動性ＤＯＷＮ", 3)),
+            "低移" => Some(("移動力ＤＯＷＮ", 3)),
             // 命中率低下系。盲=盲目 (3T、攻撃側命中 ×0.5/被攻撃命中 ×1.5)、撹=撹乱 (2T、攻撃側命中 ×0.5)。
             "盲" => Some(("盲目", 3)),
             "撹" => Some(("撹乱", 2)),
@@ -900,6 +902,10 @@ mod tests {
         assert_eq!(
             weapon_special_effects("低運"),
             vec![("運動性ＤＯＷＮ".to_string(), 4)]
+        );
+        assert_eq!(
+            weapon_special_effects("低移"),
+            vec![("移動力ＤＯＷＮ".to_string(), 4)]
         );
         // 命中率低下系 (盲=盲目3T / 撹=撹乱2T)。
         assert_eq!(weapon_special_effects("盲"), vec![("盲目".to_string(), 4)]);

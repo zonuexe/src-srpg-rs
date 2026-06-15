@@ -619,7 +619,15 @@ impl GameDatabase {
         } else {
             0
         };
-        with_items + spirit_bonus
+        // 状態異常: 移動力ＵＰ (+1) / 移動力ＤＯＷＮ (半減、特殊効果攻撃属性 低移)。
+        let mut sp = with_items + spirit_bonus;
+        if u.has_condition("移動力ＵＰ") {
+            sp += 1;
+        }
+        if u.has_condition("移動力ＤＯＷＮ") {
+            sp = (sp / 2).max(1);
+        }
+        sp.max(0)
     }
 
     /// 技能・特殊能力・状態異常による戦闘ボーナス (格闘/射撃/命中/回避/装甲) を集計する。
