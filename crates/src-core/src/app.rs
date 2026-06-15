@@ -4139,6 +4139,10 @@ impl App {
             self.database.unit_instances[idx].has_acted = true;
             return;
         }
+        // 回復アビリティを持つ AI は、射程内に負傷した味方が居れば回復を優先する。
+        if self.ai_use_support_ability(idx) {
+            return;
+        }
         // 自ユニットの最大射程 (= 攻撃移動目標距離)
         let max_range = self
             .database
@@ -4347,6 +4351,65 @@ impl App {
             }
         }
         let _ = self.attack_target();
+    }
+
+    /// 敵 AI の回復アビリティ使用。回復系アビリティ (効果に `回復`、霊力/ＳＰ 回復は除く) を
+    /// 持ち、射程内に負傷した味方が居れば、最も負傷の大きい味方へ回復を発動する。発動したら
+    /// `true`。テスト用ユニットはアビリティ無しなので無効 (= 既存テストへ影響なし)。
+    fn ai_use_support_ability(&mut self, idx: usize) -> bool {
+        let caster = self.database.unit_instances[idx].uid.clone();
+        let unit_name = self.database.unit_instances[idx].unit_data_name.clone();
+        let heal_idxs: Vec<usize> = match self.database.unit_by_name(&unit_name) {
+            Some(d) => d
+                .abilities
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| {
+                    a.effect.contains("回復")
+                        && !a.effect.contains("霊力")
+                        && !a.effect.contains("ＳＰ")
+                })
+                .map(|(i, _)| i)
+                .collect(),
+            None => return false,
+        };
+        for ab_idx in heal_idxs {
+            if !self.ability_usable(&caster, ab_idx) {
+                continue;
+            }
+            // 射程内で最も負傷した味方を対象にする。
+            let target_uids: Vec<String> = self
+                .database
+                .unit_instances
+                .iter()
+                .filter(|u| !u.off_map && u.damage > 0)
+                .map(|u| u.uid.clone())
+                .collect();
+            let mut best: Option<(String, i64)> = None;
+            for tuid in target_uids {
+                if !self.ability_target_valid(&caster, ab_idx, &tuid) {
+                    continue;
+                }
+                let dmg = self
+                    .database
+                    .unit_by_uid(&tuid)
+                    .map(|u| u.damage)
+                    .unwrap_or(0);
+                if best.as_ref().map(|(_, d)| dmg > *d).unwrap_or(true) {
+                    best = Some((tuid, dmg));
+                }
+            }
+            if let Some((tuid, _)) = best {
+                self.apply_ability(&caster, ab_idx, &tuid);
+                if let Some(i) = self.database.idx_by_uid(&caster) {
+                    if self.database.unit_instances[i].has_acted {
+                        crate::event_runtime::fire_action_end_labels(self, i);
+                    }
+                }
+                return true;
+            }
+        }
+        false
     }
 
     /// 敵 AI の攻撃補助精神コマンド使用。パイロットが習得済み (SP/気力/レベル充足) の
@@ -11011,6 +11074,47 @@ mod tests {
         let c = app.database().unit_by_uid(&runner).unwrap();
         let dist = (c.x as i32 - 5).abs() + (c.y as i32 - 5).abs();
         assert!(dist > 1, "逃亡モードの敵は味方から遠ざかる (距離={dist})");
+    }
+
+    /// 回復アビリティを持つ敵 AI は、射程内の負傷した味方を回復する。
+    #[test]
+    fn ai_uses_heal_ability_on_damaged_ally() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Healer", 9, 9); // Healer unit_data + PILOT を用意 (この個体は無関係)
+        let healer = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Healer",
+            "PILOT",
+            crate::Party::Enemy,
+            5,
+            5,
+        ));
+        let ally = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Healer",
+            "PILOT",
+            crate::Party::Enemy,
+            6,
+            5,
+        ));
+        app.database_mut().unit_by_uid_mut(&ally).unwrap().damage = 50;
+        give_ability(
+            &mut app,
+            "Healer",
+            &healer,
+            mk_ability("治療", "回復Lv1", 3, None),
+        );
+        app.set_stage_state(crate::stage::StageState::Battle);
+        let idx = app.database().idx_by_uid(&healer).unwrap();
+        app.ai_act_unit(idx);
+        assert_eq!(
+            app.database().unit_by_uid(&ally).unwrap().damage,
+            0,
+            "AI が射程内の負傷した味方を回復する"
+        );
+        assert!(
+            app.database().unit_by_uid(&healer).unwrap().has_acted,
+            "回復で行動終了"
+        );
     }
 
     /// 写/化 (能力コピー) はクリティカル時に発動者を対象の形態へ変える。写はサイズ制限あり。
