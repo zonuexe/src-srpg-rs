@@ -4191,6 +4191,9 @@ impl App {
             self.database.unit_instances[idx].has_acted = true;
             return;
         }
+        // 支援精神 (回復系) を持つ AI は、半分以下まで負傷した味方が居れば回復する。
+        // 精神は行動を消費しないため、この後も通常の移動・攻撃を続ける。
+        self.ai_use_support_spirit(idx);
         // 回復/補給アビリティを持つ AI は、射程内に支援を要する味方が居れば優先する。
         if self.ai_use_support_ability(idx) {
             return;
@@ -4657,6 +4660,80 @@ impl App {
                 return;
             }
         }
+    }
+
+    /// 敵 AI の支援精神コマンド使用。HP 回復系精神 (信頼/友情/愛/根性/ド根性) を習得し
+    /// (SP/レベル充足)、最大 HP の半分以下まで負傷した同陣営ユニットが居れば 1 つ発動して
+    /// 回復する。精神は行動を消費しないため発動後も移動・攻撃を続ける。発動したら `true`。
+    /// 安価な単体 (信頼) → 全体 (友情/愛) → 自分のみ (根性/ド根性) の優先順で試す。テスト用
+    /// ユニットは `spirit_commands` が空なので無効 (= 既存テストへ影響なし)。
+    fn ai_use_support_spirit(&mut self, idx: usize) -> bool {
+        let uid = self.database.unit_instances[idx].uid.clone();
+        let party = self.database.unit_instances[idx].party;
+        let opts = self.spirit_command_options(&uid);
+        if opts.is_empty() {
+            return false;
+        }
+        // 最も負傷した同陣営ユニット (自分含む) を探す。半分以下まで減った味方が
+        // 居なければ SP を温存する。
+        let mut worst: Option<(String, i64)> = None;
+        let mut any_below_half = false;
+        for u in self.database.unit_instances.iter() {
+            if u.off_map || u.party != party || u.damage <= 0 {
+                continue;
+            }
+            let max_hp = self.database.effective_max_hp(u);
+            if u.damage * 2 >= max_hp {
+                any_below_half = true;
+            }
+            if worst.as_ref().map(|(_, d)| u.damage > *d).unwrap_or(true) {
+                worst = Some((u.uid.clone(), u.damage));
+            }
+        }
+        if !any_below_half {
+            return false;
+        }
+        let Some((worst_uid, _)) = worst else {
+            return false;
+        };
+        for name in ["信頼", "友情", "愛", "根性", "ド根性"] {
+            let Some((_, cost)) = opts.iter().find(|(n, _)| n == name) else {
+                continue;
+            };
+            let cost = *cost;
+            match self.spirit_target_kind(name) {
+                SpiritTargetKind::SingleAlly => {
+                    self.consume_unit_sp(&uid, cost);
+                    self.apply_spirit_effect(&worst_uid, name);
+                }
+                SpiritTargetKind::AllAllies => {
+                    self.consume_unit_sp(&uid, cost);
+                    let targets: Vec<String> = self
+                        .database
+                        .unit_instances
+                        .iter()
+                        .filter(|u| !u.off_map && u.party == party)
+                        .map(|u| u.uid.clone())
+                        .collect();
+                    for t in &targets {
+                        self.apply_spirit_effect(t, name);
+                    }
+                }
+                SpiritTargetKind::SelfOnly => {
+                    // 根性 / ド根性 は自分のみ。自分が最も負傷しているときだけ使う。
+                    if worst_uid != uid {
+                        continue;
+                    }
+                    self.consume_unit_sp(&uid, cost);
+                    self.apply_spirit_effect(&uid, name);
+                }
+                SpiritTargetKind::SingleEnemy => continue,
+            }
+            let nick = self.database.unit_instances[idx].pilot_name.clone();
+            self.push_message(format!("{nick} は精神コマンド【{name}】を使用！"));
+            return true;
+        }
+        false
     }
 
     /// 移動スライド演出を仕込む (逐次演出時のみ)。`reachable` から `start`→`dest` の
@@ -11388,6 +11465,59 @@ mod tests {
                 .unwrap()
                 .has_condition("熱血"),
             "AI が攻撃前に精神コマンド 熱血 を使う"
+        );
+    }
+
+    /// 回復系精神 (信頼) を持つ敵 AI は、半分以下まで負傷した味方を回復する。
+    /// 精神は行動を消費しないので、その後も通常の行動を続ける。
+    #[test]
+    fn ai_uses_support_spirit_on_wounded_ally() {
+        use crate::data::pilot::SpiritCommand;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 9, 9); // Hero unit_data + PILOT + 攻撃候補 (敵対)
+        let caster = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "PILOT",
+            crate::Party::Enemy,
+            5,
+            5,
+        ));
+        let ally = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "PILOT",
+            crate::Party::Enemy,
+            6,
+            5,
+        ));
+        // 味方を半分以下 (最大HP100 に対し damage 60) まで負傷させる。
+        app.database_mut().unit_by_uid_mut(&ally).unwrap().damage = 60;
+        {
+            let p = app
+                .database_mut()
+                .pilots
+                .iter_mut()
+                .find(|p| p.name == "PILOT")
+                .unwrap();
+            p.sp = Some(50);
+            p.spirit_commands = vec![SpiritCommand {
+                name: "信頼".into(),
+                cost: Some(30),
+                level: 1,
+            }];
+        }
+        app.set_stage_state(crate::stage::StageState::Battle);
+        let idx = app.database().idx_by_uid(&caster).unwrap();
+        app.ai_act_unit(idx);
+        let healed = app.database().unit_by_uid(&ally).unwrap().damage;
+        assert!(
+            healed < 60,
+            "AI が負傷した味方を信頼で回復する (信頼=最大HPの1/3、damage {healed} < 60)"
+        );
+        assert_eq!(
+            app.database().unit_by_uid(&caster).unwrap().sp_consumed,
+            30,
+            "信頼の SP を消費する"
         );
     }
 
