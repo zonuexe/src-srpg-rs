@@ -111,7 +111,9 @@ impl Condition {
                 ConditionEffect::MoveDisabled,
                 ConditionEffect::DodgeDown { amount: 20 },
             ],
-            "睡眠" | "行動不能" => vec![ConditionEffect::AttackDisabled],
+            // 踊り: 一切の行動が取れない (特殊効果攻撃属性 踊)。常に回避行動を取る
+            // ニュアンス (被命中時の回避) は未モデルで、行動不能のみ反映。
+            "睡眠" | "行動不能" | "踊り" => vec![ConditionEffect::AttackDisabled],
             // 凍結 / 石化: 一切の行動が取れない (特殊効果攻撃属性 凍 / 石)。
             "凍結" | "石化" => vec![
                 ConditionEffect::AttackDisabled,

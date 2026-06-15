@@ -413,7 +413,9 @@ pub fn critical_probability(
 /// 武器の `class` 文字列から特殊効果攻撃属性 (`特殊効果攻撃属性.md`) を抽出し、
 /// 命中時に防御側へ付与する `(状態異常名, lifetime)` の列を返す。
 ///
-/// 代表的な行動阻害・状態異常属性に対応 (Ｓ/縛/痺/眠/乱/凍/石/毒/不/止/劣/低防/低攻/低運/盲/撹/害/ゾ/黙/狂/中)。
+/// 代表的な行動阻害・状態異常属性に対応 (Ｓ/縛/痺/眠/乱/凍/石/毒/不/止/劣/低防/低攻/低運/盲/撹/害/ゾ/黙/狂/中/踊)。
+/// 位置移動 (吹/Ｋ/引/転) と クリティカル減衰 (衰/滅) は status 属性ではないため別関数
+/// (`weapon_knockback` / `weapon_crit_reposition` / `weapon_crit_decay_levels`) で扱う。
 /// `属性L<n>` でターン数を上書きできる。lifetime は「効果ターン数 + 1」を返す:
 /// `begin_phase` が当該陣営フェイズ開始時に lifetime を 1 減らすため、相手の N
 /// フェイズに効かせるには N+1 が必要 (L0 = 戦闘中のみ → 最小 lifetime 1)。
@@ -450,6 +452,8 @@ pub fn weapon_special_effects(class: &str) -> Vec<(String, i32)> {
             "狂" => Some(("狂戦士", 3)),
             // 中=バリア中和 (1T): 相手のバリア / フィールドを 1 ターン無効化する。
             "中" => Some(("バリア中和", 1)),
+            // 踊=踊り (3T): 行動不能 (常時回避ニュアンスは未モデル)。
+            "踊" => Some(("踊り", 3)),
             _ => None,
         };
         if let Some((name, default_turns)) = mapped {
@@ -892,6 +896,8 @@ mod tests {
             weapon_special_effects("中"),
             vec![("バリア中和".to_string(), 2)]
         );
+        // 踊り (踊=踊り3T)。
+        assert_eq!(weapon_special_effects("踊"), vec![("踊り".to_string(), 4)]);
     }
 
     /// バリア中和 (中) の防御側はバリアによるダメージ半減が無効化される。
