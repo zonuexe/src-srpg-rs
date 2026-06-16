@@ -49,12 +49,20 @@ impl MapData {
     }
 
     pub fn cell(&self, x: u32, y: u32) -> MapCell {
-        debug_assert!(x < self.width && y < self.height);
+        // 範囲外アクセスは **panic させず** 既定セルを返す (フロントエンド堅牢性重視)。
+        // 実シナリオは宣言マップサイズより外の座標へユニットを配置することがあり
+        // (例: TukabarkSampleScenario01 は 15x15 マップに (19,19) 等へ敵配置)、
+        // ここで index out of bounds パニックすると WASM アプリ全体が落ちる。
+        if x >= self.width || y >= self.height {
+            return MapCell::default();
+        }
         self.cells[(y * self.width + x) as usize]
     }
 
     pub fn set_cell(&mut self, x: u32, y: u32, cell: MapCell) {
-        debug_assert!(x < self.width && y < self.height);
+        if x >= self.width || y >= self.height {
+            return;
+        }
         self.cells[(y * self.width + x) as usize] = cell;
     }
 }
@@ -312,6 +320,35 @@ pub fn missing_terrain_ids(map: &MapData) -> Vec<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cell_access_out_of_bounds_returns_default_not_panic() {
+        // 回帰: 宣言サイズ外の座標アクセスは panic せず既定セルを返す/no-op になる。
+        // (実シナリオ例: TukabarkSampleScenario01 が 15x15 マップに (19,19) へ敵配置し、
+        //  敵フェイズの cell(19,19) で index out of bounds パニック→アプリ全体クラッシュしていた。)
+        let mut m = MapData::new(15, 15);
+        assert_eq!(m.cell(19, 19), MapCell::default()); // x,y とも範囲外
+        assert_eq!(m.cell(19, 4), MapCell::default()); // x 範囲外 (index は範囲内に化ける座標)
+        assert_eq!(m.cell(4, 19), MapCell::default()); // y 範囲外
+        m.set_cell(
+            19,
+            19,
+            MapCell {
+                terrain_id: 7,
+                bitmap_no: 0,
+            },
+        ); // 範囲外書込は no-op
+           // 範囲内は従来どおり読み書きできる。
+        m.set_cell(
+            14,
+            14,
+            MapCell {
+                terrain_id: 3,
+                bitmap_no: 0,
+            },
+        );
+        assert_eq!(m.cell(14, 14).terrain_id, 3);
+    }
 
     #[test]
     fn demo_map_uses_known_terrain_ids() {
