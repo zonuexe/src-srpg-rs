@@ -451,6 +451,12 @@ pub struct UnitInstance {
     /// ランクに応じて強化し、即死/石化/憑依を無効化、衰/滅 の減少率を半減する。
     #[serde(default)]
     pub boss_rank: i32,
+    /// 魅了 (特殊効果攻撃属性 魅) で一時的に勢力を変更したときの**元の勢力**。
+    /// `Some` のあいだは「魅了で他陣営に支配されている」状態で、`魅了` condition が
+    /// 期限切れ (`begin_phase` の tick で除去) になると `begin_phase` が `party` をここから
+    /// 復帰し `None` へ戻す。憑依 (恒久支配) はこのフィールドを使わない (復帰しない)。
+    #[serde(default)]
+    pub charm_revert_party: Option<Party>,
 }
 
 impl UnitInstance {
@@ -527,6 +533,7 @@ impl UnitInstance {
             pre_combine_form: None,
             pre_combine_pilots: Vec::new(),
             boss_rank: 0,
+            charm_revert_party: None,
         }
     }
 

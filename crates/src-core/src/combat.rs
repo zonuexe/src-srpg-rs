@@ -634,6 +634,23 @@ pub fn weapon_morale_absorbs(class: &str) -> bool {
     })
 }
 
+/// 支配系属性 `憑`(憑依) / `魅`(魅了) を武器 class から抽出する (`特殊効果攻撃属性.md`
+/// 69-75 魅 / 113-117 憑)。`憑`→`"憑依"`(相手を乗っ取り恒久支配)、`魅`→`"魅了"`(3 ターン、
+/// 魅了主を護衛する味方ユニットとして行動)。いずれの属性も持たなければ `None`。
+/// どちらも `BossRank` 適用ユニットには無効だが、その判定は勢力切替を伴うため
+/// 呼び出し側 (`App::apply_weapon_special_effects`) で行う。class トークンの先頭一致を採る。
+pub fn weapon_possession(class: &str) -> Option<&'static str> {
+    for tok in class.split_whitespace() {
+        let (attr, _) = split_attr_level(tok);
+        match attr.as_str() {
+            "憑" => return Some("憑依"),
+            "魅" => return Some("魅了"),
+            _ => {}
+        }
+    }
+    None
+}
+
 /// クリティカル時の位置移動属性を武器 class から抽出する (`特殊効果攻撃属性.md`)。
 /// 返り値 `(引き寄せ有無, 強制転移距離)`。`引`=攻撃側に隣接させる、`転L<n>`=ランダムに
 /// `n` 距離テレポート (レベル省略は 1)。いずれも無ければ `(false, None)`。

@@ -2062,6 +2062,21 @@ impl App {
             // フェイズが来るたびに 1 ターン経過 (SRC `特殊効果攻撃属性.md`)。
             u.tick_conditions();
         }
+        // 魅了 (特殊効果攻撃属性 魅) の期限切れ復帰: `魅了` condition が上の tick で消えた
+        // ユニットは元の勢力 (charm_revert_party) へ戻し、設定した護衛 ai_mode と退避
+        // フィールドをクリアする。魅了ユニットの勢力は攻撃側 (= 現フェイズ party になり得る)
+        // へ移っているため、tick の直後にここで判定する。憑依 (恒久支配) は
+        // charm_revert_party を使わないため対象外 (復帰しない)。
+        for u in &mut self.database.unit_instances {
+            if u.charm_revert_party.is_some() && !u.has_condition("魅了") {
+                if let Some(orig) = u.charm_revert_party.take() {
+                    u.party = orig;
+                }
+                if u.ai_mode.starts_with("護衛") {
+                    u.ai_mode.clear();
+                }
+            }
+        }
         // 回復系特殊能力 (`回復系特殊能力.md`): 当該陣営フェイズ開始時に、
         // ＨＰ回復Lv*/ＥＮ回復Lv* は実効最大値の 10×Lv% を回復、ＨＰ消費Lv*/ＥＮ消費Lv*
         // は同率を減少させる (ＨＰ は最低 1 / ＥＮ は最低 0)。
@@ -5296,6 +5311,12 @@ impl App {
         let Some(u) = self.database.unit_by_uid(uid) else {
             return Vec::new();
         };
+        // 憑依 (特殊効果攻撃属性 憑): 支配されたユニットはスペシャルパワーを使用できない。
+        // プレイヤー UI (`open_spirit_menu`) と AI 精神 (`ai_use_*_spirit`) はいずれも
+        // ここを唯一の関門にしているため、空を返せば全経路で封じられる。
+        if u.has_condition("憑依") {
+            return Vec::new();
+        }
         let Some(pdata) = self.database.pilot_by_name(&u.pilot_name) else {
             return Vec::new();
         };
@@ -5577,7 +5598,8 @@ impl App {
     ) -> Vec<String> {
         let effects = crate::combat::weapon_special_effects(&weapon.class);
         let morale_down = crate::combat::weapon_morale_reduction(&weapon.class);
-        if effects.is_empty() && morale_down.is_none() {
+        let possession = crate::combat::weapon_possession(&weapon.class);
+        if effects.is_empty() && morale_down.is_none() && possession.is_none() {
             return Vec::new();
         }
         let prob =
@@ -5609,6 +5631,39 @@ impl App {
                     let fuid = self.database.unit_instances[firer_idx].uid.clone();
                     self.add_unit_morale(&fuid, gain);
                     applied.push(format!("気力吸収 +{gain}"));
+                }
+            }
+        }
+        // 憑 (憑依) / 魅 (魅了): 相手の勢力を攻撃側へ奪う支配系属性 (特殊効果攻撃属性.md)。
+        // BossRank 適用ユニットには無効。攻撃側自身 (firer_idx==def_idx の自爆等) は対象外。
+        if let Some(kind) = possession {
+            if !is_boss && firer_idx != def_idx {
+                let firer_party = self.database.unit_instances[firer_idx].party;
+                let firer_uid = self.database.unit_instances[firer_idx].uid.clone();
+                let def = &mut self.database.unit_instances[def_idx];
+                match kind {
+                    // 憑依: 相手を乗っ取り**恒久支配**。勢力を攻撃側へ移し、SpecialPower の
+                    // 使用を封じる condition `憑依` (永続=-1) を付与する。復帰しない
+                    // (charm_revert_party は使わない)。
+                    "憑依" => {
+                        def.party = firer_party;
+                        def.add_condition(crate::Condition::new("憑依", -1));
+                        applied.push("憑依".to_string());
+                    }
+                    // 魅了: 相手を **3 ターン魅了**。元勢力を charm_revert_party に退避し
+                    // 勢力を攻撃側へ移して「魅了主を護衛する味方」として行動させる
+                    // (ai_mode=護衛 <firer_uid>)。condition `魅了` lifetime=4 (3 ターン +
+                    // フェイズ開始 tick 吸収) が期限切れになると begin_phase が元勢力へ復帰。
+                    "魅了" => {
+                        if def.charm_revert_party.is_none() {
+                            def.charm_revert_party = Some(def.party);
+                        }
+                        def.party = firer_party;
+                        def.ai_mode = format!("護衛 {firer_uid}");
+                        def.add_condition(crate::Condition::new("魅了", 4));
+                        applied.push("魅了".to_string());
+                    }
+                    _ => {}
                 }
             }
         }
@@ -12608,6 +12663,210 @@ mod tests {
             app.database().unit_instances[firer_idx].morale,
             105,
             "攻撃側 100→105 (吸収)"
+        );
+    }
+
+    /// 支配系属性 (`憑`/`魅`) 武器を作る (critical 100 → 必ず proc)。
+    fn possession_weapon(attr: &str) -> crate::data::unit::WeaponData {
+        crate::data::unit::WeaponData {
+            name: format!("{attr}武器"),
+            power: 100,
+            min_range: 1,
+            max_range: 1,
+            precision: 0,
+            bullet: -1,
+            en_consumption: 0,
+            necessary_morale: 0,
+            adaption: "AAAA".into(),
+            critical: 100,
+            class: attr.into(),
+            extras: Vec::new(),
+        }
+    }
+
+    /// 憑 (憑依) 属性は相手を攻撃側の勢力へ**恒久的に**移し、`憑依` condition (永続) を
+    /// 付与する。復帰用フィールド (charm_revert_party) は使わない。
+    #[test]
+    fn weapon_possession_permanently_takes_over_party() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6); // 攻撃側 (firer, Player)
+        let target = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "PILOT",
+            crate::Party::Enemy,
+            3,
+            6,
+        ));
+        let firer = first_player_uid(&app);
+        let firer_idx = app.database().idx_by_uid(&firer).unwrap();
+        let def_idx = app.database().idx_by_uid(&target).unwrap();
+        let pilot = app.database().pilot_by_name("PILOT").unwrap().clone();
+        let weapon = possession_weapon("憑");
+        let applied = app.apply_weapon_special_effects(def_idx, firer_idx, &weapon, &pilot, &pilot);
+        assert_eq!(applied, vec!["憑依".to_string()]);
+        assert_eq!(
+            app.database().unit_instances[def_idx].party,
+            crate::Party::Player,
+            "憑依で対象は攻撃側 (味方) 勢力になる"
+        );
+        assert!(app.database().unit_instances[def_idx].has_condition("憑依"));
+        assert!(
+            app.database().unit_instances[def_idx]
+                .charm_revert_party
+                .is_none(),
+            "憑依は恒久支配で復帰用フィールドを使わない"
+        );
+    }
+
+    /// 憑 (憑依) は BossRank 適用ユニットには無効 (勢力を奪わず condition も付かない)。
+    #[test]
+    fn weapon_possession_is_blocked_by_boss_rank() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6);
+        let target = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "PILOT",
+            crate::Party::Enemy,
+            3,
+            6,
+        ));
+        let firer = first_player_uid(&app);
+        let firer_idx = app.database().idx_by_uid(&firer).unwrap();
+        let def_idx = app.database().idx_by_uid(&target).unwrap();
+        app.database_mut().unit_instances[def_idx].boss_rank = 3;
+        let pilot = app.database().pilot_by_name("PILOT").unwrap().clone();
+        let weapon = possession_weapon("憑");
+        let applied = app.apply_weapon_special_effects(def_idx, firer_idx, &weapon, &pilot, &pilot);
+        assert!(applied.is_empty(), "ボスには憑依が効かない: {applied:?}");
+        assert_eq!(
+            app.database().unit_instances[def_idx].party,
+            crate::Party::Enemy,
+            "勢力は変わらない"
+        );
+        assert!(!app.database().unit_instances[def_idx].has_condition("憑依"));
+    }
+
+    /// 憑依状態のユニットはスペシャルパワー (精神コマンド) を使用できない
+    /// (spec「ただしスペシャルパワーは使用できません」)。`spirit_command_options` が空を返す。
+    #[test]
+    fn possession_seals_special_power() {
+        use crate::data::pilot::SpiritCommand;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6);
+        let uid = give_spirit_commands(
+            &mut app,
+            vec![SpiritCommand {
+                name: "集中".into(),
+                cost: Some(20),
+                level: 1,
+            }],
+            47,
+        );
+        // 憑依前: 習得済み精神が出る。
+        assert_eq!(
+            app.spirit_command_options(&uid),
+            vec![("集中".to_string(), 20)],
+            "憑依前は精神が使える"
+        );
+        // 憑依を付与すると封じられる。
+        let idx = app.database().idx_by_uid(&uid).unwrap();
+        app.database_mut().unit_instances[idx].add_condition(crate::Condition::new("憑依", -1));
+        assert!(
+            app.spirit_command_options(&uid).is_empty(),
+            "憑依中は精神コマンドを使用できない"
+        );
+    }
+
+    /// 魅 (魅了) 属性は相手を攻撃側の勢力へ一時的に移し、護衛 ai_mode を設定する。
+    /// 期限切れ (`begin_phase` の tick) になると元の勢力へ復帰し ai_mode をクリアする。
+    #[test]
+    fn weapon_charm_flips_party_then_reverts_on_expiry() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6); // 攻撃側 (firer, Player)
+        let target = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "PILOT",
+            crate::Party::Enemy,
+            3,
+            6,
+        ));
+        // 勝敗判定回避のため、魅了で奪われない敵を 1 体残す (敵全滅=勝利を防ぐ)。
+        let guard = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "PILOT",
+            crate::Party::Enemy,
+            10,
+            10,
+        ));
+        let firer = first_player_uid(&app);
+        let firer_idx = app.database().idx_by_uid(&firer).unwrap();
+        let def_idx = app.database().idx_by_uid(&target).unwrap();
+        let pilot = app.database().pilot_by_name("PILOT").unwrap().clone();
+        let weapon = possession_weapon("魅");
+        let applied = app.apply_weapon_special_effects(def_idx, firer_idx, &weapon, &pilot, &pilot);
+        assert_eq!(applied, vec!["魅了".to_string()]);
+        assert_eq!(
+            app.database().unit_instances[def_idx].party,
+            crate::Party::Player,
+            "魅了で対象は攻撃側 (味方) 勢力へ移る"
+        );
+        assert_eq!(
+            app.database().unit_instances[def_idx].charm_revert_party,
+            Some(crate::Party::Enemy),
+            "元の勢力 (敵) を退避"
+        );
+        assert!(
+            app.database().unit_instances[def_idx]
+                .ai_mode
+                .starts_with("護衛"),
+            "魅了主を護衛する ai_mode"
+        );
+        assert!(app.database().unit_instances[def_idx].has_condition("魅了"));
+        // 魅了中は元の味方 (guard 敵) と敵対し、攻撃側 (firer) とは敵対しない。
+        let charmed_party = app.database().unit_instances[def_idx].party;
+        let guard_idx = app.database().idx_by_uid(&guard).unwrap();
+        assert!(
+            app.database().unit_instances[guard_idx]
+                .party
+                .is_hostile_to(charmed_party),
+            "魅了ユニットは元の味方を敵と見なす"
+        );
+        assert!(
+            !app.database().unit_instances[firer_idx]
+                .party
+                .is_hostile_to(charmed_party),
+            "魅了ユニットは魅了主と敵対しない"
+        );
+
+        // lifetime=4 → Player フェイズ開始の tick を 4 回で期限切れ → 復帰。
+        // 魅了ユニットの勢力は Player なので begin_phase(Player) で tick される。
+        for _ in 0..4 {
+            app.begin_phase(crate::Phase::Player);
+        }
+        assert!(
+            !app.database().unit_instances[def_idx].has_condition("魅了"),
+            "魅了は期限切れで解除"
+        );
+        assert_eq!(
+            app.database().unit_instances[def_idx].party,
+            crate::Party::Enemy,
+            "期限切れで元の敵勢力へ復帰"
+        );
+        assert!(
+            app.database().unit_instances[def_idx]
+                .charm_revert_party
+                .is_none(),
+            "復帰後は退避フィールドをクリア"
+        );
+        assert!(
+            !app.database().unit_instances[def_idx]
+                .ai_mode
+                .starts_with("護衛"),
+            "復帰後は護衛 ai_mode をクリア"
         );
     }
 
