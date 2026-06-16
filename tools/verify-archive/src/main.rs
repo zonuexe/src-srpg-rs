@@ -431,8 +431,30 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
         let mut last_stage_file = app.current_stage_file().to_string();
         println!("  current_stage_file(start)={last_stage_file:?}");
         let mut last_units = app.database().unit_instances.len();
+        // VERIFY_VAR=a,b,c: 指定した script_var を各ステップでダンプする (ブラウザ `__srcVar`
+        // のヘッドレス相当)。D スパロボ戦記の 敵配置数/敵候補/配置場所[7]/味方平均レベル 等の triage 用。
+        let verify_vars: Vec<String> = env::var("VERIFY_VAR")
+            .ok()
+            .map(|s| {
+                s.split(',')
+                    .map(|n| n.trim().to_string())
+                    .filter(|n| !n.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let dump_vars = |app: &src_core::App, step: usize| {
+            if verify_vars.is_empty() {
+                return;
+            }
+            let parts: Vec<String> = verify_vars
+                .iter()
+                .map(|n| format!("{n}={:?}", app.script_var(n)))
+                .collect();
+            println!("  [{step}] vars: {}", parts.join(" "));
+        };
         for step in 0..400 {
             let state = app.stage_state();
+            dump_vars(&app, step);
             if matches!(state, src_core::stage::StageState::Defeat) {
                 println!("  [{step}] stage_state={state:?} → 停止");
                 break;
@@ -532,6 +554,7 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
             }
         }
         println!("--- drive final ---");
+        dump_vars(&app, 999);
         println!("  stage_state: {:?}", app.stage_state());
         println!("  units: {}", app.database().unit_instances.len());
         for u in &app.database().unit_instances {
