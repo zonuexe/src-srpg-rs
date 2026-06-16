@@ -9,7 +9,7 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 
 ## 現在地（2026-06-16）
 
-**テスト**: `cargo test -p src-core` 全緑（**1872 件**）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。  
+**テスト**: `cargo test -p src-core` 全緑（**1873 件**）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。  
 **ブランチ／コミット**: 直近は **`feat/necessary-skill-gate`** で作業中（必要技能ゲート、2 コミット、未 push）。
 以前のセッションは `master` 上で `origin/master`（`0de48d9`）から数コミット先行。push はユーザの明示指示で行う（no-auto-push）。
 
@@ -281,7 +281,8 @@ target/debug/scan_eve /tmp/out
 - **周辺の原典準拠化（同セッション）**: ① **乗り換えを Option コマンドで有効化**（`Option(乗り換え)` 有効 AND 2 機以上、`乗り換え.md`。
   Option は実装済だった）。② **Ｄ属性の気力吸収**（低下分の半分を攻撃側へ、`weapon_morale_absorbs`＋firer_idx）。
   ③ **マップ兵器の撃破で「復活」を尊重**（`revive_if_possible` を pub(crate) 化し map_attack へ、Tier0 残）。
-  ④ **毒/死の宣告を実効最大HP基準**に（改造/強化パーツ/ボスランク反映、Tier0 残）。各テスト付き。
+  ④ **毒/死の宣告を実効最大HP基準**に（改造/強化パーツ/ボスランク反映、Tier0 残）。
+  ⑤ **盗属性のアイテム盗み**（相手の `アイテム所有`/`レアアイテム所有` を攻撃側へ、資金スキップ）。各テスト付き。
 
 ### 2026-06-15/16 セッション（master、`origin/master`=`0de48d9` 以降）
 
