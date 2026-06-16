@@ -847,6 +847,78 @@ fn item_page_count_expression_evaluates() {
 }
 
 // ============================================================
+//  括弧無し算術の評価 (SRC ExecSetCmd / EvalTerm 準拠)
+//  `var = a - b` / `Set var a + b * c` 等。以前は括弧付き
+//  (`(a - b)`) しか評価されず、括弧無しは生式文字列のまま格納されていた
+//  (温泉旅館シナリオの経営計算 `資本金 = 資本金 - 営業収支` が全て壊れる原因)。
+// ============================================================
+
+#[test]
+fn bareword_assign_subtraction_evaluates() {
+    // `HP = HP - 30` (括弧無し) → 70。以前は生文字列 "HP - 30" が格納されていた。
+    assert_eq!(run("Set HP 100\nHP = HP - 30").script_var("HP"), "70");
+}
+
+#[test]
+fn bareword_assign_respects_precedence() {
+    // `c = a + b * 2` (括弧無し) → 5 + 3*2 = 11 (乗算優先)。
+    assert_eq!(run("Set a 5\nSet b 3\nc = a + b * 2").script_var("c"), "11");
+}
+
+#[test]
+fn set_form_bareword_arithmetic_not_evaluated() {
+    // `Set var bareword-算術` (= 形でない) は従来どおり数値化しない (SRC では引数過多
+    // エラーになる無効形。括弧付き `Set var (a - b)` か `=` 形を使う)。括弧付き / `=` 形
+    // のみを評価することで、引用符付き文字列や Format 出力の誤数値化を防ぐ。
+    assert_eq!(
+        run("Set a 5\nSet b 3\nSet c a - b").script_var("c"),
+        "a - b"
+    );
+}
+
+#[test]
+fn counter_increment_via_bareword_assign() {
+    // `n = n + 1` を 2 回 → 2。カウンタ加算の頻出パターン。
+    assert_eq!(run("Set n 0\nn = n + 1\nn = n + 1").script_var("n"), "2");
+}
+
+#[test]
+fn set_non_arith_string_value_is_preserved() {
+    // 算術演算子を含まない複数トークン文字列は数値化せず文字列のまま残す
+    // (`Set 名前 山田 太郎` を 0 に潰さない)。
+    assert_eq!(run("Set 名前 山田 太郎").script_var("名前"), "山田 太郎");
+}
+
+#[test]
+fn set_arith_with_nonnumeric_operand_stays_string() {
+    // 算術演算子を含むが非数値アトムを含む値は文字列のまま (`A-B` を 0 にしない)。
+    assert_eq!(run("Set v 朝-夜").script_var("v"), "朝-夜");
+}
+
+#[test]
+fn set_func_call_plus_literal_evaluates() {
+    // `減少 = Random(1) + 10` — 関数呼出 (expand_vars) + トップレベルの括弧無し加算。
+    // Random(1) は SRC `Dice` 準拠で常に 1 を返すため結果は決定論的に 11。
+    // 関数呼出を含んでも、その外側に算術演算子があれば算術式として評価される。
+    assert_eq!(run("減少 = Random(1) + 10").script_var("減少"), "11");
+}
+
+#[test]
+fn set_format_output_is_not_renumericized() {
+    // `Set v Format(-5,"00")` → "-05"。関数の整形出力 (先頭 `-` + 数字) を
+    // 算術と誤認して再数値化 (`-5`) しないこと (value_is_arith_expr が関数呼出単体を弾く)。
+    assert_eq!(run(r#"Set v Format(-5,"00")"#).script_var("v"), "-05");
+}
+
+#[test]
+fn set_quoted_digits_with_dash_stays_string() {
+    // `Set msg "$(a)-$(b)-$(c)"` → "1-2-3"。引用符付き文字列は算術評価しない
+    // (展開後 `1-2-3` を `-4` に潰さない)。
+    let app = run("Set a 1\nSet b 2\nSet c 3\nSet msg \"$(a)-$(b)-$(c)\"");
+    assert_eq!(app.script_var("msg"), "1-2-3");
+}
+
+// ============================================================
 //  算術式インデックスの配列アクセス `arr[(式)]`
 //  (スパロボ戦記 AlphaSecond.eve の武器/強化パーツ一覧:
 //   真武器番[((Args(2) - 1) * 8 + i)] / 真アイテム番[((Args(2) - 1) * 4 + i)])

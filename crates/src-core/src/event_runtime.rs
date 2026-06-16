@@ -952,9 +952,12 @@ fn exec_command_pc(
     // 裸の `=` でかつ `name` が control-flow でないことが必要)。
     if args.first().map(String::as_str) == Some("=") && !is_assign_sugar_excluded(name) {
         let rhs: Vec<String> = args[1..].to_vec();
+        // `__assign` は `Set` と同じハンドラへ流すが「`=` 代入形」であることを伝える
+        // 内部コマンド名。`Set var value` と異なり RHS は常に式なので括弧無し算術
+        // (`資本金 = 資本金 - 営業収支`) も数値化される。
         return exec_command_pc(
             app,
-            "Set",
+            "__assign",
             &assign_sugar_args(name, &rhs),
             line,
             pc,
@@ -1034,8 +1037,11 @@ fn exec_command_pc(
         "endif" => {
             return Ok(pc + 1);
         }
-        "set" | "local" => {
+        "set" | "local" | "__assign" => {
             // Set var value...  (value が複数トークンの場合はスペース連結)
+            // `__assign` は `var = expr` 形 (assign sugar が生成する内部コマンド名)。
+            // SRC の `=` 代入は RHS が常に式なので括弧無し算術も数値化する (下記)。
+            let is_assign_form = lname == "__assign";
             if args.is_empty() {
                 return Err(err(line, "Set/Local には変数名が必要。"));
             }
@@ -1098,10 +1104,18 @@ fn exec_command_pc(
             } else {
                 String::new()
             };
-            // SRC の `Set` は値を式評価する。`expand_vars` は関数呼出を
-            // 評価するが `(a + b)` のような括弧付き算術はトークンとして
-            // 残す。値全体が単一の括弧式で中身が純粋な算術なら数値化する。
-            let value = eval_paren_arith_value(app, &value).unwrap_or(value);
+            // SRC の `Set` (ExecSetCmd) / `=` 代入は値を `EvalTerm` で式評価し、結果が数値型
+            // なら数値代入する。`expand_vars` は関数呼出を評価するが算術式はトークンとして残す。
+            // - `var = expr` 形 (assign sugar → `__assign`): RHS は常に式 (SRC の `=` 代入)。
+            //   括弧無しの算術 (`資本金 = 資本金 - 営業収支` / `HP = HP - 10`) もここで数値化する。
+            // - `Set var value` 形: 値が引用符付き文字列 (`"$(a)-$(b)"`) や Format の整形済み
+            //   出力 (`-05`) でもあり得るため、従来どおり**括弧付き算術のみ**を数値化し、
+            //   それ以外は文字列のまま残す (パーサが引用符を剥がすため形では区別できない)。
+            let value = if is_assign_form {
+                eval_arith_value(app, &value).unwrap_or(value)
+            } else {
+                eval_paren_arith_value(app, &value).unwrap_or(value)
+            };
             // 関数左辺値代入 (`HP(unit) = n` 等) を先に処理。
             // 対象を見つけた場合は set_script_var は呼ばない。
             if try_function_lhs_assign(app, &var, &value) {
@@ -11901,9 +11915,41 @@ fn eval_paren_arith_value(app: &App, s: &str) -> Option<String> {
     if find_matching_paren(t, 0)? != t.len() - 1 {
         return None;
     }
-    // 演算子 / スペースで区切った各アトムが数値 / 数値変数 /
-    // 認識済みキーワード (`And`, `Or`, `Not`, `Mod`) であることを検証する。
-    // 非数値リテラル (`こんにちは` など) を 0 に潰さないためのガード。
+    eval_numeric_atoms(app, t)
+}
+
+/// `Set var value` / `var = value` の値を SRC `ExecSetCmd` (`EvalTerm`) 相当で評価する。
+/// `EvalTerm` は値を式評価し、結果が数値型なら数値代入・そうでなければ文字列代入する。
+/// 本移植では関数呼出 (`RoundUp(…)` 等) は `expand_vars` が、括弧付き算術は
+/// [`eval_paren_arith_value`] が評価していたが、**括弧の無い算術**
+/// (`資本金 = 資本金 - 営業収支` / `HP = HP - 10` / `カウンタ = カウンタ + 1` 等) が
+/// 取りこぼされ、生の式文字列がそのまま変数に格納されていた (温泉旅館シナリオの
+/// 経営計算が全て壊れる原因)。本関数は括弧の有無に依らず算術式を評価する。
+///
+/// 算術式と見なす条件: 算術演算子 / 括弧 (`+ - * / \ ^ ( )`) を 1 つ以上含むこと。
+/// これが無い値 (単一識別子・空白区切りの複数値・純粋な文字列) は対象外 (`None`)。
+/// さらに全アトムが数値 / 数値変数 / キーワードであることを要求し、文字列値
+/// (`山田 太郎` 等) を誤って 0 に潰さない (SRC: EvalTerm が StringType を返す相当)。
+fn eval_arith_value(app: &App, s: &str) -> Option<String> {
+    let t = s.trim();
+    if t.is_empty() {
+        return None;
+    }
+    if !t
+        .chars()
+        .any(|c| matches!(c, '+' | '-' | '*' | '/' | '\\' | '^' | '(' | ')'))
+    {
+        return None;
+    }
+    eval_numeric_atoms(app, t)
+}
+
+/// 算術式 `t` (括弧の有無は問わない) の全アトム (算術演算子 / 比較 `> < =` / 連結 `&` /
+/// 空白で区切る) が数値リテラル / 数値スクリプト変数 / 算術キーワード (`And`/`Or`/`Not`/
+/// `Mod`) のいずれかであれば、解決・評価して数値文字列を返す。非数値アトムを 1 つでも
+/// 含むなら算術式でない (`(こんにちは)` / `山田 太郎` 等) とみなし `None` を返す。
+/// これにより文字列値を誤って 0 に潰さない。
+fn eval_numeric_atoms(app: &App, t: &str) -> Option<String> {
     let atom_is_numeric_or_kw = |atom: &str| -> bool {
         let a = atom.trim().trim_matches('"').trim();
         a.is_empty()
@@ -11916,7 +11962,7 @@ fn eval_paren_arith_value(app: &App, s: &str) -> Option<String> {
     };
     let mut atom = String::new();
     for ch in t.chars() {
-        // アトム区切り = 算術演算子 (`is_arith_operator_char`) + 比較 `> < =` +
+        // アトム区切り = 算術演算子 (`is_arith_operator_char`, 括弧含む) + 比較 `> < =` +
         // 連結 `&` + 空白。算術演算子集合を一元化 (`\` `^` の取りこぼし防止)。
         // これが無いと `(... \ 8 + 1)` の `\` がアトム `\8` に紛れて数値判定に
         // 失敗し、式が評価されず生文字列のまま残る (武器/強化パーツ/特殊能力の
