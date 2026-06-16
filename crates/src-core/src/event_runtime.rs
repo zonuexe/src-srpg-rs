@@ -7479,7 +7479,20 @@ fn expand_vars(app: &App, src: &str) -> String {
     let bytes = src.as_bytes();
     let mut out = String::with_capacity(src.len());
     let mut i = 0;
+    // ダブルクオート内 (= 文字列リテラル) では、裸の `Name(args)` 関数呼出や
+    // `name[expr]` インデックス変数を**展開しない**。これをしないと
+    // `Instr(v, "設定[パイロット一覧]")` のリテラルが、たまたま同名の配列変数
+    // `設定[パイロット一覧]` が定義済みのとき**その値に化けて**しまい、比較が壊れる
+    // (D データロードの行検出が常に失敗する原因だった)。`$(...)` 明示補間のみ
+    // クオート内でも従来どおり展開する (`Talk "$(name)"` 等)。
+    let mut in_quote = false;
     while i < bytes.len() {
+        if bytes[i] == b'"' {
+            in_quote = !in_quote;
+            out.push('"');
+            i += 1;
+            continue;
+        }
         // `$(name)` 展開。`$(name[expr])` のインデックス記法および
         // `$(Args(1))` のように name 中に paren を含むキーにも対応するため、
         // 開き `(` のあとは括弧バランスを取りながら対応する `)` を探す。
@@ -7494,8 +7507,8 @@ fn expand_vars(app: &App, src: &str) -> String {
                 continue;
             }
         }
-        // 関数呼び出し `Name(args)` 形式の検出。
-        if let Some((fn_name, args_str, total)) = take_function_call(src, i) {
+        // 関数呼び出し `Name(args)` 形式の検出 (クオート内はスキップ=リテラル扱い)。
+        if let Some((fn_name, args_str, total)) = take_function_call(src, i).filter(|_| !in_quote) {
             // 引数文字列を再帰展開してから評価する。ただし `IsVarDefined` は
             // 引数を **変数名そのもの** として必要とするため展開しない。
             // 展開すると `IsVarDefined(配列[1])` が配列要素の値に化け、
@@ -7518,8 +7531,8 @@ fn expand_vars(app: &App, src: &str) -> String {
             i += total;
             continue;
         }
-        // インデックス変数 `name[expr]` の展開。識別子 + balanced [] パターン。
-        if let Some((var_value, total)) = take_indexed_var(app, src, i) {
+        // インデックス変数 `name[expr]` の展開 (クオート内はスキップ=リテラル扱い)。
+        if let Some((var_value, total)) = take_indexed_var(app, src, i).filter(|_| !in_quote) {
             out.push_str(&var_value);
             i += total;
             continue;
@@ -13848,6 +13861,25 @@ Stage $(name)
         // テキスト応答が正しいキーを更新する。
         assert!(app.respond_dialog_text("パイロイ".to_string()));
         assert_eq!(app.script_var("召喚キャラ[名前]"), "パイロイ");
+    }
+
+    #[test]
+    fn expand_vars_keeps_indexed_var_literal_inside_quotes() {
+        // 回帰: クオート内の `name[expr]` は、たまたま同名の配列変数が定義済みでも
+        // **値に化けず literal のまま**にする (D データロードの行検出が
+        // `Instr(v,"設定[パイロット一覧]")` のリテラル破壊で失敗していた真因)。
+        let mut app = App::new();
+        app.set_script_var("設定[パイロット一覧]".to_string(), "VAL".to_string());
+        // クオート内は literal。
+        assert_eq!(
+            expand_vars(&app, "\"設定[パイロット一覧]\""),
+            "\"設定[パイロット一覧]\""
+        );
+        // クオート外は従来どおり値に展開。
+        assert_eq!(expand_vars(&app, "設定[パイロット一覧]"), "VAL");
+        // `$(...)` 明示補間はクオート内でも従来どおり展開。
+        app.set_script_var("x".to_string(), "Y".to_string());
+        assert_eq!(expand_vars(&app, "\"$(x)\""), "\"Y\"");
     }
 
     #[test]
