@@ -11290,12 +11290,29 @@ fn system_variable_value(app: &App, name: &str) -> Option<String> {
 /// `make_unit_cost_fn` (地形適応) 等から、アビリティがユニットメニュー /
 /// `UseAbility` から参照可能になる。
 fn populate_active_features(inst: &mut UnitInstance, app: &App) {
-    if let Some(unit_data) = app.database().unit_by_name(&inst.unit_data_name) {
-        inst.active_features = unit_data
+    if let Some(unit_data) = app.database().unit_by_name(&inst.unit_data_name).cloned() {
+        // 必要技能.md §3: ユニット用特殊能力 `特殊能力名=値 (必要技能)`。値末尾の
+        // スペース区切り `(必要技能)`/`<必要条件>` を剥がして評価し、満たさなければ
+        // その特殊能力を無効 (is_active=false) にする。未モデル種別は fail-open
+        // (is_satisfied が true) なので誤封印しない。武器/アビリティ/形態ゲートと同じ評価器。
+        let db = app.database();
+        let new_feats: Vec<crate::feature::ActiveFeature> = unit_data
             .features
             .iter()
-            .map(|(name, value)| crate::feature::ActiveFeature::new(name.clone(), value.clone()))
+            .map(|(name, value)| {
+                let (val, skill, cond) = crate::necessary_skill::split_feature_necessary(value);
+                let mut f = crate::feature::ActiveFeature::new(name.clone(), val);
+                let skill_ok =
+                    skill.is_empty() || crate::necessary_skill::is_satisfied(&skill, inst, db);
+                let cond_ok =
+                    cond.is_empty() || crate::necessary_skill::is_satisfied(&cond, inst, db);
+                if !(skill_ok && cond_ok) {
+                    f.is_active = false;
+                }
+                f
+            })
             .collect();
+        inst.active_features = new_feats;
         // アビリティの実行時状態 (残り回数) を静的データから初期化。index は
         // `UnitData.abilities` と対応させ、使用時にメタデータを引けるようにする。
         inst.abilities = unit_data
@@ -15447,6 +15464,91 @@ Weapon ブレイバー ビームライフル 2500 1 5 +15 -1
         assert_eq!(
             expand_vars(&app, "Info(ユニットデータ, ブレイバー, 最長射程)"),
             "5"
+        );
+    }
+
+    #[test]
+    fn feature_necessary_skill_gates_is_active() {
+        // 必要技能.md §3: 特殊能力 `分身=値 (撃墜数Lv100)` は、撃墜数Lv100 を持たない
+        // パイロットでは無効 (is_active=false)、持つエースでは有効。無条件特殊能力 (装甲) は
+        // 常に有効。populate_active_features 経由で確認。
+        use crate::data::pilot::{PilotData, Sex};
+        let make_unit = || crate::data::unit::UnitData {
+            abilities: Vec::new(),
+            name: "分身機".into(),
+            kana_name: "ぶんしんき".into(),
+            nickname: "分身機".into(),
+            class: "ロボ".into(),
+            pilot_num: 1,
+            item_num: 0,
+            transportation: "陸".into(),
+            speed: 5,
+            size: Size::M,
+            value: 0,
+            exp_value: 0,
+            hp: 5000,
+            en: 100,
+            armor: 500,
+            mobility: 100,
+            adaption: Adaption::parse("AAAA").unwrap(),
+            bitmap: String::new(),
+            weapons: Vec::new(),
+            features: vec![
+                ("装甲".into(), "1000".into()),             // 無条件 → 常に有効
+                ("分身".into(), "値 (撃墜数Lv100)".into()), // §3 必要技能ゲート付き
+            ],
+        };
+        let make_pilot = |name: &str, feats: Vec<(&str, &str)>| PilotData {
+            spirit_commands: Vec::new(),
+            name: name.into(),
+            nickname: name.into(),
+            kana_name: name.into(),
+            sex: Sex::Male,
+            class: String::new(),
+            adaption: Adaption::parse("AAAA").unwrap(),
+            exp_value: 0,
+            infight: 100,
+            shooting: 100,
+            hit: 100,
+            dodge: 100,
+            intuition: 100,
+            technique: 100,
+            personality: None,
+            sp: None,
+            bgm: None,
+            bitmap: None,
+            features: feats
+                .into_iter()
+                .map(|(n, v)| (n.to_string(), v.to_string()))
+                .collect(),
+        };
+        // ザコ (撃墜数なし) → 分身 無効、装甲 有効。
+        let mut app = App::new();
+        app.database_mut().units.push(make_unit());
+        app.database_mut().pilots.push(make_pilot("ザコ", vec![]));
+        let mut zako =
+            crate::unit_instance::UnitInstance::new("分身機", "ザコ", crate::Party::Player, 0, 0);
+        populate_active_features(&mut zako, &app);
+        assert!(
+            !crate::feature::has_feature(&zako.active_features, "分身"),
+            "撃墜数なしで §3 ゲートの分身が有効になっている"
+        );
+        assert!(
+            crate::feature::has_feature(&zako.active_features, "装甲"),
+            "無条件の装甲が無効化された"
+        );
+        // エース (撃墜数Lv100) → 分身 有効。
+        let mut app2 = App::new();
+        app2.database_mut().units.push(make_unit());
+        app2.database_mut()
+            .pilots
+            .push(make_pilot("エース", vec![("撃墜数Lv100", "1")]));
+        let mut ace =
+            crate::unit_instance::UnitInstance::new("分身機", "エース", crate::Party::Player, 0, 0);
+        populate_active_features(&mut ace, &app2);
+        assert!(
+            crate::feature::has_feature(&ace.active_features, "分身"),
+            "撃墜数Lv100 を持つエースで分身が無効のまま"
         );
     }
 
