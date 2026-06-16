@@ -671,6 +671,19 @@ impl App {
         self.exec_pc.get()
     }
 
+    /// 検証/デバッグ専用: 現在のフェイズ党派のユニットを AI ロジックで一括行動させる。
+    /// `run_ai_phase` を党派非依存に再利用 (ターゲットは `is_hostile_to` で解決されるため、
+    /// 味方フェイズに呼べば味方が敵へ前進・攻撃する)。verify-archive のヘッドレス drive が
+    /// 「味方フェイズに味方を自動行動させて戦闘を勝敗まで通す」ために使う。通常プレイの
+    /// 手動操作には一切影響しない (このメソッドはエンジン内部から呼ばれない)。
+    /// Battle 中の MapView でのみ作用し、行動後に勝敗判定を回す。
+    pub fn debug_run_phase_ai(&mut self) {
+        if self.scene == Scene::MapView && self.stage_state == crate::stage::StageState::Battle {
+            self.run_ai_phase();
+            self.check_victory();
+        }
+    }
+
     /// 直近の `Wait Click` を右クリックで解除したフラグを設定する。
     pub fn set_wait_click_right(&self, v: bool) {
         self.wait_click_right.set(v);

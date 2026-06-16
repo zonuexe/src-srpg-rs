@@ -457,6 +457,10 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
         // あればそれを選ぶ (タイトル/難易度設定メニューを抜けてゲームを進める。既定は ask_choice
         // で従来挙動を維持＝他シナリオの smoke に非影響)。
         let autostart = env::var("VERIFY_AUTOSTART").is_ok();
+        // VERIFY_AUTOPLAY=1: Battle の味方フェイズで味方を AI で自動行動させてから
+        // EndPhase する (前進・攻撃して戦闘を勝敗まで通す)。敵が待機配置で動かない
+        // シナリオ (D スパロボ戦記) でも戦闘を実際に走らせて検証できる。
+        let autoplay = env::var("VERIFY_AUTOPLAY").is_ok();
         let menu_choice = move |options: &[String]| -> u32 {
             if autostart {
                 // ① 【開始】/【START】 等の括弧付き進行アクション (タイトル/難易度設定を抜ける)。
@@ -596,8 +600,33 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                     .iter()
                     .filter(|u| !u.off_map)
                     .count();
+                // VERIFY_AUTOPLAY: 味方を AI で前進・攻撃させてから EndPhase する。
+                let pos_dump = |app: &src_core::App| -> Vec<String> {
+                    app.database()
+                        .unit_instances
+                        .iter()
+                        .filter(|u| !u.off_map)
+                        .map(|u| format!("{}[{:?}]@({},{})", u.unit_data_name, u.party, u.x, u.y))
+                        .collect()
+                };
+                let action = if autoplay {
+                    let before = pos_dump(&app);
+                    app.debug_run_phase_ai();
+                    let after = pos_dump(&app);
+                    // 最初の数ステップだけ位置変化/撃破の有無をダンプする。
+                    if step < 50 {
+                        if before != after {
+                            println!("      autoplay: {} → {}", before.join(" "), after.join(" "));
+                        } else {
+                            println!("      autoplay: 変化なし ({} 体)", before.len());
+                        }
+                    }
+                    "autoplay→EndPhase"
+                } else {
+                    "EndPhase"
+                };
                 println!(
-                    "  [{step}] Battle idle (turn {} {:?}) {map_info} on_map={on_map}/{} cursor={:?} scene={:?} → EndPhase",
+                    "  [{step}] Battle idle (turn {} {:?}) {map_info} on_map={on_map}/{} cursor={:?} scene={:?} → {action}",
                     app.turn().number,
                     app.turn().phase,
                     app.database().unit_instances.len(),
