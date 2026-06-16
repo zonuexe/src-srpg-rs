@@ -167,10 +167,14 @@ auto-drive は当初このインターミッション項目を素通りしてい
    パイロット一覧）の**値に化け**、比較が常に失敗していた（データロードの行検出が壊れる真因）。修正＝クオート内は `$(...)` 補間のみ展開し
    裸の `name[expr]`/`Func(args)` はリテラル扱い（回帰 `expand_vars_keeps_indexed_var_literal_inside_quotes`、全テスト緑）。**配列変数と同名の
    文字列リテラルを使う全シナリオに効く一般修正**。→ 修正後はデータロードが正しく行を検出（`「全て作成済み」`まで到達）。
-   **ただし データロードは CMaking の exit ではないと判明**: `Break`（264）は内側の読込 Do-Whileを抜けるだけで、その後 `Close`→`Goto 召喚画面`（277）で
-   **必ず 召喚画面 へループ**。真の exit は `Case ＥＸＩＴ`（278→`ClearObj`+`Continue`）だが **召喚画面 メニューに `ＥＸＩＴ` 選択肢が無く**、
-   どう `選択=ＥＸＩＴ` になるか不明（`Continue` の対象ループ含め要解析）。**＝CMaking の正規 exit は依然未解明**（実機での exit 操作 or Continue/ループ
-   意味論の精査が次セッション）。combat は実証済（`VERIFY_SEAT_DEBUG`）なので exit/搭乗/出撃は任意課題。
+   **ただし データロードは CMaking の exit ではないと判明**: `Break`（264）は内側の読込 Do-Whileを抜けるだけで `Close`→`Goto 召喚画面`（277）で
+   **必ずループ**。✅ **CMaking プロローグの構造を全解析した結論＝この fixture では正規 exit がヘッドレス到達不可**: ① 召喚画面 メニューに `ＥＸＩＴ`
+   選択肢が無い（`Case ＥＸＩＴ` を起動できない）② 各 Case の `Continue` は唯一の Do（`Wait Click` ループ 110-112）へ戻る＝再描画でループ
+   ③ データロード/決定 とも処理後 `Goto 召喚画面`/`Continue` でループ ④ トップレベルに `Return` が無い（`Return` は `召喚キャラデータ作成` 等の
+   サブ関数用）。エンジンは `return_from_intermission_subcommand_if_idle` で **idle 時のみ**インターミッションへ戻すが、CMaking は常に Wait Click の
+   pending menu を持つため idle にならない。**＝正規 exit は「データロードで save を読む」流れ前提の設計で、save 無し fixture では詰む**。
+   次セッション候補: 実機（ブラウザ）で正規 exit 操作を確認（Esc 等で framework が subcommand を抜けるか）。combat は実証済（`VERIFY_SEAT_DEBUG`）
+   なので exit/搭乗/出撃は任意課題。
 2. **ロスター追加 ≠ 機体搭乗**: キャラメイキングはパイロットを**ロスターに追加するだけ**で、`パイロット不在` 機への搭乗は**後段の別工程**
    （出撃準備／乗せ替え）。drive 終了時も `ガンダム pilot=""` のまま。搭乗工程の drive も要追加。
 3. ✅✅✅ **戦闘の成立は実証済**（commit `16caf45`）: 出撃導線（CMaking exit→搭乗）を迂回し、`VERIFY_SEAT_DEBUG=1`（`App::debug_seat_db_pilot`）で
