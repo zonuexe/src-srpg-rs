@@ -5227,7 +5227,11 @@ fn exec_command_pc(
             if xargs.len() < 2 || xargs.len() > 3 {
                 return Err(err(line, "Inputコマンドの引数の数が違います"));
             }
-            let var = xargs[0].clone();
+            // 第 1 引数は代入先 (lvalue)。`xargs` は値展開済みなので、`名前[キー]` 形式の
+            // 配列変数が**現在値に化けて**しまう (例: 2 回目の Input で前回値 "417776" が
+            // キー名になり、入力が元の変数を更新しない)。`Set` と同じく生の `args[0]` を
+            // `resolve_lhs_name` で格納キーへ解決する (添字 expr は評価し、変数値展開はしない)。
+            let var = resolve_lhs_name(app, &args[0]);
             let prompt = xargs[1].clone();
             let default = xargs.get(2).cloned().unwrap_or_default();
             app.set_script_var(var.clone(), default.clone());
@@ -13816,6 +13820,27 @@ Stage $(name)
         // 数値応答 (DialogYes 相当) は default を保持して進む
         assert!(app.respond_dialog(0));
         assert_eq!(app.script_var("name"), "太郎");
+    }
+
+    #[test]
+    fn input_array_var_target_resolves_to_key_not_value() {
+        // 回帰: 配列変数 `name[key]` への Input は、代入先を**現在値に値展開**しては
+        // ならない。既に値が入った状態で Input すると、旧実装は前回値をキー名に化けさせ、
+        // テキスト応答が元変数を更新しない不具合があった (D スパロボ戦記キャラメイキングの
+        // 2 人目以降の名前入力が前回値のまま固まる原因)。
+        let mut app = App::new();
+        // 1 回目の入力相当で既に値が入っている状態を作る。
+        app.set_script_var("召喚キャラ[名前]".to_string(), "417776".to_string());
+        let stmts = event::parse("Input 召喚キャラ[名前] 名前を入力 \"\"\n").unwrap();
+        execute(&mut app, &stmts).unwrap();
+        // モーダルの var_name は格納キー (現在値 "417776" ではない)。
+        assert!(matches!(
+            app.pending_dialog(),
+            Some(crate::PendingDialog::Input { var_name, .. }) if var_name == "召喚キャラ[名前]"
+        ));
+        // テキスト応答が正しいキーを更新する。
+        assert!(app.respond_dialog_text("パイロイ".to_string()));
+        assert_eq!(app.script_var("召喚キャラ[名前]"), "パイロイ");
     }
 
     #[test]
