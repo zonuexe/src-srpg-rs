@@ -459,9 +459,12 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
         let autostart = env::var("VERIFY_AUTOSTART").is_ok();
         let menu_choice = move |options: &[String]| -> u32 {
             if autostart {
+                // 【開始】/【START】 等の括弧付き進行アクションを優先 (タイトル/難易度設定を抜ける)。
+                // 注: 機体確定の `決定する` 等への自動進行は確認ループに陥るため踏み込まない
+                //     (キャラメイキング完走は次セッションの drive 拡張課題)。
                 if let Some(i) = options.iter().position(|o| {
                     o.contains('【')
-                        && ["開始", "START", "決定", "実行", "はい"]
+                        && ["開始", "START", "実行", "はい"]
                             .iter()
                             .any(|k| o.contains(k))
                 }) {
