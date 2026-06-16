@@ -459,9 +459,9 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
         let autostart = env::var("VERIFY_AUTOSTART").is_ok();
         let menu_choice = move |options: &[String]| -> u32 {
             if autostart {
-                // 【開始】/【START】 等の括弧付き進行アクションを優先 (タイトル/難易度設定を抜ける)。
-                // 注: 機体確定の `決定する` 等への自動進行は確認ループに陥るため踏み込まない
-                //     (キャラメイキング完走は次セッションの drive 拡張課題)。
+                // 【開始】/【START】 等の括弧付き進行アクションのみ優先 (タイトル/難易度設定を抜ける)。
+                // 注: 機体確定の `決定する` を選んでも 機体選択開始 のメニューがループする
+                //     (Ask 結果/Switch ルーティング or クリック座標の深い問題、§2 参照)。次セッション課題。
                 if let Some(i) = options.iter().position(|o| {
                     o.contains('【')
                         && ["開始", "START", "実行", "はい"]
@@ -514,6 +514,8 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                         ("Talk", format!("{speaker}: {}", trunc(body, 40)), 0)
                     }
                     PendingDialog::WaitClick => ("WaitClick", String::new(), 0),
+                    // Confirm は choice 0 = はい (respond_dialog で 0→選択=1=Yes に反転される)。
+                    // 機体確定「…でいいですか？」も難易度「開始しますか？」も 0(=Yes) で進む。
                     PendingDialog::Confirm { question, .. } => ("Confirm", trunc(question, 40), 0),
                     PendingDialog::Menu {
                         prompt, options, ..
@@ -524,7 +526,9 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                     ),
                     PendingDialog::Input { prompt, .. } => ("Input", trunc(prompt, 40), 0),
                 };
-                // 対話の発生元ラベルを exec_pc の逆引きで特定 (動的構築メニューの源 triage)。
+                // 対話の発生元を exec_pc の逆引きで特定 (動的構築メニューの源 triage)。
+                // ラベル名はエンコーディング差で grep 不能なことがあるため、pc が属する
+                // 登録 .eve ファイル名も併記する (eve_entries の [pc, pc+len) レンジ)。
                 let src = {
                     let pc = app.current_exec_pc();
                     let lib = app.script_library();
@@ -535,7 +539,12 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                         .max_by_key(|(_, &p)| p)
                         .map(|(n, p)| format!("{n}@{p}"))
                         .unwrap_or_else(|| "?".to_string());
-                    format!(" {{src pc={pc} {lbl}}}")
+                    let file = eve_entries
+                        .iter()
+                        .find(|(_, p, l)| *p <= pc && pc < p + l)
+                        .map(|(n, _, _)| n.as_str())
+                        .unwrap_or("?");
+                    format!(" {{src pc={pc} {lbl} file={file}}}")
                 };
                 // Menu(Ask) はブラウザの「選択肢をクリック」経路を模して
                 // handle_input(ClickAt) で確定する (プレーン Menu のクリック選択
