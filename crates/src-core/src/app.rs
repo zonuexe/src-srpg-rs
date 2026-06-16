@@ -671,6 +671,62 @@ impl App {
         self.exec_pc.get()
     }
 
+    /// 検証/デバッグ専用: オンマップ各ユニットの武器の発射可否を要約する (verify-archive が
+    /// 「交戦が成立しない」原因 — 武器なし／必要技能 NG／必要気力不足／EN・残弾切れ — を切り分ける)。
+    pub fn debug_firable_report(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for (idx, u) in self.database.unit_instances.iter().enumerate() {
+            if u.off_map {
+                continue;
+            }
+            let weapons = self
+                .database
+                .unit_by_name(&u.unit_data_name)
+                .map(|d| d.weapons.clone())
+                .unwrap_or_default();
+            let parts: Vec<String> = weapons
+                .iter()
+                .map(|w| {
+                    let mark = if self.weapon_firable(idx, w) {
+                        "✓"
+                    } else {
+                        "✗"
+                    };
+                    format!(
+                        "{mark}{}(r{} 気{} EN{} 技{:?})",
+                        w.name,
+                        w.max_range,
+                        w.necessary_morale,
+                        w.en_consumption,
+                        w.necessary_skill()
+                    )
+                })
+                .collect();
+            let max_en = self.database.effective_max_en(u);
+            let pilot_ok = self.database.pilot_by_name(&u.pilot_name).is_some();
+            let combat_ok = self.database.effective_combat_data(idx).is_some();
+            out.push(format!(
+                "{}[{:?}]@({},{}) pilot={:?}{} combat_data={} 気力{} EN{}/{}: {}",
+                u.unit_data_name,
+                u.party,
+                u.x,
+                u.y,
+                u.pilot_name,
+                if pilot_ok { "(✓DB)" } else { "(✗DB欠)" },
+                if combat_ok { "✓" } else { "✗None" },
+                u.morale,
+                max_en.saturating_sub(u.en_consumed),
+                max_en,
+                if parts.is_empty() {
+                    "(武器なし)".to_string()
+                } else {
+                    parts.join(" ")
+                }
+            ));
+        }
+        out
+    }
+
     /// 検証/デバッグ専用: 現在のフェイズ党派のユニットを AI ロジックで一括行動させる。
     /// `run_ai_phase` を党派非依存に再利用 (ターゲットは `is_hostile_to` で解決されるため、
     /// 味方フェイズに呼べば味方が敵へ前進・攻撃する)。verify-archive のヘッドレス drive が

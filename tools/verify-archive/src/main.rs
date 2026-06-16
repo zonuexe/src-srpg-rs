@@ -489,6 +489,7 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
         let mut last_stage_file = app.current_stage_file().to_string();
         println!("  current_stage_file(start)={last_stage_file:?}");
         let mut last_units = app.database().unit_instances.len();
+        let mut firable_reported = false;
         // VERIFY_VAR=a,b,c: 指定した script_var を各ステップでダンプする (ブラウザ `__srcVar`
         // のヘッドレス相当)。D スパロボ戦記の 敵配置数/敵候補/配置場所[7]/味方平均レベル 等の triage 用。
         let verify_vars: Vec<String> = env::var("VERIFY_VAR")
@@ -601,24 +602,28 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                     .filter(|u| !u.off_map)
                     .count();
                 // VERIFY_AUTOPLAY: 味方を AI で前進・攻撃させてから EndPhase する。
-                let pos_dump = |app: &src_core::App| -> Vec<String> {
-                    app.database()
-                        .unit_instances
-                        .iter()
-                        .filter(|u| !u.off_map)
-                        .map(|u| format!("{}[{:?}]@({},{})", u.unit_data_name, u.party, u.x, u.y))
-                        .collect()
-                };
+                // 戦闘開始時に各ユニットの武器発射可否レポートを一度だけ出す (交戦不成立の
+                // 原因 — パイロット欠落/必要技能/気力/EN — を切り分ける)。
                 let action = if autoplay {
-                    let before = pos_dump(&app);
+                    if !firable_reported {
+                        firable_reported = true;
+                        println!("      --- firable report (戦闘開始時) ---");
+                        for line in app.debug_firable_report() {
+                            println!("      {line}");
+                        }
+                    }
+                    let msgs_before = app.messages().len();
                     app.debug_run_phase_ai();
-                    let after = pos_dump(&app);
-                    // 最初の数ステップだけ位置変化/撃破の有無をダンプする。
-                    if step < 50 {
-                        if before != after {
-                            println!("      autoplay: {} → {}", before.join(" "), after.join(" "));
+                    // 最初の数ステップだけ、味方フェイズで戦闘 (新規メッセージ) が発生したか報告する。
+                    if step < 52 {
+                        let new_msgs: Vec<&String> =
+                            app.messages().iter().skip(msgs_before).collect();
+                        if new_msgs.is_empty() {
+                            println!("      autoplay: 攻撃が発生していない (交戦不成立)");
                         } else {
-                            println!("      autoplay: 変化なし ({} 体)", before.len());
+                            for m in new_msgs.iter().take(8) {
+                                println!("      msg+ {m}");
+                            }
                         }
                     }
                     "autoplay→EndPhase"
