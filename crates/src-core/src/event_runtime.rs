@@ -1732,17 +1732,17 @@ fn exec_command_pc(
                 .position(|u| matches_unit_handle(u, &target))
             {
                 app.database_mut().unit_instances[idx].unit_data_name = new_unit.clone();
-                // 変形後フォームの UnitData.features で active_features を更新
-                let new_features = app
+                // 変形後フォームの UnitData.features で active_features を更新 (§3 必要技能ゲート込み)。
+                let feats = app
                     .database()
                     .unit_by_name(&new_unit)
-                    .map(|ud| {
-                        ud.features
-                            .iter()
-                            .map(|(n, v)| crate::feature::ActiveFeature::new(n.clone(), v.clone()))
-                            .collect::<Vec<_>>()
-                    })
+                    .map(|ud| ud.features.clone())
                     .unwrap_or_default();
+                let new_features = crate::necessary_skill::gated_active_features(
+                    &feats,
+                    &app.database().unit_instances[idx],
+                    app.database(),
+                );
                 app.database_mut().unit_instances[idx].active_features = new_features;
                 let u = &app.database().unit_instances[idx];
                 fire = Some((u.pilot_name.clone(), u.unit_data_name.clone(), u.party));
@@ -1788,16 +1788,16 @@ fn exec_command_pc(
             };
             if let Some(i) = target_idx {
                 app.database_mut().unit_instances[i].unit_data_name = mode.clone();
-                let new_feats = app
+                let feats = app
                     .database()
                     .unit_by_name(&mode)
-                    .map(|ud| {
-                        ud.features
-                            .iter()
-                            .map(|(n, v)| crate::feature::ActiveFeature::new(n.clone(), v.clone()))
-                            .collect::<Vec<_>>()
-                    })
+                    .map(|ud| ud.features.clone())
                     .unwrap_or_default();
+                let new_feats = crate::necessary_skill::gated_active_features(
+                    &feats,
+                    &app.database().unit_instances[i],
+                    app.database(),
+                );
                 app.database_mut().unit_instances[i].active_features = new_feats;
                 let u = &app.database().unit_instances[i];
                 let pilot_name = u.pilot_name.clone();
@@ -1848,18 +1848,16 @@ fn exec_command_pc(
                     });
                 if let Some(new_data) = new_data {
                     app.database_mut().unit_instances[i].unit_data_name = new_data.clone();
-                    let new_feats = app
+                    let feats = app
                         .database()
                         .unit_by_name(&new_data)
-                        .map(|ud| {
-                            ud.features
-                                .iter()
-                                .map(|(n, v)| {
-                                    crate::feature::ActiveFeature::new(n.clone(), v.clone())
-                                })
-                                .collect::<Vec<_>>()
-                        })
+                        .map(|ud| ud.features.clone())
                         .unwrap_or_default();
+                    let new_feats = crate::necessary_skill::gated_active_features(
+                        &feats,
+                        &app.database().unit_instances[i],
+                        app.database(),
+                    );
                     app.database_mut().unit_instances[i].active_features = new_feats;
                     let u = &app.database().unit_instances[i];
                     let pilot_name = u.pilot_name.clone();
@@ -11295,23 +11293,11 @@ fn populate_active_features(inst: &mut UnitInstance, app: &App) {
         // スペース区切り `(必要技能)`/`<必要条件>` を剥がして評価し、満たさなければ
         // その特殊能力を無効 (is_active=false) にする。未モデル種別は fail-open
         // (is_satisfied が true) なので誤封印しない。武器/アビリティ/形態ゲートと同じ評価器。
-        let db = app.database();
-        let new_feats: Vec<crate::feature::ActiveFeature> = unit_data
-            .features
-            .iter()
-            .map(|(name, value)| {
-                let (val, skill, cond) = crate::necessary_skill::split_feature_necessary(value);
-                let mut f = crate::feature::ActiveFeature::new(name.clone(), val);
-                let skill_ok =
-                    skill.is_empty() || crate::necessary_skill::is_satisfied(&skill, inst, db);
-                let cond_ok =
-                    cond.is_empty() || crate::necessary_skill::is_satisfied(&cond, inst, db);
-                if !(skill_ok && cond_ok) {
-                    f.is_active = false;
-                }
-                f
-            })
-            .collect();
+        let new_feats = crate::necessary_skill::gated_active_features(
+            &unit_data.features,
+            inst,
+            app.database(),
+        );
         inst.active_features = new_feats;
         // アビリティの実行時状態 (残り回数) を静的データから初期化。index は
         // `UnitData.abilities` と対応させ、使用時にメタデータを引けるようにする。

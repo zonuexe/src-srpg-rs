@@ -6755,15 +6755,11 @@ impl App {
         let Some(idx) = self.database.idx_by_uid(uid) else {
             return false;
         };
-        let (feats, abils) = self
+        let (raw_feats, abils) = self
             .database
             .unit_by_name(new_form)
             .map(|ud| {
-                let feats = ud
-                    .features
-                    .iter()
-                    .map(|(n, v)| crate::feature::ActiveFeature::new(n.clone(), v.clone()))
-                    .collect::<Vec<_>>();
+                let feats = ud.features.clone();
                 let abils = ud
                     .abilities
                     .iter()
@@ -6777,8 +6773,14 @@ impl App {
                 (feats, abils)
             })
             .unwrap_or_default();
+        self.database.unit_instances[idx].unit_data_name = new_form.to_string();
+        // §3 必要技能ゲート込みで新形態の特殊能力を有効化する。
+        let feats = crate::necessary_skill::gated_active_features(
+            &raw_feats,
+            &self.database.unit_instances[idx],
+            &self.database,
+        );
         let u = &mut self.database.unit_instances[idx];
-        u.unit_data_name = new_form.to_string();
         u.active_features = feats;
         u.abilities = abils;
         true

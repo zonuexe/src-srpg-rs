@@ -62,6 +62,31 @@ pub fn split_feature_necessary(value: &str) -> (String, String, String) {
     (buf, skill, cond)
 }
 
+/// 特殊能力リスト `(name, value)` を**必要技能ゲート込み**で `ActiveFeature` に変換する
+/// (必要技能.md §3)。各特殊能力の値末尾の ` (必要技能)`/` <必要条件>` を
+/// `split_feature_necessary` で剥がして `is_satisfied` で評価し、未達なら
+/// `is_active=false` にする。条件無しの特殊能力はそのまま有効。Create/Place・変形・換装・
+/// 合体・形態変更の全 feature 生成サイトで共有し、§3 ゲートを一貫させる。
+pub fn gated_active_features(
+    features: &[(String, String)],
+    unit: &UnitInstance,
+    db: &GameDatabase,
+) -> Vec<crate::feature::ActiveFeature> {
+    features
+        .iter()
+        .map(|(name, value)| {
+            let (val, skill, cond) = split_feature_necessary(value);
+            let mut f = crate::feature::ActiveFeature::new(name.clone(), val);
+            let skill_ok = skill.is_empty() || is_satisfied(&skill, unit, db);
+            let cond_ok = cond.is_empty() || is_satisfied(&cond, unit, db);
+            if !(skill_ok && cond_ok) {
+                f.is_active = false;
+            }
+            f
+        })
+        .collect()
+}
+
 pub fn split_necessary(raw: &str) -> (String, String, String) {
     let mut buf = raw.trim().to_string();
     let mut skill = String::new();
