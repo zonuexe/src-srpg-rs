@@ -742,6 +742,17 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                     app.set_intermission_cursor(last);
                     app.handle_input(src_core::Input::Advance);
                 }
+            } else if matches!(state, src_core::stage::StageState::Battle)
+                && !matches!(app.scene(), src_core::Scene::MapView)
+            {
+                // stage_state=Battle なのに MapView でない (Title/Briefing 等で停留) 場合、
+                // EndPhase/AI は MapView を要求して no-op するため、まず Advance で
+                // 画面を MapView へ進める (タイトル/導入の dismiss 相当)。
+                println!(
+                    "  [{step}] Battle but scene={:?} → Advance (MapView へ)",
+                    app.scene()
+                );
+                app.handle_input(src_core::Input::Advance);
             } else if matches!(state, src_core::stage::StageState::Battle) {
                 // 味方フェーズで idle = プレイヤー操作待ち。ブラウザの「画面を
                 // 進めるだけ」を模して EndPhase でターンを送り、tick で敵 AI を
