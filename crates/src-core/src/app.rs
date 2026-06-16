@@ -3392,6 +3392,7 @@ impl App {
                         d.extend(self.apply_weapon_crit_reposition(def_idx, (cx, cy), &weapon));
                         d.extend(self.apply_weapon_crit_steal(
                             def_idx,
+                            atk_idx,
                             atk_party,
                             def_unit.value,
                             &weapon,
@@ -5826,12 +5827,14 @@ impl App {
         moved
     }
 
-    /// 盗 (`盗`): クリティカル時に相手から資金を奪う (`特殊効果攻撃属性.md`)。
-    /// 「アイテム所有」が無い相手からは修理費の 1/4 の資金。攻撃側が味方のときのみ獲得し、
-    /// 同じ相手からは 1 度だけ (`被盗` 状態で再取得を抑止)。アイテム盗みは未対応。
+    /// 盗 (`盗`): クリティカル時に相手から資金またはアイテムを奪う (`特殊効果攻撃属性.md`)。
+    /// 相手が `アイテム所有=<item>` を持てばそのアイテムを (`レアアイテム所有` があれば 1/8 で
+    /// 代わりにレアアイテムを) 攻撃側へ移す。持たなければ修理費の 1/4 の資金。攻撃側が味方
+    /// (Player) のときのみ。同じ相手からは 1 度だけ (`被盗` 状態で再取得を抑止)。
     fn apply_weapon_crit_steal(
         &mut self,
         def_idx: usize,
+        atk_idx: usize,
         atk_party: crate::Party,
         victim_value: i64,
         weapon: &crate::data::unit::WeaponData,
@@ -5839,11 +5842,33 @@ impl App {
         if !weapon.class.split_whitespace().any(|t| t == "盗") {
             return Vec::new();
         }
-        // 資金は撃破側が味方 (Player) のときのみ。既に盗んだ相手からは再取得しない。
+        // 撃破側が味方 (Player) のときのみ。既に盗んだ相手からは再取得しない。
         if atk_party != crate::Party::Player
             || self.database.unit_instances[def_idx].has_condition("被盗")
         {
             return Vec::new();
+        }
+        // アイテム所有 / レアアイテム所有 (相手が持つ盗めるアイテム)。
+        let feats = &self.database.unit_instances[def_idx].active_features;
+        let rare = crate::feature::feature_value(feats, "レアアイテム所有")
+            .map(str::to_string)
+            .filter(|s| !s.is_empty());
+        let normal = crate::feature::feature_value(feats, "アイテム所有")
+            .map(str::to_string)
+            .filter(|s| !s.is_empty());
+        // レアアイテム所有があれば 1/8 で代わりにレアを盗む (`&&` 短絡で非保有時は RNG 不消費)。
+        let stolen_item = if rare.is_some() && self.next_u32() % 8 == 0 {
+            rare
+        } else {
+            normal
+        };
+
+        if let Some(item) = stolen_item {
+            self.database.unit_instances[atk_idx]
+                .equipped_items
+                .push(item.clone());
+            self.database.unit_instances[def_idx].add_condition(crate::Condition::new("被盗", -1));
+            return vec![format!("アイテム奪取: {item}")];
         }
         let amount = (victim_value / 4).max(0);
         if amount <= 0 {
@@ -13298,13 +13323,64 @@ mod tests {
         };
         let money0 = app.money();
         // 修理費 800 → 1/4 = 200。
-        let applied = app.apply_weapon_crit_steal(def_idx, crate::Party::Player, 800, &weapon);
+        let applied = app.apply_weapon_crit_steal(def_idx, 0, crate::Party::Player, 800, &weapon);
         assert_eq!(applied, vec!["資金奪取 +200".to_string()]);
         assert_eq!(app.money(), money0 + 200, "資金 +200");
         // 再取得は不可 (被盗)。
-        let applied2 = app.apply_weapon_crit_steal(def_idx, crate::Party::Player, 800, &weapon);
+        let applied2 = app.apply_weapon_crit_steal(def_idx, 0, crate::Party::Player, 800, &weapon);
         assert!(applied2.is_empty(), "同じ相手から再取得しない");
         assert_eq!(app.money(), money0 + 200, "資金は変わらない");
+    }
+
+    /// 盗: 相手が「アイテム所有」を持つときは資金でなくアイテムを攻撃側へ奪う。
+    #[test]
+    fn weapon_steal_takes_item_when_target_owns_one() {
+        use crate::data::unit::WeaponData;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6); // 攻撃側 = idx 0
+        let target = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "PILOT",
+            crate::Party::Enemy,
+            3,
+            6,
+        ));
+        let def_idx = app.database().idx_by_uid(&target).unwrap();
+        // 対象に「アイテム所有=賢者の石」を付与 (active_features)。
+        app.database_mut().unit_instances[def_idx]
+            .active_features
+            .push(crate::feature::ActiveFeature::new(
+                "アイテム所有",
+                "賢者の石",
+            ));
+        let weapon = WeaponData {
+            name: "盗賊剣".into(),
+            power: 100,
+            min_range: 1,
+            max_range: 1,
+            precision: 0,
+            bullet: -1,
+            en_consumption: 0,
+            necessary_morale: 0,
+            adaption: "AAAA".into(),
+            critical: 0,
+            class: "盗".into(),
+            extras: Vec::new(),
+        };
+        let money0 = app.money();
+        let applied = app.apply_weapon_crit_steal(def_idx, 0, crate::Party::Player, 800, &weapon);
+        assert_eq!(applied, vec!["アイテム奪取: 賢者の石".to_string()]);
+        assert!(
+            app.database().unit_instances[0]
+                .equipped_items
+                .contains(&"賢者の石".to_string()),
+            "攻撃側がアイテムを取得"
+        );
+        assert_eq!(app.money(), money0, "アイテム盗み時は資金を奪わない");
+        // 再取得不可 (被盗)。
+        let applied2 = app.apply_weapon_crit_steal(def_idx, 0, crate::Party::Player, 800, &weapon);
+        assert!(applied2.is_empty(), "同じ相手から再取得しない");
     }
 
     /// 衰L2 武器のクリティカル時減衰: 対象の現在 HP が半分になる (撃破はしない)。
