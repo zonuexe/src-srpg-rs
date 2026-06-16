@@ -142,9 +142,22 @@ Briefing → Title [【START】|…|真ゲッター/マジンガー/…] → 難
    `KeyState(16)` 等は呼び出し 4 回で自動的に "1"(押下) を返す anti-freeze がある（`event_runtime.rs:9014` `KEYSTATE_AUTO_BREAK_THRESHOLD=4`、
    `KeyState(2)`=右クリックは take_wait_click_right のワンショット）。**→ 独自 UI の `Loop While (… Not KeyState(16) …)` はヘッドレスでも
    auto-break で進む**（ただし入力は既定/空のまま各 `現ダイアログ` 段階を高速通過し `召喚キャラ[名前]` 等が空→ハッシュ生成名になる）。
-   **残る詰まりは標準 Ask `[機体能力を確認する|決定する]` で `決定する` が同じメニューを再提示する点**。この Ask の選択肢は
-   **どの .eve/データにも literal で無く動的構築**のため grep で辿れない → **エンジンに「Ask/Menu 生成時の発生元ラベル/pc をログ出力する計装」を
-   一時的に足して源を特定する**のが確実な次手。
+   **残る詰まり = 機体選択メニューのループ**。動的構築で grep 不能だったが、**新設の対話発生元計装で源を特定**（`App.exec_pc` ＋
+   verify-archive が `script_library.labels`/`eve_entries` 逆引き）→ **root `スパロボ戦記.eve` の `機体選択開始` ラベル**（engine デコーダで
+   `VERIFY_DUMP_PATH="戦記.eve"` ダンプして判読。iconv SHIFT_JIS は一部文字化けする）。**確定したフロー**:
+   ```
+   機体選択開始:                                  ← 機体リスト Ask で 入手ユニット を選ぶ
+     Ask "$(愛称)" キャンセル可 / 機体能力を確認する / 決定する   → Switch 選択
+       Case 0 (キャンセル)            → Goto 機体選択開始 (loop)
+       Case 1 (機体能力を確認する)    → Create 味方 仮 + Call 機体確認 + RemovePilot + Goto 機体選択開始 (loop)  ← ここで units 0→1 (仮表示)
+       Case 2 (決定する)              → Confirm "…でいいですか？" → If 選択=1 (はい) Create 味方+...+サブ機体選択開始 へ / Else Goto loop
+   ```
+   **エンジン知見（重要）**: `Confirm` の応答は **`respond_dialog(0)`→`選択=1`(はい) に反転**（`app.rs:1036`、`0=>"1"`）。
+   従って drive の Confirm 既定 0 は「はい」で正しい。**にもかかわらず `決定する`(Case 2 へ) を選ぶと機体メニューがループし、`Confirm` に
+   到達せず機体リストが重複増殖する**（`確認する`(Case 1) を選ぶ baseline は units 0→1 する）。→ **次手**: Case 2 が `Confirm` に届かない理由を
+   切り分ける（drive のクリック座標が `決定する`(option 2) を外している疑い＝`click(120,334)` 命中判定、あるいは `Ask` 結果 `選択` が "2" にならず
+   `Switch` が Case 2 に入らない疑い）。verify-archive の Menu クリック座標ロジック（選択肢 y=304+行*20+10）と `Ask` の `選択` 格納（`store_value`/
+   `option_keys`/index）を突き合わせる。これが通れば 決定→サブ機体選択→…→出撃→敵配置 まで一気に検証できる。
 2. キャラメイキング完走後に味方が出撃すれば `味方数`/`味方平均レベル`/`敵候補`/`敵陣営` が埋まり、**そこで初めて「敵出撃」を検証**できる。
    （敵出撃は味方出撃の後段。順序: ① キャラメイキング完走 → ② 出撃 → ③ 敵配置の検証）。
 3. **再現コマンド**: `cd crates/src-web/tests/fixtures && zip -rq /tmp/sparobo.zip スパロボ戦記 && cd -` →
