@@ -374,21 +374,25 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
     );
 
     // エントリポイントのみ run_from_pc で実行。サブ .eve はロード時に実行しない。
-    // VERIFY_ENTRY=<部分一致> で entry-point を上書きできる (D triage: root シナリオ起点で駆動)。
+    // VERIFY_ENTRY で entry-point を上書きできる (D triage: root シナリオ起点で駆動)。
+    // 形式: 部分一致文字列、または `@N`(登録一覧の 1 始まり index)。
+    // 日本語 env 値はシェル/nix 経由で文字化けしマッチしないことがあるため index 形式を併用。
     let effective_entry: Option<String> = match env::var("VERIFY_ENTRY") {
         Ok(sub) if !sub.trim().is_empty() => {
-            let found = eve_entries
-                .iter()
-                .map(|(n, _, _)| n.clone())
-                .find(|n| n.contains(sub.trim()));
+            let sub = sub.trim();
+            let found = match sub.strip_prefix('@').and_then(|n| n.parse::<usize>().ok()) {
+                Some(idx) if idx >= 1 => eve_entries.get(idx - 1).map(|(n, _, _)| n.clone()),
+                _ => eve_entries
+                    .iter()
+                    .map(|(n, _, _)| n.clone())
+                    .find(|n| n.contains(sub)),
+            };
             match &found {
                 Some(f) => println!("  → entry-point 上書き (VERIFY_ENTRY={sub}): {f}"),
                 None => {
-                    println!(
-                        "  → VERIFY_ENTRY={sub} に一致する .eve なし (既定を使用)。登録 .eve 一覧:"
-                    );
-                    for (n, _, _) in &eve_entries {
-                        println!("      {n}");
+                    println!("  → VERIFY_ENTRY={sub} に一致する .eve なし (既定を使用)。登録 .eve 一覧 (1始まり):");
+                    for (i, (n, _, _)) in eve_entries.iter().enumerate() {
+                        println!("      @{} {n}", i + 1);
                     }
                 }
             }
@@ -449,7 +453,27 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(1);
-        println!("--- drive (click-through, Ask→{ask_choice}) ---");
+        // VERIFY_AUTOSTART=1: メニューに 【開始】/【START】/【決定】 等の "進める" 選択肢が
+        // あればそれを選ぶ (タイトル/難易度設定メニューを抜けてゲームを進める。既定は ask_choice
+        // で従来挙動を維持＝他シナリオの smoke に非影響)。
+        let autostart = env::var("VERIFY_AUTOSTART").is_ok();
+        let menu_choice = move |options: &[String]| -> u32 {
+            if autostart {
+                if let Some(i) = options.iter().position(|o| {
+                    o.contains('【')
+                        && ["開始", "START", "決定", "実行", "はい"]
+                            .iter()
+                            .any(|k| o.contains(k))
+                }) {
+                    return i as u32 + 1;
+                }
+                if let Some(i) = options.iter().position(|o| o.contains('【')) {
+                    return i as u32 + 1;
+                }
+            }
+            ask_choice
+        };
+        println!("--- drive (click-through, Ask→{ask_choice}, autostart={autostart}) ---");
         let mut last_stage_file = app.current_stage_file().to_string();
         println!("  current_stage_file(start)={last_stage_file:?}");
         let mut last_units = app.database().unit_instances.len();
@@ -493,7 +517,7 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                     } => (
                         "Menu/Ask",
                         format!("{} [{}]", trunc(prompt, 30), options.join("|")),
-                        ask_choice,
+                        menu_choice(options),
                     ),
                     PendingDialog::Input { prompt, .. } => ("Input", trunc(prompt, 40), 0),
                 };
