@@ -374,7 +374,22 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
     );
 
     // エントリポイントのみ run_from_pc で実行。サブ .eve はロード時に実行しない。
-    let entry_name = analysis.best();
+    // VERIFY_ENTRY=<部分一致> で entry-point を上書きできる (D triage: root シナリオ起点で駆動)。
+    let effective_entry: Option<String> = match env::var("VERIFY_ENTRY") {
+        Ok(sub) if !sub.trim().is_empty() => {
+            let found = eve_entries
+                .iter()
+                .map(|(n, _, _)| n.clone())
+                .find(|n| n.contains(sub.trim()));
+            match &found {
+                Some(f) => println!("  → entry-point 上書き (VERIFY_ENTRY={sub}): {f}"),
+                None => println!("  → VERIFY_ENTRY={sub} に一致する .eve なし (既定を使用)"),
+            }
+            found.or_else(|| analysis.best().map(String::from))
+        }
+        _ => analysis.best().map(String::from),
+    };
+    let entry_name = effective_entry.as_deref();
     let mut run_errors = 0;
     let mut run_count = 0;
     for (name, pc, _len) in &eve_entries {
@@ -395,7 +410,7 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
     // src-web (archive.rs) と同じロード末尾ブートストラップ:
     // `Stage` / `Continue` を使わないシナリオでもエントリ .eve をステージ
     // ファイルとして `スタート` 発火 → 味方フェイズ開始まで進める。
-    if let Some(best) = analysis.best() {
+    if let Some(best) = effective_entry.as_deref() {
         app.bootstrap_stage_after_load(best);
         println!("  → ステージブートストラップ: {best}");
     }
