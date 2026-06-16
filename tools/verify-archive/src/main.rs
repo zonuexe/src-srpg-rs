@@ -497,10 +497,10 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
         let mut cmaking_named = false; // 現キャラの名前入力済みか (キャラごとに false に戻す)。
         let mut cmaking_char = 0u32; // 一意名のための連番。
         let mut cmaking_pilots = 0u32; // 部隊ロスターに加えたパイロット数。
-                                       // 2 人目以降の名前入力は (現状) エンジン側のテキスト入力の状態持ち越しで全角カタカナ
-                                       // 判定が誤発火し詰むため、1 人作れたところで drive を終了して状態を報告する。
-                                       // (キャラメイキングは全 `パイロット不在` 機が埋まるまでループし手動 exit が無い。)
-        const CMAKING_TARGET: u32 = 1;
+                                       // キャラメイキングは内部ループで何人でも作れる (手動 exit を別途要実装)。
+                                       // D は機体 2 機なので 2 人作ったら drive を終了して状態を報告する
+                                       // (キャラメイキングの exit→搭乗→出撃 の drive はこれから/次セッション)。
+        const CMAKING_TARGET: u32 = 2;
         // インターミッションで「キャラクターメイキング」を一度実行したか (未実行なら次ステージへ
         // 進む前にキャラメイキングを選び、パイロットを作って味方機に乗せる)。
         let mut cmaking_intermission_done = false;
@@ -639,13 +639,12 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                     println!("  [{step}] {kind} {snippet}{src} → input(\"テスト\")");
                     app.respond_dialog_text("テスト".to_string());
                 } else if cmaking_exit {
-                    // 1 人目は正常に作成しロスターへ追加できるが、2 人目以降はエンジンのテキスト
-                    // 入力の状態持ち越しで全角カタカナ判定が誤発火し詰む (要 src-core 側修正)。
-                    // キャラメイキングは全 `パイロット不在` 機が埋まるまでループし手動 exit が無いため、
-                    // ここで作成済みパイロットを報告して drive を終了する。
-                    // (注: パイロットはロスターに追加されるだけで、機体への搭乗は後段の別工程。)
+                    // 目標人数 (D は機体 2 機ぶん) を作成済み。キャラメイキングの exit→搭乗→出撃 の
+                    // drive はまだ無いため、ここで作成済みパイロットを報告して drive を終了する。
+                    // (注: パイロットはロスターに追加されるだけで、機体への搭乗は後段の別工程。
+                    //  ※ 2 人目以降のカタカナ名入力が固まる不具合は src-core 側で修正済 = commit 865844c。)
                     println!(
-                        "  [{step}] {kind} {snippet}{src} → キャラメイキング完走不可 (2人目の入力でエンジン詰み) → drive 終了"
+                        "  [{step}] {kind} {snippet}{src} → 目標 {CMAKING_TARGET} 人作成済 → drive 終了 (exit/搭乗/出撃は未実装)"
                     );
                     break;
                 } else if cancel_menu {
