@@ -10,7 +10,7 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 ## 現在地（2026-06-16）
 
 **テスト**: `cargo test -p src-core` 全緑（**1874 件**）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。  
-**ブランチ／コミット**: **`feat/necessary-skill-gate`**（**本セッション 59 コミット・未 push**）。`origin/master`=`88ad16f` から先行。
+**ブランチ／コミット**: **`feat/necessary-skill-gate`**（**本セッション 60 コミット・未 push**）。`origin/master`=`88ad16f` から先行。
 本セッションで実エンジンバグ **4 件**修正（pilot.txt カンマ形式特殊能力・`Input` 配列 lvalue 値展開・`expand_vars` クオート内 `name[expr]` 展開・マップ範囲外クラッシュ）。
 push はユーザの明示指示で行う（no-auto-push）。**D スパロボ戦記の「進行不能」は §2 で解決済**（エンジンは戦闘まで完走、原因は harness）。
 次セッションの残課題は §1 の設計判断要件（魅了/憑依）・大規模移植（GBA）・検証制約（A2/演出/詳細UI）が中心。
@@ -471,7 +471,10 @@ target/debug/scan_eve /tmp/out
   TukabarkSampleScenario01（テイルズ系）が 15x15 マップに (19,19) 等へ敵配置し、敵フェイズの `cell()` でパニックして**戦闘が一切進まなかった**。
   範囲外は既定セル返し/no-op に堅牢化（回帰テスト付き）→ 同シナリオの戦闘（攻撃/反撃/クリティカル/撃破/精神/マップ兵器）が完走、**D に続き
   2 本目の実シナリオで combat 健全を実証**。併せて drive を「Battle なのに非 MapView なら Advance」に拡張（`463ecb6`、Title/Configuration で停留する
-  シナリオの救済）。本セッションで実エンジンバグ計 **4 件**修正（pilot.txt カンマ形式・`Input` 配列 lvalue・`expand_vars` クオート内展開・マップ範囲外クラッシュ）。
+  シナリオの救済）。⑦ **3 本目の実シナリオ `スーパーヒーロー伝説`（らんま系）を Briefing→Battle→Victory まで完走確認**（バグ無し・debug bypass 無し。
+  `乱馬→校長[猛虎高飛車]: 撃破！EXP+190 資金+10000`、反撃/クリティカル/`【勝利】敵を全滅させました` まで正常）＝**最もクリーンな end-to-end 検証**。
+  本セッションで実エンジンバグ計 **4 件**修正（pilot.txt カンマ形式・`Input` 配列 lvalue・`expand_vars` クオート内展開・マップ範囲外クラッシュ）、
+  実シナリオ **3 本**で combat 健全を実証（D／テイルズ／らんま）。
 
 ### 2026-06-15/16 セッション（master、`origin/master`=`0de48d9` 以降）
 
