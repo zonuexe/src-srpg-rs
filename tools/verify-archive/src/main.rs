@@ -383,7 +383,14 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                 .find(|n| n.contains(sub.trim()));
             match &found {
                 Some(f) => println!("  → entry-point 上書き (VERIFY_ENTRY={sub}): {f}"),
-                None => println!("  → VERIFY_ENTRY={sub} に一致する .eve なし (既定を使用)"),
+                None => {
+                    println!(
+                        "  → VERIFY_ENTRY={sub} に一致する .eve なし (既定を使用)。登録 .eve 一覧:"
+                    );
+                    for (n, _, _) in &eve_entries {
+                        println!("      {n}");
+                    }
+                }
             }
             found.or_else(|| analysis.best().map(String::from))
         }
