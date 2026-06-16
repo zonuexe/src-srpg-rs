@@ -13851,6 +13851,20 @@ Stage $(name)
     }
 
     #[test]
+    fn if_instr_with_bracket_literal_matches() {
+        // 回帰候補: `If Instr(v, "設定[パイロット一覧]")` のように、クオート内に [..] を含む
+        // リテラルを条件で使ったとき正しくマッチするか (D データロードの行検出で使用)。
+        let mut app = App::new();
+        app.set_script_var(
+            "v".to_string(),
+            "Set 設定[パイロット一覧] 人工知能(ザコ) ".to_string(),
+        );
+        let src = "If Instr(v, \"設定[パイロット一覧]\") Then\nSet r found\nEndif\n";
+        execute(&mut app, &event::parse(src).unwrap()).unwrap();
+        assert_eq!(app.script_var("r"), "found");
+    }
+
+    #[test]
     fn loadfiledialog_returns_verify_var_else_empty() {
         // 実機はファイル選択ダイアログ。ヘッドレスでは未設定なら "" (キャンセル相当)、
         // `__verify_loadfile` 設定時はそのパスを返す (検証ドライバの `データロード` 駆動用)。

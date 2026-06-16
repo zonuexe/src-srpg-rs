@@ -465,6 +465,11 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
         // パイロット不在のまま出撃した味方機に DB パイロットを検証用に乗せて戦闘を成立させる。
         // キャラメイキングはスキップし、Battle 開始時に debug_seat_db_pilot を一度呼ぶ。
         let seat_debug = env::var("VERIFY_SEAT_DEBUG").is_ok();
+        // VERIFY_CMAKING_EXIT=1: キャラメイキングを目標人数まで進めた後、`データロード`
+        // 経路（唯一の Break）で CMaking を正規に抜ける。VFS に最小 .src を置き
+        // `__verify_loadfile` をセットして LoadFileDialog に返させ、パイロットリスト Ask を
+        // キャンセル→RemovePilot→Break で抜ける。
+        let cmaking_exit_drive = env::var("VERIFY_CMAKING_EXIT").is_ok();
         let menu_choice = move |options: &[String]| -> u32 {
             if autostart {
                 // ① 【開始】/【START】 等の括弧付き進行アクション (タイトル/難易度設定を抜ける)。
@@ -529,6 +534,28 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                 .collect();
             println!("  [{step}] vars: {}", parts.join(" "));
         };
+        // VERIFY_CMAKING_EXIT: データロード経路の exit 用に最小 .src を VFS に用意する。
+        // 書式は読込側 `Right(行, Len-16)` (= "Set 設定[パイロット一覧] " 16文字を剥がす) ＋
+        // `Left(.., Len-1)` (末尾1文字を剥がす) に合わせ、行末に捨て1文字 (空白) を付ける。
+        if cmaking_exit_drive {
+            let pilot = app
+                .database()
+                .pilots
+                .first()
+                .map(|p| p.name.clone())
+                .unwrap_or_default();
+            let path = "cmexit.src";
+            let h = app.vfs_open(path, "出力");
+            app.vfs_print(&h, format!("Set 設定[パイロット一覧] {pilot} "));
+            app.vfs_close(&h);
+            app.set_script_var("__verify_loadfile".to_string(), path.to_string());
+            let rh = app.vfs_open(path, "入力");
+            let readback = app.vfs_read_line(&rh);
+            app.vfs_close(&rh);
+            println!(
+                "  cmaking_exit setup: .src='{path}' load_pilot='{pilot}' readback={readback:?}"
+            );
+        }
         for step in 0..400 {
             let state = app.stage_state();
             dump_vars(&app, step);
@@ -563,7 +590,13 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                         let is_cmaking = options.iter().any(|o| o == "名前入力")
                             && options.iter().any(|o| o == "決定");
                         let c = if autostart && is_cmaking {
-                            if !cmaking_named {
+                            if cmaking_exit_drive
+                                && cmaking_pilots >= CMAKING_TARGET
+                                && options.iter().any(|o| o == "データロード")
+                            {
+                                // 目標人数作成後はデータロードを選んで Break 経路で抜ける。
+                                options.iter().position(|o| o == "データロード").unwrap() as u32 + 1
+                            } else if !cmaking_named {
                                 // まず「名前入力」を開き、続く Input で一意名を与える。
                                 options.iter().position(|o| o == "名前入力").unwrap() as u32 + 1
                             } else {
@@ -608,9 +641,13 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                 let cancel_menu = matches!(&d, PendingDialog::Menu { options, .. }
                     if !options.is_empty()
                         && options.iter().all(|o| matches!(o.as_str(),
-                            "ユニット" | "機体" | "レーダー" | "武器" | "パイロット")));
+                            "ユニット" | "機体" | "レーダー" | "武器" | "パイロット")))
+                    // データロードの パイロットリスト Ask (「キャンセルで作成終了」) も右クリックで
+                    // キャンセルし、RemovePilot→パイロットロード終了→Break で CMaking を抜ける。
+                    || matches!(&d, PendingDialog::Menu { prompt, .. } if prompt.contains("作成終了"));
                 // 目標人数を作ったらキャラメイキングの 召喚画面 メニューをキャンセルして抜ける。
                 let cmaking_exit = autostart
+                    && !cmaking_exit_drive
                     && cmaking_pilots >= CMAKING_TARGET
                     && matches!(&d, PendingDialog::Menu { options, .. }
                         if options.iter().any(|o| o == "名前入力")
