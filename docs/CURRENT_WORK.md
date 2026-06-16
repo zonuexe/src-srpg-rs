@@ -10,7 +10,7 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 ## 現在地（2026-06-16）
 
 **テスト**: `cargo test -p src-core` 全緑（**1874 件**）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。  
-**ブランチ／コミット**: **`feat/necessary-skill-gate`**（**本セッション 36 コミット・未 push**）。`origin/master`=`88ad16f` から先行。
+**ブランチ／コミット**: **`feat/necessary-skill-gate`**（**本セッション 39 コミット・未 push**）。`origin/master`=`88ad16f` から先行。
 push はユーザの明示指示で行う（no-auto-push）。**D スパロボ戦記の「進行不能」は §2 で解決済**（エンジンは戦闘まで完走、原因は harness）。
 次セッションの残課題は §1 の設計判断要件（魅了/憑依）・大規模移植（GBA）・検証制約（A2/演出/詳細UI）が中心。
 
