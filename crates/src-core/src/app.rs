@@ -1913,12 +1913,11 @@ impl App {
             if self.database.unit_instances[i].party != party {
                 continue;
             }
-            let unit_name = self.database.unit_instances[i].unit_data_name.clone();
+            // 改造・強化パーツ・ボスランクを反映した実効最大 HP を基準にする
+            // (毒ダメージ / 死の宣告 が育成後の HP に追従する)。
             let max_hp = self
                 .database
-                .unit_by_name(&unit_name)
-                .map(|u| u.hp)
-                .unwrap_or(0);
+                .effective_max_hp(&self.database.unit_instances[i]);
             let u = &mut self.database.unit_instances[i];
             // 毒: 最大 HP の 10%。毒属性への弱点で倍・耐性で半減 (特殊効果攻撃属性.md)。
             if u.has_condition("毒") && max_hp > 0 {
@@ -16449,6 +16448,31 @@ End
             "毒 should still be present (permanent condition)"
         );
         assert!(u.has_condition("永続バフ"));
+    }
+
+    /// 毒ダメージは静的 HP ではなく実効最大 HP (改造/強化パーツ反映) の 10%。
+    #[test]
+    fn poison_damage_scales_with_effective_max_hp() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Tough", 2, 6);
+        // 改造段階を上げ、実効最大 HP を静的 HP より大きくする。
+        app.database_mut().unit_instances[0].upgrade_level = 5;
+        app.database_mut().unit_instances[0].add_condition(crate::Condition::new("毒", -1));
+        let eff = app
+            .database()
+            .effective_max_hp(&app.database().unit_instances[0]);
+        let static_hp = app.database().unit_by_name("Tough").unwrap().hp;
+        assert!(
+            eff > static_hp,
+            "改造で実効 HP が静的 HP を超える (eff={eff}, static={static_hp})"
+        );
+        app.begin_phase(crate::Phase::Player);
+        assert_eq!(
+            app.database().unit_instances[0].damage,
+            (eff / 10).max(1),
+            "毒ダメージは実効最大 HP の 10% (静的 HP 基準ではない)"
+        );
     }
 
     /// 死の宣告 (告) は期限切れ (次の自軍フェイズ) で HP を 1 にする。ボスは無効。
