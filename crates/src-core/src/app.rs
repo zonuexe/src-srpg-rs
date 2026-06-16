@@ -7357,6 +7357,33 @@ impl App {
         let Some((combined_form, partners)) = self.combine_partners(host_uid) else {
             return;
         };
+        // 合体形態の必要技能 (`必要技能.md` §4) を構成全員のパイロットで判定する。満たさなければ
+        // 合体しない。判定は merged パイロットを host へ一時設定して評価し、即座に復元する
+        // (以降の本処理が merged を再計算するため、ここでは破壊しない非破壊チェック)。
+        if let Some(host_idx) = self.database.idx_by_uid(host_uid) {
+            let mut merged = self.database.unit_instances[host_idx].pilot_ids.clone();
+            for p in &partners {
+                if let Some(pu) = self.database.unit_by_uid(p) {
+                    for pid in &pu.pilot_ids {
+                        if !merged.contains(pid) {
+                            merged.push(pid.clone());
+                        }
+                    }
+                }
+            }
+            let saved = std::mem::replace(
+                &mut self.database.unit_instances[host_idx].pilot_ids,
+                merged,
+            );
+            let ok = self.form_skill_ok(host_idx, &combined_form);
+            self.database.unit_instances[host_idx].pilot_ids = saved;
+            if !ok {
+                self.push_message(format!(
+                    "必要技能を満たさないため {combined_form} に合体できません"
+                ));
+                return;
+            }
+        }
         // 構成ユニット (相手) を温存: off_map + life_state="合体"。
         for p in &partners {
             self.database.set_off_map(p, true);
@@ -11575,6 +11602,43 @@ mod tests {
         assert!(
             app.database().unit_by_uid(&partner2).unwrap().off_map,
             "合体相手 2 は off_map で温存"
+        );
+    }
+
+    /// 合体形態の必要技能 (`必要技能.md` §4): 構成員が満たさなければ合体できない。
+    #[test]
+    fn combine_respects_form_necessary_skill() {
+        let mut app = App::new();
+        let (host, _partner) = setup_combine(&mut app);
+        // 合体形態 GetterRobo に 必要技能=念力Lv3 を付与。
+        app.database_mut()
+            .units
+            .iter_mut()
+            .find(|d| d.name == "GetterRobo")
+            .unwrap()
+            .features
+            .push(("必要技能".into(), "念力Lv3".into()));
+        // host に念力なしパイロットを紐付け。
+        app.database_mut().create_pilot_instance("PILOT", "p_host");
+        app.database_mut().unit_by_uid_mut(&host).unwrap().pilot_ids = vec!["p_host".into()];
+        // 念力なし → 合体不可 (host は GetterEagle のまま、相手も on_map)。
+        app.apply_combine(&host);
+        assert_eq!(
+            app.database().unit_by_uid(&host).unwrap().unit_data_name,
+            "GetterEagle",
+            "念力なしで合体不可"
+        );
+        // 念力Lv3 を習得 → 合体成功。
+        app.database_mut()
+            .pilot_instance_by_id_mut("p_host")
+            .unwrap()
+            .skills
+            .push("念力Lv3".into());
+        app.apply_combine(&host);
+        assert_eq!(
+            app.database().unit_by_uid(&host).unwrap().unit_data_name,
+            "GetterRobo",
+            "念力Lv3 で合体成功"
         );
     }
 
