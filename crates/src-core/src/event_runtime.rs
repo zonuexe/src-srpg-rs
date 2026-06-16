@@ -13865,6 +13865,21 @@ Stage $(name)
     }
 
     #[test]
+    fn local_multivar_decl_does_not_break_read() {
+        // `Local F 仮変数` (複数名宣言) の後、`仮変数` を Set→Instr で読めるか。
+        // (D データロードはこの形を使う。本実装の Local は Set 相当なので
+        //  `Local F 仮変数` = `Set F 仮変数` になるが、仮変数 自体は別途 Set で埋まる。)
+        let mut app = App::new();
+        let src = "Local F 仮変数\nSet 仮変数 \"設定[パイロット一覧] 人工知能(ザコ) \"\nIf Instr(仮変数, \"設定[パイロット一覧]\") Then\nSet r found\nEndif\n";
+        execute(&mut app, &event::parse(src).unwrap()).unwrap();
+        assert_eq!(
+            app.script_var("r"),
+            "found",
+            "Local 宣言後の 仮変数 読みが壊れている"
+        );
+    }
+
+    #[test]
     fn loadfiledialog_returns_verify_var_else_empty() {
         // 実機はファイル選択ダイアログ。ヘッドレスでは未設定なら "" (キャンセル相当)、
         // `__verify_loadfile` 設定時はそのパスを返す (検証ドライバの `データロード` 駆動用)。
