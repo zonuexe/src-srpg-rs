@@ -10,7 +10,7 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 ## 現在地（2026-06-16）
 
 **テスト**: `cargo test -p src-core` 全緑（**1874 件**）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。  
-**ブランチ／コミット**: **`feat/necessary-skill-gate`**（**本セッション 53 コミット・未 push**）。`origin/master`=`88ad16f` から先行。
+**ブランチ／コミット**: **`feat/necessary-skill-gate`**（**本セッション 55 コミット・未 push**）。`origin/master`=`88ad16f` から先行。
 push はユーザの明示指示で行う（no-auto-push）。**D スパロボ戦記の「進行不能」は §2 で解決済**（エンジンは戦闘まで完走、原因は harness）。
 次セッションの残課題は §1 の設計判断要件（魅了/憑依）・大規模移植（GBA）・検証制約（A2/演出/詳細UI）が中心。
 
@@ -161,17 +161,16 @@ auto-drive は当初このインターミッション項目を素通りしてい
    `データロード` は実セーブ（`.src`）が要るため fixture ではヘッドレス到達不可。**右クリックは exit にならない**ことを実測確認（drive の
    `respond_dialog_right_click` で wizard メニューを右クリックすると `召喚確定`（既存パイロット再登録）に落ち、同じパイロットを無限に
    再追加してループする）。`召喚制限` は OFF（`部隊に加えますか` Confirm が出るため＝`AlphaSecond.eve:69` の skip 条件不成立）なので人数上限 exit も無い。
-   当初の壁＝`LoadFileDialog` 未実装は ✅ 解消（`5c4bba1`）。さらに **`VERIFY_CMAKING_EXIT` で データロード経路を駆動する scaffold を実装**
-   （`64ade45`, flag 既定 OFF・無影響）: 目標人数作成後に `データロード` を選び、VFS に最小 `.src`（`Set 設定[パイロット一覧] <pilot> ` 1 行＝
-   読込側 `Right(行,Len-16)` の "Set "＋キー＋空白 16 文字に整合）を `vfs_open/vfs_print` で用意＋`__verify_loadfile` 設定。**ファイル読込までは
-   駆動成功**（`仮変数="Set 設定[パイロット一覧] 人工知能(ザコ) "`／`読み込みファイル="cmexit.src"` を実測）。**だが データロードのループ内
-   `If Instr(仮変数,"設定[パイロット一覧]")` が `ロードパイロットリスト` を設定せず**「該当ファイルでは…パイロットリストが作成されていません」で
-   召喚画面 へループ。**分離テストでは `Instr`／`Local 複数名宣言`／`[ ]`／`( )` すべて正しく動く**（回帰3件: `if_instr_with_bracket_literal_matches`／
-   `local_multivar_decl_does_not_break_read`／`loadfiledialog_returns_verify_var_else_empty`）。＝ファイル内容・Instr・Local 単体は健全なのに
-   **実フロー文脈でのみ失敗**＝再現の難しい文脈依存（実データロードループ／`LineRead`／HotPoint メニュー累積 等）。**次セッション**: エンジン側で
-   データロードループ実行を計装（Instr 引数・ロードパイロットリスト・EOF を実走時にダンプ）して切り分け → cancel → `RemovePilot` → `Break`。
-   その後 **搭乗工程**（ロスター→`パイロット不在` 機）→ 出撃 → 戦闘。**combat は実証済**（`VERIFY_SEAT_DEBUG`）なので exit/搭乗/出撃は任意課題。
-   注: `.src` は**原典 SRC テキストセーブ形式**（`Set 設定[…] …` 行）で `to_save_json`(JSON) とは別物＝エンジン非出力なので手書き。
+   当初の壁＝`LoadFileDialog` 未実装は ✅ 解消（`5c4bba1`）。`VERIFY_CMAKING_EXIT` で データロード経路を駆動する scaffold（`64ade45`, flag 既定 OFF）で
+   調査した結果、✅✅✅ **実エンジンバグをもう 1 件発見・修正（`c930c55`）**: `expand_vars` が**クオート内の `name[expr]` を展開していた**ため、
+   `If Instr(仮変数,"設定[パイロット一覧]")` の第 2 引数リテラル `"設定[パイロット一覧]"` が、たまたま同名の配列変数 `設定[パイロット一覧]`（作成済み
+   パイロット一覧）の**値に化け**、比較が常に失敗していた（データロードの行検出が壊れる真因）。修正＝クオート内は `$(...)` 補間のみ展開し
+   裸の `name[expr]`/`Func(args)` はリテラル扱い（回帰 `expand_vars_keeps_indexed_var_literal_inside_quotes`、全テスト緑）。**配列変数と同名の
+   文字列リテラルを使う全シナリオに効く一般修正**。→ 修正後はデータロードが正しく行を検出（`「全て作成済み」`まで到達）。
+   **ただし データロードは CMaking の exit ではないと判明**: `Break`（264）は内側の読込 Do-Whileを抜けるだけで、その後 `Close`→`Goto 召喚画面`（277）で
+   **必ず 召喚画面 へループ**。真の exit は `Case ＥＸＩＴ`（278→`ClearObj`+`Continue`）だが **召喚画面 メニューに `ＥＸＩＴ` 選択肢が無く**、
+   どう `選択=ＥＸＩＴ` になるか不明（`Continue` の対象ループ含め要解析）。**＝CMaking の正規 exit は依然未解明**（実機での exit 操作 or Continue/ループ
+   意味論の精査が次セッション）。combat は実証済（`VERIFY_SEAT_DEBUG`）なので exit/搭乗/出撃は任意課題。
 2. **ロスター追加 ≠ 機体搭乗**: キャラメイキングはパイロットを**ロスターに追加するだけ**で、`パイロット不在` 機への搭乗は**後段の別工程**
    （出撃準備／乗せ替え）。drive 終了時も `ガンダム pilot=""` のまま。搭乗工程の drive も要追加。
 3. ✅✅✅ **戦闘の成立は実証済**（commit `16caf45`）: 出撃導線（CMaking exit→搭乗）を迂回し、`VERIFY_SEAT_DEBUG=1`（`App::debug_seat_db_pilot`）で
@@ -460,7 +459,10 @@ target/debug/scan_eve /tmp/out
   パイロット作成を実証**。③ **`Input` コマンドの配列 lvalue バグを修正**（代入先を値展開せず `resolve_lhs_name` で格納キーに解決、`865844c`、回帰
   テスト付き）＝2 人目以降の名前入力が固まる真因。一般バグ（配列変数へ繰り返し Input する全シナリオに波及）。④ **D 戦闘の成立を実証**
   （`VERIFY_SEAT_DEBUG`/`App::debug_seat_db_pilot` で無人機に DB パイロットを乗せ、D マップで攻撃→反撃→ダメージ→Defeat 完走、`16caf45`）
-  ＝combat エンジンは健全と確定。残は正規プレイの出撃導線（CMaking の正規 exit、§2 ⑥）。
+  ＝combat エンジンは健全と確定。⑤ **`LoadFileDialog` 実装**（`5c4bba1`）＋**`expand_vars` のクオート内 `name[expr]` 展開バグを修正**
+  （`c930c55`＝クオート内の配列参照が同名変数値に化けリテラルを壊す一般バグ、回帰テスト付き）＝データロード行検出の真因。残は CMaking の正規
+  exit（データロードは exit でなく `Goto 召喚画面` でループ、真の exit `Case ＥＸＩＴ` は未解明、§2 ⑥）。本セッションで実エンジンバグ計 3 件修正
+  （必要技能前提の pilot.txt カンマ形式・`Input` 配列 lvalue・`expand_vars` クオート内展開）。
 
 ### 2026-06-15/16 セッション（master、`origin/master`=`0de48d9` 以降）
 
