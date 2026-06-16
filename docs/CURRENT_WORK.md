@@ -10,7 +10,7 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 ## 現在地（2026-06-16）
 
 **テスト**: `cargo test -p src-core` 全緑（**1874 件**）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。  
-**ブランチ／コミット**: **`feat/necessary-skill-gate`**（**本セッション 50 コミット・未 push**）。`origin/master`=`88ad16f` から先行。
+**ブランチ／コミット**: **`feat/necessary-skill-gate`**（**本セッション 53 コミット・未 push**）。`origin/master`=`88ad16f` から先行。
 push はユーザの明示指示で行う（no-auto-push）。**D スパロボ戦記の「進行不能」は §2 で解決済**（エンジンは戦闘まで完走、原因は harness）。
 次セッションの残課題は §1 の設計判断要件（魅了/憑依）・大規模移植（GBA）・検証制約（A2/演出/詳細UI）が中心。
 
@@ -161,15 +161,17 @@ auto-drive は当初このインターミッション項目を素通りしてい
    `データロード` は実セーブ（`.src`）が要るため fixture ではヘッドレス到達不可。**右クリックは exit にならない**ことを実測確認（drive の
    `respond_dialog_right_click` で wizard メニューを右クリックすると `召喚確定`（既存パイロット再登録）に落ち、同じパイロットを無限に
    再追加してループする）。`召喚制限` は OFF（`部隊に加えますか` Confirm が出るため＝`AlphaSecond.eve:69` の skip 条件不成立）なので人数上限 exit も無い。
-   当初の壁＝`LoadFileDialog` がエンジン未実装だった点は ✅ **解消**（`5c4bba1` で実装＝ヘッドレスは script_var `__verify_loadfile` の値を返す。
-   未設定＝空＝キャンセル相当で通常プレイ無影響）。これで `データロード` 経路を検証ドライバから駆動可能。**残る次セッションの実装**:
-   ① **有効な `.src` セーブを VFS に用意**（`app.vfs_open(path,"出力")`＋`vfs_print` で `設定[パイロット一覧]` を含む行を書く）＋ `__verify_loadfile`
-   をそのパスに設定。**セーブ書式は手書きが要る**: データロードが読むのは**原典 SRC のテキストセーブ形式**（`Set 設定[…] …` 行ベース）で、
-   本実装の `to_save_json`（JSON quicksave）とは別物＝エンジンはこの形式を出力しない。読込側 `Right(仮変数, Len-16)`（先頭 16 文字を剥がす）から、
-   行頭は `Set 設定[パイロット一覧] `（"Set "＋キー＋空白＝ちょうど 16 文字）の Set 文形式と推測。最小 `.src` を 1 行で手書きして試す。② drive を「目標人数作成後に `データロード` を選び、
-   続く `パイロットリスト` Ask を cancel → `RemovePilot`（ロード分のみ・作成済みは残る）→ `パイロットロード終了` → `Break`」に拡張。③ その後
-   **搭乗工程**（ロスター→`パイロット不在` 機）→ 出撃 → 戦闘。**combat は実証済**（`VERIFY_SEAT_DEBUG`）なので、この exit/搭乗/出撃は「正規 pilot で
-   通す」ための任意課題。現状 drive は目標人数を作ったら `break` で終了（出撃前まで）。
+   当初の壁＝`LoadFileDialog` 未実装は ✅ 解消（`5c4bba1`）。さらに **`VERIFY_CMAKING_EXIT` で データロード経路を駆動する scaffold を実装**
+   （`64ade45`, flag 既定 OFF・無影響）: 目標人数作成後に `データロード` を選び、VFS に最小 `.src`（`Set 設定[パイロット一覧] <pilot> ` 1 行＝
+   読込側 `Right(行,Len-16)` の "Set "＋キー＋空白 16 文字に整合）を `vfs_open/vfs_print` で用意＋`__verify_loadfile` 設定。**ファイル読込までは
+   駆動成功**（`仮変数="Set 設定[パイロット一覧] 人工知能(ザコ) "`／`読み込みファイル="cmexit.src"` を実測）。**だが データロードのループ内
+   `If Instr(仮変数,"設定[パイロット一覧]")` が `ロードパイロットリスト` を設定せず**「該当ファイルでは…パイロットリストが作成されていません」で
+   召喚画面 へループ。**分離テストでは `Instr`／`Local 複数名宣言`／`[ ]`／`( )` すべて正しく動く**（回帰3件: `if_instr_with_bracket_literal_matches`／
+   `local_multivar_decl_does_not_break_read`／`loadfiledialog_returns_verify_var_else_empty`）。＝ファイル内容・Instr・Local 単体は健全なのに
+   **実フロー文脈でのみ失敗**＝再現の難しい文脈依存（実データロードループ／`LineRead`／HotPoint メニュー累積 等）。**次セッション**: エンジン側で
+   データロードループ実行を計装（Instr 引数・ロードパイロットリスト・EOF を実走時にダンプ）して切り分け → cancel → `RemovePilot` → `Break`。
+   その後 **搭乗工程**（ロスター→`パイロット不在` 機）→ 出撃 → 戦闘。**combat は実証済**（`VERIFY_SEAT_DEBUG`）なので exit/搭乗/出撃は任意課題。
+   注: `.src` は**原典 SRC テキストセーブ形式**（`Set 設定[…] …` 行）で `to_save_json`(JSON) とは別物＝エンジン非出力なので手書き。
 2. **ロスター追加 ≠ 機体搭乗**: キャラメイキングはパイロットを**ロスターに追加するだけ**で、`パイロット不在` 機への搭乗は**後段の別工程**
    （出撃準備／乗せ替え）。drive 終了時も `ガンダム pilot=""` のまま。搭乗工程の drive も要追加。
 3. ✅✅✅ **戦闘の成立は実証済**（commit `16caf45`）: 出撃導線（CMaking exit→搭乗）を迂回し、`VERIFY_SEAT_DEBUG=1`（`App::debug_seat_db_pilot`）で
