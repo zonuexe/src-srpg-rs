@@ -499,6 +499,10 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
         println!("  current_stage_file(start)={last_stage_file:?}");
         let mut last_units = app.database().unit_instances.len();
         let mut firable_reported = false;
+        // Victory/Defeat で idle になったら次ステージ/インターミッションへ Advance で進める
+        // (複数ステージを通して駆動し、後続ステージの戦闘/イベントも検証する)。無限ループ
+        // 防止に総 idle-advance 回数を制限する。
+        let mut idle_advances = 0u32;
         // キャラメイキング (召喚画面) で「名前入力」→ 一意な名前 → 「決定」の順に進めるための状態。
         // autostart が空のまま「決定」すると パイロット名が空 → 戦闘で combat_data=None になる。
         // また「ランダム」はヘッドレス決定論 RNG が同名 (例 ガガガガガ) を生むため重複登録で詰まる。
@@ -754,9 +758,10 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                 );
                 app.handle_input(src_core::Input::Advance);
             } else if matches!(state, src_core::stage::StageState::Battle) {
-                // 味方フェーズで idle = プレイヤー操作待ち。ブラウザの「画面を
-                // 進めるだけ」を模して EndPhase でターンを送り、tick で敵 AI を
-                // 走らせる。チャプター cascade を観測する。
+                idle_advances = 0; // Battle 到達=進行ありとみなし idle-advance カウンタをリセット。
+                                   // 味方フェーズで idle = プレイヤー操作待ち。ブラウザの「画面を
+                                   // 進めるだけ」を模して EndPhase でターンを送り、tick で敵 AI を
+                                   // 走らせる。チャプター cascade を観測する。
                 let map_info = match app.database().map.as_ref() {
                     Some(m) => format!("map {}x{}", m.width, m.height),
                     None => "map=None(gray!)".to_string(),
@@ -814,6 +819,16 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                 for _ in 0..50 {
                     app.tick(1.0);
                 }
+            } else if !matches!(state, src_core::stage::StageState::Battle) && idle_advances < 15 {
+                // Battle 以外 (Briefing/Sortie/Victory/Defeat) の idle: Advance で進める
+                // (各ステージの briefing→出撃→battle、勝敗→次ステージ/IM を通して駆動)。
+                // idle_advances は Battle 到達でリセット (連続 15 回進まなければ停留と判断し break)。
+                idle_advances += 1;
+                println!(
+                    "  [{step}] idle stage_state={state:?} scene={:?} → Advance (進行)",
+                    app.scene()
+                );
+                app.handle_input(src_core::Input::Advance);
             } else {
                 println!(
                     "  [{step}] idle (no dialog/timer), scene={:?} stage_state={state:?}",
