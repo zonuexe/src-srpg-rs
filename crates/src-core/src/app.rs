@@ -727,6 +727,31 @@ impl App {
         out
     }
 
+    /// 検証/デバッグ専用: パイロット不在 (`pilot_name` が DB に無い) の味方機に DB の
+    /// 任意パイロットを乗せ、`effective_combat_data` を解決可能にする。キャラメイキングの
+    /// 出撃導線 (exit/搭乗) をヘッドレスで完走できないシナリオ (D スパロボ戦記) で、
+    /// 「piloted な味方が実マップで戦闘成立するか」を検証するための affordance。乗せた機数を返す。
+    /// 通常プレイ経路からは呼ばれない。
+    pub fn debug_seat_db_pilot(&mut self) -> usize {
+        let Some(pilot) = self.database.pilots.first().map(|p| p.name.clone()) else {
+            return 0;
+        };
+        let valid: std::collections::HashSet<String> = self
+            .database
+            .pilots
+            .iter()
+            .map(|p| p.name.clone())
+            .collect();
+        let mut n = 0;
+        for u in self.database.unit_instances.iter_mut() {
+            if u.party == crate::Party::Player && !u.off_map && !valid.contains(&u.pilot_name) {
+                u.pilot_name = pilot.clone();
+                n += 1;
+            }
+        }
+        n
+    }
+
     /// 検証/デバッグ専用: 現在のフェイズ党派のユニットを AI ロジックで一括行動させる。
     /// `run_ai_phase` を党派非依存に再利用 (ターゲットは `is_hostile_to` で解決されるため、
     /// 味方フェイズに呼べば味方が敵へ前進・攻撃する)。verify-archive のヘッドレス drive が

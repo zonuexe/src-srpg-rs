@@ -461,6 +461,10 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
         // EndPhase する (前進・攻撃して戦闘を勝敗まで通す)。敵が待機配置で動かない
         // シナリオ (D スパロボ戦記) でも戦闘を実際に走らせて検証できる。
         let autoplay = env::var("VERIFY_AUTOPLAY").is_ok();
+        // VERIFY_SEAT_DEBUG=1: キャラメイキングを経ず (出撃導線をヘッドレス完走できない D 用)、
+        // パイロット不在のまま出撃した味方機に DB パイロットを検証用に乗せて戦闘を成立させる。
+        // キャラメイキングはスキップし、Battle 開始時に debug_seat_db_pilot を一度呼ぶ。
+        let seat_debug = env::var("VERIFY_SEAT_DEBUG").is_ok();
         let menu_choice = move |options: &[String]| -> u32 {
             if autostart {
                 // ① 【開始】/【START】 等の括弧付き進行アクション (タイトル/難易度設定を抜ける)。
@@ -676,7 +680,7 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                 // autostart 時、未実行なら「キャラクターメイキング」項目を選んでパイロットを作る
                 // (味方機は機体選択時 `パイロット不在` で生成されるため、これを経ないと無人で
                 // 出撃し combat_data=None になり戦闘が成立しない)。実行後は次ステージへ。
-                let cmaking_idx = if autostart && !cmaking_intermission_done {
+                let cmaking_idx = if autostart && !cmaking_intermission_done && !seat_debug {
                     (0..count).find(|&i| {
                         app.intermission_item_label(i)
                             .map(|l| l.contains("キャラクター") || l.contains("メイキング"))
@@ -719,6 +723,12 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                 // 戦闘開始時に各ユニットの武器発射可否レポートを一度だけ出す (交戦不成立の
                 // 原因 — パイロット欠落/必要技能/気力/EN — を切り分ける)。
                 let action = if autoplay {
+                    if seat_debug && !firable_reported {
+                        let n = app.debug_seat_db_pilot();
+                        if n > 0 {
+                            println!("      seat_debug: パイロット不在の味方 {n} 機に DB パイロットを搭乗");
+                        }
+                    }
                     if !firable_reported {
                         firable_reported = true;
                         println!("      --- firable report (戦闘開始時) ---");
