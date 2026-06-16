@@ -490,6 +490,20 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
         println!("  current_stage_file(start)={last_stage_file:?}");
         let mut last_units = app.database().unit_instances.len();
         let mut firable_reported = false;
+        // キャラメイキング (召喚画面) で「名前入力」→ 一意な名前 → 「決定」の順に進めるための状態。
+        // autostart が空のまま「決定」すると パイロット名が空 → 戦闘で combat_data=None になる。
+        // また「ランダム」はヘッドレス決定論 RNG が同名 (例 ガガガガガ) を生むため重複登録で詰まる。
+        // よって「名前入力」で `テストパイロットN` と一意名を与えてから「決定」する。
+        let mut cmaking_named = false; // 現キャラの名前入力済みか (キャラごとに false に戻す)。
+        let mut cmaking_char = 0u32; // 一意名のための連番。
+        let mut cmaking_pilots = 0u32; // 部隊ロスターに加えたパイロット数。
+                                       // 2 人目以降の名前入力は (現状) エンジン側のテキスト入力の状態持ち越しで全角カタカナ
+                                       // 判定が誤発火し詰むため、1 人作れたところで drive を終了して状態を報告する。
+                                       // (キャラメイキングは全 `パイロット不在` 機が埋まるまでループし手動 exit が無い。)
+        const CMAKING_TARGET: u32 = 1;
+        // インターミッションで「キャラクターメイキング」を一度実行したか (未実行なら次ステージへ
+        // 進む前にキャラメイキングを選び、パイロットを作って味方機に乗せる)。
+        let mut cmaking_intermission_done = false;
         // VERIFY_VAR=a,b,c: 指定した script_var を各ステップでダンプする (ブラウザ `__srcVar`
         // のヘッドレス相当)。D スパロボ戦記の 敵配置数/敵候補/配置場所[7]/味方平均レベル 等の triage 用。
         let verify_vars: Vec<String> = env::var("VERIFY_VAR")
@@ -519,6 +533,16 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                 break;
             }
             if let Some(d) = app.pending_dialog().cloned() {
+                // 召喚キャラが部隊に加わったら、次キャラの名前入力に備えて状態をリセットする。
+                if matches!(&d, PendingDialog::Confirm { question, .. } if question.contains("部隊に加え"))
+                    || matches!(&d, PendingDialog::Talk { body, .. } if body.contains("部隊に加え"))
+                {
+                    cmaking_named = false;
+                }
+                if matches!(&d, PendingDialog::Talk { body, .. } if body.contains("部隊に加えた"))
+                {
+                    cmaking_pilots += 1;
+                }
                 let (kind, snippet, choice) = match &d {
                     PendingDialog::Talk { speaker, body } => {
                         ("Talk", format!("{speaker}: {}", trunc(body, 40)), 0)
@@ -529,11 +553,29 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                     PendingDialog::Confirm { question, .. } => ("Confirm", trunc(question, 40), 0),
                     PendingDialog::Menu {
                         prompt, options, ..
-                    } => (
-                        "Menu/Ask",
-                        format!("{} [{}]", trunc(prompt, 30), options.join("|")),
-                        menu_choice(options),
-                    ),
+                    } => {
+                        // 召喚画面 (キャラメイキング) の HotPoint メニューは「ランダム」と
+                        // 「決定」を含む。autostart 時はまず「ランダム」でキャラ生成→次に「決定」。
+                        let is_cmaking = options.iter().any(|o| o == "名前入力")
+                            && options.iter().any(|o| o == "決定");
+                        let c = if autostart && is_cmaking {
+                            if !cmaking_named {
+                                // まず「名前入力」を開き、続く Input で一意名を与える。
+                                options.iter().position(|o| o == "名前入力").unwrap() as u32 + 1
+                            } else {
+                                // 名前入力後は「決定」で 姓/性別/愛称 を順に促し最後に確定する。
+                                // named は部隊加入確認まで保持 (途中で false に戻すとループする)。
+                                options.iter().position(|o| o == "決定").unwrap() as u32 + 1
+                            }
+                        } else {
+                            menu_choice(options)
+                        };
+                        (
+                            "Menu/Ask",
+                            format!("{} [{}]", trunc(prompt, 30), options.join("|")),
+                            c,
+                        )
+                    }
                     PendingDialog::Input { prompt, .. } => ("Input", trunc(prompt, 40), 0),
                 };
                 // 対話の発生元を exec_pc の逆引きで特定 (動的構築メニューの源 triage)。
@@ -556,11 +598,62 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                         .unwrap_or("?");
                     format!(" {{src pc={pc} {lbl} file={file}}}")
                 };
+                // パイロット/ユニット能力の「閲覧画面」(タブ [ユニット|機体|レーダー|武器|
+                // パイロット] のみ) は進行肢が無く、選択し続けるとループする。右クリックで
+                // キャンセルして抜ける (キャラメイキング確定後にこの画面へ入るため)。
+                let cancel_menu = matches!(&d, PendingDialog::Menu { options, .. }
+                    if !options.is_empty()
+                        && options.iter().all(|o| matches!(o.as_str(),
+                            "ユニット" | "機体" | "レーダー" | "武器" | "パイロット")));
+                // 目標人数を作ったらキャラメイキングの 召喚画面 メニューをキャンセルして抜ける。
+                let cmaking_exit = autostart
+                    && cmaking_pilots >= CMAKING_TARGET
+                    && matches!(&d, PendingDialog::Menu { options, .. }
+                        if options.iter().any(|o| o == "名前入力")
+                            && options.iter().any(|o| o == "決定"));
                 // Menu(Ask) はブラウザの「選択肢をクリック」経路を模して
                 // handle_input(ClickAt) で確定する (プレーン Menu のクリック選択
                 // 回帰を実シナリオで確認)。1 行 prompt 前提で選択肢行の y を算出。
                 // クリックが外れた場合 (2 行 prompt 等) は respond で確定にフォール。
-                if matches!(d, PendingDialog::Menu { .. }) && choice >= 1 && !autostart {
+                // キャラメイキングの名前入力 (Input "名前を入力してください…") には一意名を与える。
+                // 姓/ミドルネームの任意入力はキャンセル (右クリック=既定/空のまま) で抜ける。
+                let cmaking_name_input = matches!(&d, PendingDialog::Input { prompt, .. }
+                    if prompt.contains("名前を入力"));
+                let cmaking_skip_input = matches!(&d, PendingDialog::Input { prompt, .. }
+                    if prompt.contains("姓を入力") || prompt.contains("ミドルネームを入力"));
+                if cmaking_name_input && autostart {
+                    // 名前は「全角カタカナのみ」。キャラごとに一意なカタカナ名にする。
+                    let kata = [
+                        'ア', 'イ', 'ウ', 'エ', 'オ', 'カ', 'キ', 'ク', 'ケ', 'コ', 'サ', 'シ',
+                    ];
+                    let suffix = kata[(cmaking_char as usize) % kata.len()];
+                    cmaking_char += 1;
+                    // 9 文字以内・全角カタカナのみ。短い一意名にする。
+                    let name = format!("パイロ{suffix}");
+                    cmaking_named = true;
+                    println!("  [{step}] {kind} {snippet}{src} → input(\"{name}\")");
+                    app.respond_dialog_text(name);
+                } else if cmaking_skip_input && autostart {
+                    // 姓/ミドルネームは任意だが全角カタカナのみ。キャンセルだと再提示で
+                    // ループするため固定のカタカナ値を与えて進める。
+                    println!("  [{step}] {kind} {snippet}{src} → input(\"テスト\")");
+                    app.respond_dialog_text("テスト".to_string());
+                } else if cmaking_exit {
+                    // 1 人目は正常に作成しロスターへ追加できるが、2 人目以降はエンジンのテキスト
+                    // 入力の状態持ち越しで全角カタカナ判定が誤発火し詰む (要 src-core 側修正)。
+                    // キャラメイキングは全 `パイロット不在` 機が埋まるまでループし手動 exit が無いため、
+                    // ここで作成済みパイロットを報告して drive を終了する。
+                    // (注: パイロットはロスターに追加されるだけで、機体への搭乗は後段の別工程。)
+                    println!(
+                        "  [{step}] {kind} {snippet}{src} → キャラメイキング完走不可 (2人目の入力でエンジン詰み) → drive 終了"
+                    );
+                    break;
+                } else if cancel_menu {
+                    println!(
+                        "  [{step}] {kind} {snippet}{src} → cancel(閲覧画面を右クリックで抜ける)"
+                    );
+                    app.respond_dialog_right_click();
+                } else if matches!(d, PendingDialog::Menu { .. }) && choice >= 1 && !autostart {
                     // CANVAS 480: 選択肢開始 y=304、行高 20px、行中央 +10。
                     // (非 autostart のみ: クリック選択経路の回帰を実シナリオで確認する。
                     //  autostart 時はクリック座標ズレで意図しない選択肢に当たるのを避け、
@@ -581,12 +674,34 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                 app.tick(100.0);
             } else if matches!(app.scene(), src_core::Scene::Intermission) {
                 let count = app.intermission_item_count();
-                let last = count.saturating_sub(1);
-                println!(
-                    "  [{step}] Intermission (items={count}) → 次のステージへ (cursor={last})"
-                );
-                app.set_intermission_cursor(last);
-                app.handle_input(src_core::Input::Advance);
+                // autostart 時、未実行なら「キャラクターメイキング」項目を選んでパイロットを作る
+                // (味方機は機体選択時 `パイロット不在` で生成されるため、これを経ないと無人で
+                // 出撃し combat_data=None になり戦闘が成立しない)。実行後は次ステージへ。
+                let cmaking_idx = if autostart && !cmaking_intermission_done {
+                    (0..count).find(|&i| {
+                        app.intermission_item_label(i)
+                            .map(|l| l.contains("キャラクター") || l.contains("メイキング"))
+                            .unwrap_or(false)
+                    })
+                } else {
+                    None
+                };
+                if let Some(i) = cmaking_idx {
+                    cmaking_intermission_done = true;
+                    let label = app.intermission_item_label(i).unwrap_or_default();
+                    println!(
+                        "  [{step}] Intermission (items={count}) → キャラクターメイキング (cursor={i} {label:?})"
+                    );
+                    app.set_intermission_cursor(i);
+                    app.handle_input(src_core::Input::Advance);
+                } else {
+                    let last = count.saturating_sub(1);
+                    println!(
+                        "  [{step}] Intermission (items={count}) → 次のステージへ (cursor={last})"
+                    );
+                    app.set_intermission_cursor(last);
+                    app.handle_input(src_core::Input::Advance);
+                }
             } else if matches!(state, src_core::stage::StageState::Battle) {
                 // 味方フェーズで idle = プレイヤー操作待ち。ブラウザの「画面を
                 // 進めるだけ」を模して EndPhase でターンを送り、tick で敵 AI を
@@ -671,7 +786,10 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
         println!("  stage_state: {:?}", app.stage_state());
         println!("  units: {}", app.database().unit_instances.len());
         for u in &app.database().unit_instances {
-            println!("    {} [{:?}]", u.unit_data_name, u.party);
+            println!(
+                "    {} [{:?}] pilot={:?}",
+                u.unit_data_name, u.party, u.pilot_name
+            );
         }
         for m in app.messages().iter().rev().take(6) {
             println!("    msg| {m}");
