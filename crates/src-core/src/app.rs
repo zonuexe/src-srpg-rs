@@ -447,6 +447,12 @@ pub struct App {
     /// `eval_script_function` が `&App` しか持てないため `Cell` で内部可変にする。
     #[serde(skip)]
     keystate_call_count: std::cell::Cell<usize>,
+    /// 直近に実行した .eve 文の pc (script_library インデックス)。診断用 transient。
+    /// `run_loop_inner` が各文の実行前に更新する。対話 (Ask/Menu) が中断したとき
+    /// `current_exec_pc()` でその発生元 pc を取得し、`script_library().labels` の逆引きで
+    /// 発生元ラベルを特定できる (動的構築されたメニューの源を追う triage 用)。
+    #[serde(skip)]
+    exec_pc: std::cell::Cell<usize>,
     /// 直近の `Wait Click` 系の中断を **右クリックで解除した** か。SRC の
     /// `Wait Click` → `If KeyState(2) Then` (右ボタン = キャンセル/戻る) を実現する。
     /// 右クリック応答で true、`KeyState(2)` が読むと **その場で false に消費** する
@@ -616,6 +622,7 @@ impl App {
             last_script_error: None,
             last_return_value: String::new(),
             keystate_call_count: std::cell::Cell::new(0),
+            exec_pc: std::cell::Cell::new(0),
             wait_click_right: std::cell::Cell::new(false),
             selected_unit_for_event: String::new(),
             current_stage_file: String::new(),
@@ -652,6 +659,16 @@ impl App {
     /// `KeyState()` 呼び出し回数をリセット（スクリプト実行開始時に呼ぶ）。
     pub fn reset_keystate_call_count(&self) {
         self.keystate_call_count.set(0);
+    }
+
+    /// 実行中の .eve 文 pc を記録する (診断用、`run_loop_inner` が各文前に呼ぶ)。
+    pub fn set_exec_pc(&self, pc: usize) {
+        self.exec_pc.set(pc);
+    }
+
+    /// 直近に実行した .eve 文の pc を返す (対話の発生元特定用)。
+    pub fn current_exec_pc(&self) -> usize {
+        self.exec_pc.get()
     }
 
     /// 直近の `Wait Click` を右クリックで解除したフラグを設定する。

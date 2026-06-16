@@ -524,6 +524,19 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                     ),
                     PendingDialog::Input { prompt, .. } => ("Input", trunc(prompt, 40), 0),
                 };
+                // 対話の発生元ラベルを exec_pc の逆引きで特定 (動的構築メニューの源 triage)。
+                let src = {
+                    let pc = app.current_exec_pc();
+                    let lib = app.script_library();
+                    let lbl = lib
+                        .labels
+                        .iter()
+                        .filter(|(_, &p)| p <= pc)
+                        .max_by_key(|(_, &p)| p)
+                        .map(|(n, p)| format!("{n}@{p}"))
+                        .unwrap_or_else(|| "?".to_string());
+                    format!(" {{src pc={pc} {lbl}}}")
+                };
                 // Menu(Ask) はブラウザの「選択肢をクリック」経路を模して
                 // handle_input(ClickAt) で確定する (プレーン Menu のクリック選択
                 // 回帰を実シナリオで確認)。1 行 prompt 前提で選択肢行の y を算出。
@@ -531,14 +544,14 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                 if matches!(d, PendingDialog::Menu { .. }) && choice >= 1 {
                     // CANVAS 480: 選択肢開始 y=304、行高 20px、行中央 +10。
                     let cy = 304 + (choice as i32 - 1) * 20 + 10;
-                    println!("  [{step}] {kind} {snippet} → click(120,{cy})→choice {choice}");
+                    println!("  [{step}] {kind} {snippet}{src} → click(120,{cy})→choice {choice}");
                     app.handle_input(src_core::Input::ClickAt { x: 120, y: cy });
                     if app.pending_dialog().is_some() {
                         // クリックが外れた: 確実に確定させる。
                         app.respond_dialog(choice);
                     }
                 } else {
-                    println!("  [{step}] {kind} {snippet} → respond({choice})");
+                    println!("  [{step}] {kind} {snippet}{src} → respond({choice})");
                     app.respond_dialog(choice);
                 }
             } else if let Some(t) = app.pending_timer() {

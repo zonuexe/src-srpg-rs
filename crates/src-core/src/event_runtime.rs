@@ -814,6 +814,8 @@ fn run_loop(app: &mut App, ctx: ScriptContext) -> Result<(), ScriptError> {
 fn run_loop_inner(app: &mut App, mut ctx: ScriptContext) -> Result<ExecOutcome, ScriptError> {
     let mut steps: usize = 0;
     while ctx.pc < ctx.statements.len() {
+        // 実行中の pc を記録 (対話が中断したとき発生元を逆引きできるようにする診断用)。
+        app.set_exec_pc(ctx.pc);
         steps += 1;
         if steps > STEP_LIMIT {
             return Err(err(
