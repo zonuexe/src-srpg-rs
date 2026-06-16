@@ -459,15 +459,20 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
         let autostart = env::var("VERIFY_AUTOSTART").is_ok();
         let menu_choice = move |options: &[String]| -> u32 {
             if autostart {
-                // 【開始】/【START】 等の括弧付き進行アクションのみ優先 (タイトル/難易度設定を抜ける)。
-                // 注: 機体確定の `決定する` を選んでも 機体選択開始 のメニューがループする
-                //     (Ask 結果/Switch ルーティング or クリック座標の深い問題、§2 参照)。次セッション課題。
+                // ① 【開始】/【START】 等の括弧付き進行アクション (タイトル/難易度設定を抜ける)。
                 if let Some(i) = options.iter().position(|o| {
                     o.contains('【')
                         && ["開始", "START", "実行", "はい"]
                             .iter()
                             .any(|k| o.contains(k))
                 }) {
+                    return i as u32 + 1;
+                }
+                // ② 決定/確定 (機体確定の `決定する`)。閲覧系 `確認する` は除外。
+                if let Some(i) = options
+                    .iter()
+                    .position(|o| (o.contains("決定") || o.contains("確定")) && !o.contains("確認"))
+                {
                     return i as u32 + 1;
                 }
                 if let Some(i) = options.iter().position(|o| o.contains('【')) {
@@ -550,8 +555,11 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                 // handle_input(ClickAt) で確定する (プレーン Menu のクリック選択
                 // 回帰を実シナリオで確認)。1 行 prompt 前提で選択肢行の y を算出。
                 // クリックが外れた場合 (2 行 prompt 等) は respond で確定にフォール。
-                if matches!(d, PendingDialog::Menu { .. }) && choice >= 1 {
+                if matches!(d, PendingDialog::Menu { .. }) && choice >= 1 && !autostart {
                     // CANVAS 480: 選択肢開始 y=304、行高 20px、行中央 +10。
+                    // (非 autostart のみ: クリック選択経路の回帰を実シナリオで確認する。
+                    //  autostart 時はクリック座標ズレで意図しない選択肢に当たるのを避け、
+                    //  下の respond_dialog(choice) で確実に意図した選択肢を選ぶ。)
                     let cy = 304 + (choice as i32 - 1) * 20 + 10;
                     println!("  [{step}] {kind} {snippet}{src} → click(120,{cy})→choice {choice}");
                     app.handle_input(src_core::Input::ClickAt { x: 120, y: cy });
