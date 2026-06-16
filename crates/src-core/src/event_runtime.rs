@@ -9997,6 +9997,13 @@ fn eval_script_function(app: &App, name: &str, args_str: &str) -> Option<String>
             let v = pseudo_random(app) % (n as u32) + 1;
             Some(v.to_string())
         }
+        "LoadFileDialog" | "SaveFileDialog" => {
+            // 実機はファイル選択ダイアログを開く。ヘッドレス (WASM/検証) には GUI が無いので、
+            // script_var `__verify_loadfile` に設定されたパスを返す。未設定なら "" =「キャンセル
+            // された」相当 (通常プレイでも "" のままなので副作用なし)。検証ドライバが
+            // `__verify_loadfile` をセットすると `データロード` 経路を駆動できる。
+            Some(app.script_var("__verify_loadfile").to_string())
+        }
         _ => None,
     }
 }
@@ -13841,6 +13848,29 @@ Stage $(name)
         // テキスト応答が正しいキーを更新する。
         assert!(app.respond_dialog_text("パイロイ".to_string()));
         assert_eq!(app.script_var("召喚キャラ[名前]"), "パイロイ");
+    }
+
+    #[test]
+    fn loadfiledialog_returns_verify_var_else_empty() {
+        // 実機はファイル選択ダイアログ。ヘッドレスでは未設定なら "" (キャンセル相当)、
+        // `__verify_loadfile` 設定時はそのパスを返す (検証ドライバの `データロード` 駆動用)。
+        let mut app = App::new();
+        execute(
+            &mut app,
+            &event::parse("Set r LoadFileDialog(プレイデータ, src)\n").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(app.script_var("r"), "");
+        app.set_script_var(
+            "__verify_loadfile".to_string(),
+            "/save/test.src".to_string(),
+        );
+        execute(
+            &mut app,
+            &event::parse("Set r2 LoadFileDialog(プレイデータ, src)\n").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(app.script_var("r2"), "/save/test.src");
     }
 
     #[test]
