@@ -905,8 +905,8 @@ fn set_func_call_plus_literal_evaluates() {
 
 #[test]
 fn set_format_output_is_not_renumericized() {
-    // `Set v Format(-5,"00")` → "-05"。関数の整形出力 (先頭 `-` + 数字) を
-    // 算術と誤認して再数値化 (`-5`) しないこと (value_is_arith_expr が関数呼出単体を弾く)。
+    // `Set v Format(-5,"00")` → "-05"。関数の整形出力 (先頭 `-` + 数字) を算術と誤認して
+    // 再数値化 (`-5`) しないこと (`Set` 形は括弧付きのみ評価＝Format 呼出単体は対象外)。
     assert_eq!(run(r#"Set v Format(-5,"00")"#).script_var("v"), "-05");
 }
 
@@ -916,6 +916,56 @@ fn set_quoted_digits_with_dash_stays_string() {
     // (展開後 `1-2-3` を `-4` に潰さない)。
     let app = run("Set a 1\nSet b 2\nSet c 3\nSet msg \"$(a)-$(b)-$(c)\"");
     assert_eq!(app.script_var("msg"), "1-2-3");
+}
+
+// ============================================================
+//  数値関数の引数で裸変数を解決する (SRC EvalTerm 準拠)
+//  `Round(a + b)` 等。以前は `$(...)` 補間のみ対応で裸変数算術は未評価
+//  (温泉旅館シナリオの収入計算 `Round(温泉宿１収入 + 温泉宿２収入)` が壊れる原因)。
+// ============================================================
+
+#[test]
+fn math_function_resolves_bare_variable_arithmetic() {
+    // `Round(a + b)` (裸変数) → Round(2.3 + 3.4) = Round(5.7) = 6。内部スペース有無とも可。
+    assert_eq!(
+        run("Set a 2.3\nSet b 3.4\nSet c Round(a + b)").script_var("c"),
+        "6"
+    );
+    assert_eq!(
+        run("Set a 2.3\nSet b 3.4\nSet c Round( a + b )").script_var("c"),
+        "6"
+    );
+}
+
+#[test]
+fn nested_paren_then_round_chain_evaluates() {
+    // 温泉旅館の収入計算 cascade を縮約: 収入1 = ((倍率*基数)*(力/100))、合計 = Round(収入1 + 収入2)。
+    let app = run("Set 倍率 0.6\nSet 基数 70\nSet 力 60\n\
+         Set 収入1 ((倍率 * 基数) * (力 / 100))\n\
+         Set 収入2 10\n\
+         Set 合計 Round(収入1 + 収入2)\n");
+    assert_eq!(app.script_var("収入1"), "25.2", "ネスト括弧の leaf 計算");
+    assert_eq!(app.script_var("合計"), "35", "Round(25.2 + 10) = 35");
+}
+
+#[test]
+fn int_and_minmax_resolve_bare_variable_arithmetic() {
+    // Int / Min / Max の引数でも裸変数算術を解決する。
+    assert_eq!(
+        run("Set a 7\nSet b 2\nSet c Int(a / b)").script_var("c"),
+        "3"
+    );
+    assert_eq!(
+        run("Set a 7\nSet b 2\nSet c Min(a - 5, b)").script_var("c"),
+        "2"
+    );
+}
+
+#[test]
+fn string_function_bare_arg_unaffected() {
+    // 文字列関数 (Len) は fn_arg_value を直接使うため numeric_arg の裸変数解決に影響されない。
+    // `Len($(s))` は従来どおり文字列長を返す ($() 補間)。
+    assert_eq!(run("Set s hello\nSet v Len($(s))").script_var("v"), "5");
 }
 
 // ============================================================

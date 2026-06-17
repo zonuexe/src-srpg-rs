@@ -11227,13 +11227,28 @@ fn fn_arg_value(app: &App, arg: &str) -> String {
 }
 
 /// 数学関数引数用の数値評価ヘルパ。`fn_arg_value` の結果を `try_eval_num`
-/// で算術式として評価し、失敗したら 0 を返す。
+/// で算術式として評価し、失敗したら裸変数を解決してから再評価する。
+///
+/// SRC `EvalTerm` は関数引数も式評価し**裸の変数を数値解決**するため、数値関数
+/// (`Round`/`Int`/`Min`/`Max`/`Abs`/`Mod` 等、本ヘルパを呼ぶ arm に限定) の引数で
+/// `Round(温泉宿１収入 + 温泉宿２収入)` のような裸変数算術を評価できるようにする。
+/// 文字列関数 (`Left`/`Mid` 等) は `fn_arg_value` を直接使うため影響しない。
+/// ネストした関数呼出は `expand_vars` が事前に値へ展開済みなので、ここに届く時点で
+/// 残るのは裸変数・システム変数・算術演算子・数値リテラルのみ。
 fn numeric_arg(app: &App, arg: &str) -> Option<f64> {
     let s = fn_arg_value(app, arg);
     if let Ok(v) = s.parse::<f64>() {
         return Some(v);
     }
-    try_eval_num(&s)
+    // 数値リテラルのみの算術 (`3 + 4`) はそのまま評価。
+    if let Some(v) = try_eval_num(&s) {
+        return Some(v);
+    }
+    // 裸の script_var を含む算術式 (`温泉宿１収入 + 温泉宿２収入`) を解決して評価する。
+    // `eval_numeric_atoms` は全アトムが数値 / 数値変数 / キーワードのときのみ評価し、
+    // 非数値トークン (`"AB"` 等の文字列) は `None` を返す。これにより
+    // 「numeric なら数値・else 文字列」で分岐する呼出元 (LSet/RSet) の契約を壊さない。
+    eval_numeric_atoms(app, &s).and_then(|r| r.parse::<f64>().ok())
 }
 
 /// SRC のシステム変数 (`味方数` / `敵数` / `友軍数` / `中立数` / `ターン数` 等)
