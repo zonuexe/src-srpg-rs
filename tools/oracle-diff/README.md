@@ -40,11 +40,35 @@ paste -d'~' /tmp/exprs.txt /tmp/cs.txt /tmp/rs.txt | awk -F'~' '$2 != $3 {print}
   扱えないため、文字列系は [`string_function_oracle.rs`](../../crates/src-core/tests/string_function_oracle.rs)
   で直接検証する。→ 将来 `eval_to_string(expr)` 統一入口を設ければ harness を全式へ拡張可能。
 
-## 最新の結果 (2026-06-17, corpus 76 式)
+## コマンド列モード (scenario) — Commands 層の差分
 
-- **75/76 が SRCCore と完全一致。**
-- 唯一の差分 `Round(-2.5, 0)`: C#=-3 (SRC.Sharp の `AwayFromZero`) / Rust=-2。
-  Rust は **VB6 原典に忠実**で正しい (`docs/SRC_SHARP_DIVERGENCE.md` §2)。
+式 1 つではなく**コマンド列**を両エンジンで実行し、状態 (変数/配列) を probe して diff する。
+C# のユニットテストは Commands を内部構造として検証するため mining できないが、両エンジンを
+駆動して diff すればコマンド実行の fidelity を直接検証できる。
+
+入力は `===PROBES===` でコマンド列と probe 式に分ける ([`scenario_vars.txt`](scenario_vars.txt) 参照)。
+逐次実行のみ (C# は per-command `Exec()` で PC 管理が無いため If/For 等の制御フローは非対応)。
+
+```sh
+# C#
+$NIX develop .#dotnet --command bash -c \
+  'dotnet run --project tools/oracle-diff/oracle-diff.csproj -c Release scenario < tools/oracle-diff/scenario_vars.txt > /tmp/cs.txt 2>/dev/null'
+# Rust
+$NIX develop --command bash -c \
+  'cargo run -q -p verify-archive --bin oracle_scenario < tools/oracle-diff/scenario_vars.txt > /tmp/rs.txt 2>/dev/null'
+# probe を抽出して diff
+sed -n '/^===PROBES===$/,$p' tools/oracle-diff/scenario_vars.txt | grep -vE '^===|^#|^$' > /tmp/p.txt
+paste -d'~' /tmp/p.txt /tmp/cs.txt /tmp/rs.txt | awk -F'~' '$2!=$3{print}'
+```
+
+## 最新の結果 (2026-06-17)
+
+- **式モード (corpus 76 式): 75/76 が SRCCore と完全一致。** 唯一の差分 `Round(-2.5, 0)`:
+  C#=-3 (SRC.Sharp の `AwayFromZero`) / Rust=-2 (VB6 原典に忠実で正しい、`docs/SRC_SHARP_DIVERGENCE.md` §2)。
+- **コマンド列モード (scenario_vars.txt 9 probe): 9/9 完全一致** (Set / bareword 算術代入 / Array /
+  文字列補間)。Commands 層の fidelity を実証。
+- 副次発見: `Set var "x" & y` を C# は「引数の数が違う」と拒否、Rust は受理 (Rust が寛容、
+  `docs/SRC_SHARP_DIVERGENCE.md` の乖離候補参照)。正規の SRC 形式は `Set var "x$(y)"`。
 
 ## 拡張
 

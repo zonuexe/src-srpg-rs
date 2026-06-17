@@ -1,0 +1,26 @@
+# コマンド列モードのシナリオ (map 不要・逐次・決定論的)。
+# `===PROBES===` の上がコマンド、下が probe (変数/配列/関数の読み出し)。
+# C# (oracle-diff scenario) と Rust (oracle_scenario) に通して diff する。
+
+Set 名前 リオ
+Set n 5
+n = n + 10
+Set hp 1000
+hp = hp - 300
+Set 合計 0
+合計 = 合計 + n
+合計 = 合計 + 100
+Set msg "HP:$(hp)"
+Array arr "x y z" リスト
+Set m 7
+m = m * 3
+===PROBES===
+名前
+n
+hp
+合計
+msg
+arr[1]
+arr[2]
+arr[3]
+m
