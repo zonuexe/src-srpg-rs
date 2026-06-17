@@ -159,25 +159,20 @@ impl PilotInstance {
         self.level > old_level
     }
 
-    /// Apply stat growth on level up. Each level increases stats based on
-    /// a simple growth formula: base_stat + level * growth_rate.
-    /// Growth rates are derived from the pilot's class/personality.
+    /// レベルに応じた能力値成長を base から再計算する。
+    ///
+    /// 成長式は VB6 原典 `Pilot.cls:582-593` 準拠: **`lv = Level`**(level-1 ではなく Level そのもの。
+    /// レベル 1 でも成長する)、格闘/射撃/技量/反応 `+= lv`、命中/回避 `+= 2*lv`。差分オラクル
+    /// placeunit で C# SRCCore と一致を確認。成長スキル (`格闘成長` 等)・`追加レベル`・
+    /// `攻撃力低成長` Option は未モデル (素の式)。`db::grown_pilot` と同一の式に保つこと。
     pub fn apply_stat_growth(&mut self, pilot_data: &crate::data::pilot::PilotData) {
-        // Simple growth: each level adds a small amount to each stat
-        // The growth rate varies by pilot class
-        let growth_rate = match pilot_data.class.as_str() {
-            "スーパー系" => 15, // super robot: higher growth
-            "リアル系" => 12,   // real robot: moderate growth
-            _ => 10,            // default
-        };
-
-        // Recalculate stats from base + growth
-        self.infight = pilot_data.infight + (self.level - 1) * growth_rate;
-        self.shooting = pilot_data.shooting + (self.level - 1) * growth_rate;
-        self.hit = pilot_data.hit + (self.level - 1) * growth_rate / 2;
-        self.dodge = pilot_data.dodge + (self.level - 1) * growth_rate / 2;
-        self.intuition = pilot_data.intuition + (self.level - 1) * growth_rate / 3;
-        self.technique = pilot_data.technique + (self.level - 1) * growth_rate / 3;
+        let lv = self.level;
+        self.infight = pilot_data.infight + lv;
+        self.shooting = pilot_data.shooting + lv;
+        self.hit = pilot_data.hit + lv * 2;
+        self.dodge = pilot_data.dodge + lv * 2;
+        self.intuition = pilot_data.intuition + lv;
+        self.technique = pilot_data.technique + lv;
     }
 
     /// Consume SP for a special power. Returns false if insufficient SP.
@@ -266,7 +261,9 @@ mod tests {
     }
 
     #[test]
-    fn pilot_instance_from_data_copies_base_stats() {
+    fn pilot_instance_from_data_applies_level1_growth() {
+        // VB6 `Pilot.cls:582-593` 準拠: lv=Level なのでレベル 1 でも成長が乗る
+        // (格闘/射撃/技量/反応 +1・命中/回避 +2)。base = make_pilot_data の値。
         let pdata = make_pilot_data();
         let inst = PilotInstance::from_data("テストパイロット", "p1", &pdata);
 
@@ -276,12 +273,12 @@ mod tests {
         assert_eq!(inst.total_exp, 0);
         assert_eq!(inst.sp_remaining, 50);
         assert_eq!(inst.morale, 100);
-        assert_eq!(inst.infight, 150);
-        assert_eq!(inst.shooting, 120);
-        assert_eq!(inst.hit, 130);
-        assert_eq!(inst.dodge, 110);
-        assert_eq!(inst.intuition, 140);
-        assert_eq!(inst.technique, 160);
+        assert_eq!(inst.infight, 151); // 150 + lv(1)
+        assert_eq!(inst.shooting, 121); // 120 + lv
+        assert_eq!(inst.hit, 132); // 130 + 2*lv
+        assert_eq!(inst.dodge, 112); // 110 + 2*lv
+        assert_eq!(inst.intuition, 141); // 140 + lv
+        assert_eq!(inst.technique, 161); // 160 + lv
         assert!(inst.is_main_pilot);
         assert!(!inst.is_support);
         assert_eq!(inst.pilot_index, 0);
@@ -446,33 +443,37 @@ mod tests {
 
     #[test]
     fn stat_growth_increases_on_level_up() {
+        // VB6 式: 格闘 += lv。level 1 → base+1、level 2 → base+2。
         let mut pdata = make_pilot_data();
-        pdata.class = "格闘家".to_string();
         pdata.infight = 100;
         let inst = PilotInstance::from_data("テストパイロット", "p1", &pdata);
-        assert_eq!(inst.infight, 100);
+        assert_eq!(inst.infight, 101); // level 1 = base + 1
         let mut inst2 = inst.clone();
         inst2.level = 2;
         inst2.apply_stat_growth(&pdata);
+        assert_eq!(inst2.infight, 102); // level 2 = base + 2
         assert!(inst2.infight > inst.infight);
     }
 
     #[test]
-    fn stat_growth_varies_by_class() {
+    fn stat_growth_does_not_vary_by_class() {
+        // VB6 `Pilot.cls:582-593` の成長式は class 非依存 (lv のみで決まる)。
+        // 旧実装は class ベース rate で成長していたが、SRC 準拠では class が違っても同値。
         let mut pdata_super = make_pilot_data();
         pdata_super.class = "スーパー系".to_string();
         pdata_super.infight = 100;
         let mut inst_super = PilotInstance::from_data("テストパイロット", "p1", &pdata_super);
-        inst_super.level = 2;
+        inst_super.level = 5;
         inst_super.apply_stat_growth(&pdata_super);
 
         let mut pdata_real = make_pilot_data();
         pdata_real.class = "リアル系".to_string();
         pdata_real.infight = 100;
         let mut inst_real = PilotInstance::from_data("テストパイロット", "p2", &pdata_real);
-        inst_real.level = 2;
+        inst_real.level = 5;
         inst_real.apply_stat_growth(&pdata_real);
 
-        assert!(inst_super.infight > inst_real.infight);
+        assert_eq!(inst_super.infight, 105); // 100 + lv(5)、class 非依存
+        assert_eq!(inst_super.infight, inst_real.infight);
     }
 }

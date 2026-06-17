@@ -12068,11 +12068,12 @@ mod tests {
             let uid = first_player_uid(&app);
             app.database().idx_by_uid(&uid).unwrap()
         };
-        // 基準 (level 1 / 装備なし / 状態異常なし) = 静的データそのまま。
+        // 基準 (level 1 / 装備なし / 状態異常なし)。VB6 `Pilot.cls:582-593` 準拠で
+        // レベル 1 でも成長が乗る (格闘 = base 100 + lv 1 = 101)。装甲は unit 由来で不変。
         let (p0, u0) = app.database().effective_combat_data(idx).unwrap();
-        assert_eq!(p0.infight, 100);
+        assert_eq!(p0.infight, 101);
         assert_eq!(u0.armor, 10);
-        // 育成: total_exp 500 → level 6 → 格闘が成長する (戦闘予測へ反映)。
+        // 育成: total_exp 500 → level 2 → 格闘がさらに成長する (戦闘予測へ反映)。
         app.database_mut().unit_instances[idx].total_exp = 500;
         let (p1, _) = app.database().effective_combat_data(idx).unwrap();
         assert!(

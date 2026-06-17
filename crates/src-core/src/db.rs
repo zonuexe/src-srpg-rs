@@ -863,25 +863,21 @@ pub struct CombatBonuses {
 
 /// `base` パイロットに `total_exp` 由来のレベル成長を適用した `PilotData` を返す。
 /// レベルは `pilot_instance::level_from_exp` (SRC 原典: 500 exp/level、1..=99)。
-/// 成長率はクラス依存。level<=1 は無補正。
+///
+/// 成長式は VB6 原典 `Pilot.cls:582-593` 準拠: **`lv = Level`**(level-1 ではなく Level そのもの。
+/// レベル 1 でも成長する)、格闘/射撃/技量/反応 `+= lv`、命中/回避 `+= 2*lv`。差分オラクル
+/// placeunit で C# SRCCore と一致を確認 (人工知能 lv10 格闘=110・命中=165・反応=90)。成長スキル
+/// (`格闘成長` 等)・`追加レベル`・`攻撃力低成長` Option は未モデル (素の式)。
+/// `pilot_instance::apply_stat_growth` と同一の式に保つこと。
 pub fn grown_pilot(base: &PilotData, total_exp: i32) -> PilotData {
-    let level = crate::pilot_instance::level_from_exp(total_exp);
-    if level <= 1 {
-        return base.clone();
-    }
-    let rate: i32 = match base.class.as_str() {
-        "スーパー系" => 15,
-        "リアル系" => 12,
-        _ => 10,
-    };
-    let lv = level - 1;
+    let lv = crate::pilot_instance::level_from_exp(total_exp);
     PilotData {
-        infight: base.infight + lv * rate,
-        shooting: base.shooting + lv * rate,
-        hit: base.hit + lv * rate / 2,
-        dodge: base.dodge + lv * rate / 2,
-        intuition: base.intuition + lv * rate / 3,
-        technique: base.technique + lv * rate / 3,
+        infight: base.infight + lv,
+        shooting: base.shooting + lv,
+        hit: base.hit + lv * 2,
+        dodge: base.dodge + lv * 2,
+        intuition: base.intuition + lv,
+        technique: base.technique + lv,
         ..base.clone()
     }
 }

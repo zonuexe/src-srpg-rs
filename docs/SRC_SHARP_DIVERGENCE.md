@@ -131,6 +131,9 @@ C# オラクル × VB6 原典の突合で、本実装が原典から乖離して
 | exp→level | 100 exp/level | 500 exp/level（`Pilot.cls:1183`） | `06366f3` |
 | pilot.txt 能力値 5/6 番目 | 反応・技量（取り違え） | 技量・反応（`PilotDataList.cls:677-692`） | `803e13d` |
 | `Create` の rank 引数 | 無視（常に素のステータス） | 改造段階として反映（`UList.Add`→`Unit.Rank`） | `135b5da` |
+| `Create` の level 引数 | 無視（常にレベル 1） | 主パイロット初期レベルへ反映（`PList.Add`） | `ab67269` |
+| パイロットのレベル成長式 | class ベース `(level-1)*rate`（過大成長） | `lv=Level`・格闘等 +level・命中/回避 +2*level（`Pilot.cls:582-593`） | （本セッション） |
+| `Info(パイロットデータ,…)` の成長 | 配置済みだと成長後を返す | 静的データ（成長前）を返す（`Info.cs` PDList） | （本セッション） |
 
 pilot.txt 能力値行の 5 番目=技量(Technique)・6 番目=反応(Intuition) を取り違えていた。
 差分オラクル `oracle_loaddata`（後述）で `Info(パイロットデータ, 人工知能, 技量)` が
@@ -223,31 +226,14 @@ exp→level は併せて、実装中に 16 箇所重複していた `total_exp/1
   捨てても現状の機能影響は無い (継承を実装するときに併せて取り込み方を揃える)。差分オラクル
   (`oracle_loaddata`) で検出。中優先 (穴埋めロードマップ側の課題)。
 
-### パイロットのレベル成長式 — Rust が class ベース簡易式で大きく乖離 (★高優先・要是正)
+### ✅ パイロットのレベル成長式 — 是正済 (§4 表参照)
 
-差分オラクル placeunit (有人モード `unit_pilot.txt`) で検出。**レベル/累積経験値は cross-engine
-一致**するが (Create level 配線後)、**レベル成長後の能力値が大きく乖離**する。
-
-- **Rust 実装** (`db::grown_pilot` / `pilot_instance::apply_stat_growth`): `class` ("スーパー系"=15 /
-  "リアル系"=12 / その他=10) ベースの rate で `base + (level-1)*rate` (命中/回避 ÷2、技量/反応 ÷3)。
-  → 大幅に過大成長。
-- **SRC.Sharp / VB6** (`Pilot.cls:582-593`): `lv = Level` (**level-1 ではなく Level そのもの。レベル 1 でも成長**)。
-  ```
-  格闘/射撃   += lv * (1 + SkillLevel("格闘成長"))      ; 攻撃力低成長 Option 時は (lv*(1+2*成長))\2
-  命中/回避   += lv * (2 + SkillLevel("命中成長"))
-  技量/反応   += lv * (1 + SkillLevel("技量成長"))
-  ```
-  成長スキル無しの素の式は **格闘/射撃/技量/反応 += level・命中/回避 += 2*level**。
-- **オラクル実測** (人工知能 base 格闘100/命中145/反応80): lv10 → C#=格闘110・命中165・反応90 /
-  旧 Rust=190・190・110。lv1 → C#=格闘101・命中147 (レベル 1 でも +1/+2 成長)。超人工知能 lv30 →
-  C#=155 / Rust=415。
-- **影響**: `grown_pilot` は created ユニット (`effective_pilot_data`)、`apply_stat_growth` は
-  PilotInstance のレベルアップで使われ、**全レベルアップ済みパイロットの戦闘実効値に波及する pervasive bug**。
-- **要是正 (次タスク)**: 両関数を VB6 式 (`lv=Level`、格闘/射撃/技量/反応 ×1・命中/回避 ×2) へ是正。
-  成長スキル (`格闘成長` 等)・`追加レベル`・`攻撃力低成長` Option は未モデルだが素の式で大半を被覆。
-  **レベル 1 でも成長する**点が現行 Rust の「level 1 = base」前提 (`PilotInstance::from_data` 等) と衝突するため、
-  level-1 セマンティクスの見直し＋戦闘テストの期待値更新を伴う集中作業。回帰検証は `unit_pilot.txt` の
-  10 growth probe (現状 diff、是正後 0 diff になるべき)。
+差分オラクル placeunit (有人モード `unit_pilot.txt`) で発掘し是正した pervasive bug。旧 Rust は
+class ベース `base+(level-1)*rate` で過大成長していた。VB6 `Pilot.cls:582-593` 準拠の
+**`lv=Level` (レベル 1 でも成長)・格闘/射撃/技量/反応 +=lv・命中/回避 +=2*lv** へ `db::grown_pilot` /
+`pilot_instance::apply_stat_growth` を是正 (成長スキル/`追加レベル`/`攻撃力低成長` Option は未モデル)。
+併せて `Info(パイロットデータ,…)` が配置済みパイロットで成長後を返していた conflation も是正 (静的データを返す)。
+`unit_pilot.txt` の 13/13 一致で cross-engine 検証 (人工知能 lv10 格闘=110・命中=165、超人工知能 lv30 格闘=155)。
 
 ### `Info(ユニット, …, 気力)` — 無人ユニットの気力 (差分オラクル placeunit で検出)
 
@@ -261,5 +247,5 @@ exp→level は併せて、実装中に 16 箇所重複していた `total_exp/1
 
 ---
 
-最終更新: 2026-06-17（差分オラクル loaddata/placeunit 拡張で pilot 能力値順・Create rank を是正、
-既知乖離 4 件を追記）
+最終更新: 2026-06-18（差分オラクル placeunit 有人モードでパイロットのレベル成長式の大乖離を発掘・
+VB6 準拠へ是正＋Create level 配線＋パイロットデータ成長 conflation 是正）

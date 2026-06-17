@@ -10431,20 +10431,28 @@ fn feature_data(feats: &[(String, String)], sub: Option<&&str>, app: &App) -> St
 
 fn info_pilot(app: &App, name: &str, info: &str, sub: &[&str], is_instance: bool) -> String {
     let n = name.trim().trim_matches('"');
-    // パイロットは PilotData として持つ。Instance は UnitInstance.pilot_name で
-    // 紐付くので、必要に応じて両方を引く。
-    // effective_pilot_data: PilotInstance が存在すればレベルアップ後スタットを返す。
-    let effective = app.database().effective_pilot_data(n).or_else(|| {
-        // nickname でも試みる
+    // `Info(パイロット, …)` (is_instance=true) はレベル成長後の `effective_pilot_data` を、
+    // `Info(パイロットデータ, …)` (is_instance=false) は成長前の生 `PilotData` を引く。
+    // SRC.Sharp Info も実体は `PList`、データは `PDList` (静的) と引き分ける
+    // (`Info.cs`)。配置済みパイロットでも パイロットデータ は素のデータを返さねばならない。
+    // どちらも nickname フォールバックする。
+    let resolve = |key: &str| -> Option<crate::data::pilot::PilotData> {
+        if is_instance {
+            app.database().effective_pilot_data(key)
+        } else {
+            app.database().pilot_by_name(key).cloned()
+        }
+    };
+    let data = resolve(n).or_else(|| {
         let real_name = app
             .database()
             .pilots
             .iter()
             .find(|p| p.nickname == n)
             .map(|p| p.name.clone())?;
-        app.database().effective_pilot_data(&real_name)
+        resolve(&real_name)
     });
-    let Some(data) = effective else {
+    let Some(data) = data else {
         return String::new();
     };
     // パイロット (Instance) 側の補正情報は士気・経験値が UnitInstance に乗る。
@@ -15791,13 +15799,14 @@ Exit
         let mut app = App::new();
         execute(&mut app, &stmts).unwrap();
 
-        // 初期状態: 格闘 = 100
+        // 初期状態 (level 1): 格闘 = base 100 + lv 1 = 101
+        // (VB6 `Pilot.cls:582-593` 準拠でレベル 1 でも +lv 成長する)。
         let initial = expand_vars(&app, "Info(パイロット, リオ, 格闘)")
             .parse::<i32>()
             .unwrap_or(0);
-        assert_eq!(initial, 100, "初期格闘は 100 のはず");
+        assert_eq!(initial, 101, "初期格闘は base100 + lv1 = 101 のはず");
 
-        // ExpUp でレベルを上げる (1500 exp → level 4, SRC: 500 exp/level, リアル系 rate=12)
+        // ExpUp でレベルを上げる (1500 exp → level 4, SRC: 500 exp/level、格闘 += lv)
         let exp_src = "ExpUp ブレイバー 1500\n";
         let exp_stmts = event::parse(exp_src).unwrap();
         execute(&mut app, &exp_stmts).unwrap();
