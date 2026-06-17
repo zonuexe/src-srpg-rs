@@ -2113,6 +2113,40 @@ mod tests {
     }
 
     #[test]
+    fn hit_chance_has_no_upper_cap() {
+        // SRC 原典 (`Unit.cls:6694-6696`) は命中率に上限を設けない (>100=必中)。
+        // 旧実装の clamp(5,95) は非原典だった。差分オラクル (placeattack) で C# と突合し是正済。
+        // 命中値 100(hit)+50(precision)=250、回避 0 → 命中率 250 (95 で頭打ちにしない)。
+        let prev = predict(
+            &p(100, 0, 0),
+            &u(0, vec![]),
+            &weapon(500, 1, 1, 50),
+            &p(0, 0, 0),
+            &u(0, vec![]),
+            0,
+            0,
+        );
+        assert_eq!(prev.hit_chance, 250);
+        assert!(prev.hit_chance > 95, "命中率は 95 で頭打ちにしない");
+    }
+
+    #[test]
+    fn minimum_damage_is_ten() {
+        // SRC 原典 (`Unit.cls:7460-7474` / C# `UnitWeapon.cs:3567`) の最低ダメージは既定 10。
+        // 旧実装は max(1) だった。装甲(1000) >> 攻撃力(100×0.5=50) でも 10 を下限とする。
+        let prev = predict(
+            &p(0, 0, 50),
+            &u(0, vec![]),
+            &weapon(100, 2, 2, 0),
+            &p(0, 0, 0),
+            &u(1000, vec![]),
+            0,
+            0,
+        );
+        assert_eq!(prev.damage, 10);
+    }
+
+    #[test]
     fn defend_halves_damage() {
         let base = predict(
             &p(0, 0, 100),
