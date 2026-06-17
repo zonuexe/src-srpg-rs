@@ -161,6 +161,20 @@ exp→level は併せて、実装中に 16 箇所重複していた `total_exp/1
   整理されている大規模リファクタの一部。実シナリオで `Plana` / `Relation`
   の戻り値に依存した条件式が動かないと困るような流れは未確認。
 
+### `.eve Pilot` / `Unit` コマンドの inline 定義形式 — Rust 独自拡張 (test 便宜)
+
+- **Rust 実装**: `Pilot "リオ" リオ 男性 超能力者 AAAA 100 160 ...` のような **12〜14 フィールド
+  inline 定義形式**を受理し、パイロット/ユニットをその場で定義する (テストの利便性のための拡張)。
+  SRC 正規の参照形式 (3〜4 引数) も受理する superset。
+- **SRC.Sharp / VB6**: `Pilot` コマンドは **3〜4 引数**のみ (`PilotCmd.cs:18` `ArgNum != 3 && != 4`)、
+  arg2 は **pilot.txt で事前定義済みの名前** (`PDList.IsDefined` 必須)。inline 12 フィールド形式は
+  「Pilotコマンドの引数の数が違います」で拒否。`Unit` も同様。
+- **判断保留の理由**: Rust の inline 形式は superset (SRC 正規の参照形式も動く) なので実シナリオの
+  fidelity には影響しない。ただし**差分オラクルでユニット状態を diff する際の制約**: 両エンジンで
+  同一ユニットを作るには inline コマンドではなく **pilot.txt/unit.txt データを両方にロード**する
+  必要がある (combat 状態 diff はさらに RNG シード一致が要る)。差分オラクルの「ユニット/combat
+  状態」拡張の前提条件。
+
 ### `Set var "x" & y` (Set 値の `&` 連結) — Rust が寛容
 
 - **Rust 実装**: `Set msg "HP:" & $(hp)` を受理し連結して代入する。
