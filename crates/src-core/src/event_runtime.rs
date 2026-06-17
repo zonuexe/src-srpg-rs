@@ -5561,7 +5561,12 @@ fn exec_command_pc(
             }
             let party = parse_party(&xargs[0], line)?;
             let unit_data_name = fn_arg_value(app, &xargs[1]);
-            // rank = xargs[2] — 未使用 (UnitInstance に未対応)
+            // rank = xargs[2] = 改造段階。SRC `UList.Add(uname, urank, uparty)` は
+            // `Unit.Rank=urank` で 1 段ごとに HP+200/装甲+100/EN+10/運動性+5 を加える
+            // (差分オラクル placeunit で C# 実測: rank2 → MaxHP+400・装甲+200)。
+            // 本実装の改造段階は `UnitInstance.upgrade_level`・`effective_*` がこの加算を
+            // 持つので、rank をそこへ配線する (旧実装は rank を捨てて常に素のステータスだった)。
+            let rank: i32 = fn_arg_value(app, &xargs[2]).parse().unwrap_or(0);
             let pilot = fn_arg_value(app, &xargs[3]);
             // level = xargs[4] — 未使用
             // 座標は app-aware 式評価で解決する。SRC は座標を式として評価するため、
@@ -5570,6 +5575,7 @@ fn exec_command_pc(
             let x = eval_coord_u32(app, &xargs, 5);
             let y = eval_coord_u32(app, &xargs, 6);
             let mut inst = UnitInstance::new(unit_data_name, pilot.clone(), party, x, y);
+            inst.upgrade_level = rank.max(0);
             populate_active_features(&mut inst, app);
             let uid = app.database_mut().register_unit(inst);
             // 対象ユニットＩＤ は最新作成ユニットの uid (一意)、
@@ -14207,6 +14213,36 @@ Set b Exists(アークシップ)
             "ブレイバー"
         );
         assert_eq!(app.database().unit_instances[2].pilot_name, "リオ");
+    }
+
+    #[test]
+    fn create_rank_applies_upgrade_level() {
+        // SRC `Create party unit rank …` の rank=改造段階。差分オラクル placeunit で C# SRCCore と
+        // 突合し、rank2 が MaxHP+400 (=2×UPGRADE_HP_PER_LEVEL) になることを確認 (旧実装は rank を
+        // 捨てて常に素のステータスだった)。同一ユニットを rank 0/2 で生成し effective_max_hp を比較。
+        let mut app = App::new();
+        setup_two_units(&mut app);
+        let src = "Create 味方 ブレイバー 0 リオ 0 0 0\n\
+                   Create 敵 ブレイバー 2 リオ 0 1 1\n";
+        let stmts = event::parse(src).unwrap();
+        execute(&mut app, &stmts).unwrap();
+        let db = app.database();
+        let rank0 = db
+            .unit_instances
+            .iter()
+            .find(|u| u.party == crate::Party::Player && u.unit_data_name == "ブレイバー")
+            .unwrap();
+        let rank2 = db
+            .unit_instances
+            .iter()
+            .find(|u| u.party == crate::Party::Enemy && u.unit_data_name == "ブレイバー")
+            .unwrap();
+        assert_eq!(rank0.upgrade_level, 0);
+        assert_eq!(rank2.upgrade_level, 2);
+        assert_eq!(
+            db.effective_max_hp(rank2),
+            db.effective_max_hp(rank0) + 2 * crate::db::UPGRADE_HP_PER_LEVEL,
+        );
     }
 
     #[test]
