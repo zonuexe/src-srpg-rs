@@ -470,6 +470,11 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
         // `__verify_loadfile` をセットして LoadFileDialog に返させ、パイロットリスト Ask を
         // キャンセル→RemovePilot→Break で抜ける。
         let cmaking_exit_drive = env::var("VERIFY_CMAKING_EXIT").is_ok();
+        // VERIFY_MENU_CYCLE=1: 同一の Menu/Ask が連続で出る (= 選んだ選択肢が no-op で
+        // ループしている) とき、選択肢を順送りしてループを破る。経営シム (温泉旅館) の
+        // ように「ある選択肢が上限到達で無効化される」シナリオを先へ進めるための drive 強化。
+        // 既定 OFF (D/Tales/らんま 等の確立済み smoke ドライブの挙動を変えないため)。
+        let menu_cycle = env::var("VERIFY_MENU_CYCLE").is_ok();
         let menu_choice = move |options: &[String]| -> u32 {
             if autostart {
                 // ① 【開始】/【START】 等の括弧付き進行アクション (タイトル/難易度設定を抜ける)。
@@ -560,6 +565,10 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                 "  cmaking_exit setup: .src='{path}' load_pilot='{pilot}' readback={readback:?}"
             );
         }
+        // VERIFY_MENU_CYCLE のループ検出状態: 直前に提示した Menu のキー (prompt+options) と
+        // 連続出現回数。同一メニューが連続するほど選択肢を順送りしてループを破る。
+        let mut last_menu_key = String::new();
+        let mut menu_repeat = 0u32;
         for step in 0..400 {
             let state = app.stage_state();
             dump_vars(&app, step);
@@ -593,6 +602,17 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                         // 「決定」を含む。autostart 時はまず「ランダム」でキャラ生成→次に「決定」。
                         let is_cmaking = options.iter().any(|o| o == "名前入力")
                             && options.iter().any(|o| o == "決定");
+                        // 同一メニューの連続出現を検出 (ループ判定)。cmaking は独自に同一
+                        // メニューを再提示する (名前入力→決定) ため対象外。
+                        if menu_cycle && !is_cmaking {
+                            let key = format!("{prompt}|{}", options.join("|"));
+                            if key == last_menu_key {
+                                menu_repeat += 1;
+                            } else {
+                                menu_repeat = 0;
+                                last_menu_key = key;
+                            }
+                        }
                         let c = if autostart && is_cmaking {
                             if cmaking_exit_drive
                                 && cmaking_pilots >= CMAKING_TARGET
@@ -609,7 +629,15 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                                 options.iter().position(|o| o == "決定").unwrap() as u32 + 1
                             }
                         } else {
-                            menu_choice(options)
+                            let base = menu_choice(options);
+                            // ループ検出時 (menu_repeat>0) は base から順送りして別の選択肢を試す。
+                            // 1-based を保ち options 数で wrap する (choice 0=キャンセルは避ける)。
+                            if menu_cycle && menu_repeat > 0 && !options.is_empty() {
+                                ((base as usize - 1 + menu_repeat as usize) % options.len()) as u32
+                                    + 1
+                            } else {
+                                base
+                            }
                         };
                         (
                             "Menu/Ask",
