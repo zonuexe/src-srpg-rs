@@ -329,8 +329,40 @@ pub fn predict_with_status_terrain(
         as f64
         * atk_adapt) as i64;
 
-    // 防御力 = armor × morale/100 × 地形適応
-    let def_power = ((def_unit.armor * i64::from(def_morale) / 100) as f64 * def_adapt) as i64;
+    // 防御側パイロットの Defense 係数 (耐久 技能): SRC は装甲を Pilot.Defense/100 倍する
+    // (`UnitWeapon.cs::Damage` `arm = arm * withBlock.Defense / 100`)。既定オプション下の
+    // Defense は `100 + 5 * SkillLevel("耐久")` (`Pilot.cls:402`)。
+    // 「防御力成長 / 防御力レベルアップ」オプション下の Level 加算項は既定オフのため未モデル化。
+    // 耐久 Lv は攻撃側ハンター技能 (下記) と同じ要領で features の `耐久Lv<n>` 接尾辞から抽出
+    // (無印 = Lv1、半角/全角を許容)。
+    let def_endurance_lv: i64 = def_pilot
+        .features
+        .iter()
+        .find_map(|(fname, _)| {
+            let rest = fname.trim().strip_prefix("耐久")?;
+            if rest.is_empty() {
+                return Some(1);
+            }
+            rest.strip_prefix("Lv")
+                .or_else(|| rest.strip_prefix("LV"))
+                .or_else(|| rest.strip_prefix("lv"))
+                .or_else(|| rest.strip_prefix("Ｌｖ"))
+                .or_else(|| rest.strip_prefix("ＬＶ"))
+                .map(|a| {
+                    a.chars()
+                        .filter(char::is_ascii_digit)
+                        .collect::<String>()
+                        .parse()
+                        .unwrap_or(1)
+                })
+        })
+        .unwrap_or(0);
+    let def_defense = 100 + 5 * def_endurance_lv;
+
+    // 防御力 = armor × morale/100 × Defense/100 × 地形適応
+    let def_power = ((def_unit.armor * i64::from(def_morale) / 100) as f64
+        * (def_defense as f64 / 100.0)
+        * def_adapt) as i64;
 
     // 地形ダメージ補正: damage_mod=5 → 0.95 倍 (正値ほど軽減)
     let terrain_dmg_mult = ((100 - def_terrain_damage_mod) as f64 / 100.0).clamp(0.0, 2.0);
@@ -1683,6 +1715,84 @@ mod tests {
             hit_size.damage,
             (base.damage * 11 / 10).max(1),
             "ハンター無印 (Lv1): Mサイズへ ×1.1"
+        );
+    }
+
+    /// 耐久 (防御側パイロット技能): 装甲を Pilot.Defense/100 倍する。
+    /// 既定オプション下の Defense = 100 + 5 * Lv (`Pilot.cls:402`)。
+    /// 耐久 持ちの防御側は def_power が増えるため被ダメージが減る。
+    #[test]
+    fn endurance_skill_raises_defense_and_reduces_damage() {
+        // 攻撃力 1500 / 装甲 1000 / 気力・地形適応中立 → 被ダメージ = 1500 - def_power。
+        let w = weapon(1500, 1, 1, 0);
+        let ap = p(0, 0, 100);
+        let au = u(0, vec![]);
+
+        // 耐久なし: Defense=100 → def_power = 1000 → ダメージ = 500。
+        let plain = p(0, 0, 0);
+        let no_skill = predict_with_status(
+            &ap,
+            &au,
+            &w,
+            &plain,
+            &u(1000, vec![]),
+            0,
+            0,
+            100,
+            100,
+            &[],
+            &[],
+        );
+        assert_eq!(
+            no_skill.damage, 500,
+            "耐久なし: def_power=1000 → ダメージ500"
+        );
+
+        // 耐久Lv2: Defense = 100 + 5*2 = 110 → def_power = 1000×110/100 = 1100
+        //   → ダメージ = 1500 - 1100 = 400。
+        let mut tough = p(0, 0, 0);
+        tough.features.push(("耐久Lv2".into(), String::new()));
+        let with_skill = predict_with_status(
+            &ap,
+            &au,
+            &w,
+            &tough,
+            &u(1000, vec![]),
+            0,
+            0,
+            100,
+            100,
+            &[],
+            &[],
+        );
+        assert_eq!(
+            with_skill.damage, 400,
+            "耐久Lv2: Defense=110 → def_power=1100 → ダメージ400"
+        );
+        assert!(
+            with_skill.damage < no_skill.damage,
+            "耐久 持ちの防御側は被ダメージが減る"
+        );
+
+        // 耐久無印 (Lv1): Defense = 105 → def_power = 1050 → ダメージ = 450。
+        let mut tough1 = p(0, 0, 0);
+        tough1.features.push(("耐久".into(), String::new()));
+        let with_lv1 = predict_with_status(
+            &ap,
+            &au,
+            &w,
+            &tough1,
+            &u(1000, vec![]),
+            0,
+            0,
+            100,
+            100,
+            &[],
+            &[],
+        );
+        assert_eq!(
+            with_lv1.damage, 450,
+            "耐久無印 (Lv1): Defense=105 → def_power=1050 → ダメージ450"
         );
     }
 
