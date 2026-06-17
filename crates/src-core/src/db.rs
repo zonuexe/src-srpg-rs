@@ -841,11 +841,13 @@ pub fn boss_attack_boost(rank: i32) -> i64 {
 /// 機体改造の上限段階。
 pub const UPGRADE_MAX_LEVEL: i32 = 10;
 /// 機体改造 1 段階あたりの最大 HP 上昇量。
-pub const UPGRADE_HP_PER_LEVEL: i64 = 100;
-/// 機体改造 1 段階あたりの最大 EN 上昇量。
+/// SRC 原典 `Unit.cls:1719` `lngMaxHP = .HP + 200 * Rank` 準拠 (+200/段)。
+pub const UPGRADE_HP_PER_LEVEL: i64 = 200;
+/// 機体改造 1 段階あたりの最大 EN 上昇量。SRC `Unit.cls:1720` `.EN + 10 * Rank`。
 pub const UPGRADE_EN_PER_LEVEL: i32 = 10;
 /// 機体改造 1 段階あたりの装甲上昇量。
-pub const UPGRADE_ARMOR_PER_LEVEL: i64 = 30;
+/// SRC 原典 `Unit.cls:1721` `lngArmor = .Armor + 100 * Rank` 準拠 (+100/段)。
+pub const UPGRADE_ARMOR_PER_LEVEL: i64 = 100;
 /// 機体改造 1 段階あたりの運動性上昇量。
 pub const UPGRADE_MOBILITY_PER_LEVEL: i32 = 5;
 
