@@ -17,7 +17,7 @@
 //! atk_power = weapon.power * pilot_attack / 100 * atk_morale / 100
 //! def_power = def_unit.armor * def_morale / 100
 //! terrain_dmg_mult = (100 - def_terrain_damage_mod) / 100  # damage_mod=5 → 0.95
-//! damage = max(1, (atk_power - def_power) * terrain_dmg_mult)
+//! damage = max(10, (atk_power - def_power) * terrain_dmg_mult)  # 最低ダメージ 10 (原典既定)
 //! ```
 //!
 //! 武器の射程外時は呼び出し側で `manhattan_distance` で弾く想定。
@@ -454,7 +454,12 @@ pub fn predict_with_status_terrain(
         raw_dmg /= 2;
     }
 
-    let mut damage = raw_dmg.max(1);
+    // 最低ダメージは 10 (SRC `Unit.cls:7460-7474` / C# `UnitWeapon.cs:3567`)。
+    // 全ての減算・減衰 (バリア/鉄壁) の後に適用する。原典はオプション
+    // 「ダメージ下限解除」で 0・「ダメージ下限１」で 1 へ下げられるが既定は 10
+    // (両オプションは未モデル＝既定 10)。完全耐性 (防御特性で 100% カット) の場合は
+    // 下限を適用しない (dmg_mod >= 100) が、その分岐は app.rs 側の無効化処理が担う。
+    let mut damage = raw_dmg.max(10);
     if has(def_statuses, "不屈") {
         damage = damage.min(1);
     }
