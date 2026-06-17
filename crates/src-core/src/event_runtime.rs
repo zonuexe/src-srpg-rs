@@ -5568,7 +5568,13 @@ fn exec_command_pc(
             // 持つので、rank をそこへ配線する (旧実装は rank を捨てて常に素のステータスだった)。
             let rank: i32 = fn_arg_value(app, &xargs[2]).parse().unwrap_or(0);
             let pilot = fn_arg_value(app, &xargs[3]);
-            // level = xargs[4] — 未使用
+            // level = xargs[4] = 主パイロットの初期レベル。SRC `PList.Add(pname, plevel, …)` は
+            // `Pilot.Level=plevel` でレベルを設定する。本実装はレベルを累積経験値から導くため
+            // (`level_from_exp`)、level を `exp_for_level` で初期 total_exp へ変換する
+            // (旧実装は level を捨てて常にレベル 1 だった = 増援が指定レベルにならなかった)。
+            // 注: レベルに応じた能力値成長 (`grown_pilot`) は class ベースの簡易式で、SRC の
+            // 成長タイプ準拠成長とは乖離する (穴埋めロードマップ・docs/SRC_SHARP_DIVERGENCE.md)。
+            let level: i32 = fn_arg_value(app, &xargs[4]).parse().unwrap_or(1);
             // 座標は app-aware 式評価で解決する。SRC は座標を式として評価するため、
             // `For i = ... / Create 中立 壁 0 P 1 4 i / Next` のような**裸のループ変数**や
             // 算術式が座標に来る (`eval_coord_u32`)。
@@ -5576,6 +5582,7 @@ fn exec_command_pc(
             let y = eval_coord_u32(app, &xargs, 6);
             let mut inst = UnitInstance::new(unit_data_name, pilot.clone(), party, x, y);
             inst.upgrade_level = rank.max(0);
+            inst.total_exp = crate::pilot_instance::exp_for_level(level);
             populate_active_features(&mut inst, app);
             let uid = app.database_mut().register_unit(inst);
             // 対象ユニットＩＤ は最新作成ユニットの uid (一意)、
@@ -14243,6 +14250,32 @@ Set b Exists(アークシップ)
             db.effective_max_hp(rank2),
             db.effective_max_hp(rank0) + 2 * crate::db::UPGRADE_HP_PER_LEVEL,
         );
+    }
+
+    #[test]
+    fn create_level_sets_initial_exp_and_level() {
+        // SRC `Create party unit rank pilot level …` の level=主パイロット初期レベル。
+        // 旧実装は level を捨ててレベル 1 固定だった (増援が指定レベルにならない)。level 10 で
+        // 生成すると total_exp=exp_for_level(10) になり level_from_exp で 10 に解決される。
+        // 自己完結のため対象ユニットを inline 定義し、Create で 1 体だけ生成する
+        // (setup_two_units は同名 ブレイバー を Place 済みのため使わない)。
+        let mut app = App::new();
+        let src = "\
+MapSize 6 5
+Pilot \"リオ\" リオ 男性 c AAAA 100 100 100 100 100 100 100
+Unit \"ブレイバー\" リアル系 1 0 陸宇 5 M 3000 400 3500 120 1200 110 AAAA
+Create 味方 ブレイバー 0 リオ 10 0 0
+";
+        let stmts = event::parse(src).unwrap();
+        execute(&mut app, &stmts).unwrap();
+        let inst = app
+            .database()
+            .unit_instances
+            .iter()
+            .find(|u| u.unit_data_name == "ブレイバー")
+            .unwrap();
+        assert_eq!(inst.total_exp, crate::pilot_instance::exp_for_level(10));
+        assert_eq!(crate::pilot_instance::level_from_exp(inst.total_exp), 10);
     }
 
     #[test]

@@ -20,6 +20,13 @@ pub fn level_from_exp(total_exp: i32) -> i32 {
     (1 + total_exp.max(0) / EXP_PER_LEVEL).min(99)
 }
 
+/// レベル `n` に到達する最小の累積経験値 (`level_from_exp` の逆関数)。
+/// `n` を 1..=99 にクランプし `(n - 1) * 500` を返す。`Create`/`Pilot` コマンドの
+/// `level` 引数を初期累積経験値へ変換するのに使う。
+pub fn exp_for_level(level: i32) -> i32 {
+    (level.clamp(1, 99) - 1) * EXP_PER_LEVEL
+}
+
 /// Runtime state for a pilot assigned to a unit.
 /// References static `PilotData` from `GameDatabase::pilots` but tracks mutable state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
