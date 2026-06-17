@@ -108,6 +108,33 @@ grep -vE '^#|^$|^@' tools/oracle-diff/unit_instance.txt > /tmp/p.txt
 paste -d'~' /tmp/p.txt /tmp/cs.txt /tmp/rs.txt | awk -F'~' '$2!=$3{print}'
 ```
 
+## 戦闘予測モード (placeattack) — 命中/ダメージ/クリティカル率の差分
+
+ユニットを 2 体生成・配置し、**combat 予測** (命中率 / ダメージ / クリティカル率) を両エンジンで
+評価して diff する。これらは式関数で露出しないため、C# は map を初期化して攻撃側/守備側を `StandBy`
+で配置し `UnitWeapon.HitProbability/Damage/CriticalProbability` を直接呼ぶ専用モード `placeattack`、
+Rust は `oracle_loaddata` が `effective_combat_data` から `combat::predict_with_status_terrain` を
+中立条件で呼ぶ。地形は EmptyTerrain (HitMod=0/DamageMod=0) で中立化する。
+
+コーパスは [`combat_prediction.txt`](combat_prediction.txt)。`@unit` でユニットを生成し、
+`@predict <attacker> <defender> <weapon_index(1-based)> <field>` (field=命中率/ダメージ/クリティカル率)
+を 1 行 1 予測で評価する。
+
+```sh
+DIR="$PWD/crates/src-web/tests/fixtures/スパロボ戦記/data/スパロボ戦記"
+# C#
+$NIX develop .#dotnet --command bash -c \
+  "dotnet run --project tools/oracle-diff/oracle-diff.csproj -c Release placeattack '$DIR' < tools/oracle-diff/combat_prediction.txt > /tmp/cs.txt 2>/dev/null"
+# Rust
+$NIX develop --command bash -c \
+  "cargo run -q -p verify-archive --bin oracle_loaddata -- '$DIR' < tools/oracle-diff/combat_prediction.txt > /tmp/rs.txt 2>/dev/null"
+grep '^@predict' tools/oracle-diff/combat_prediction.txt > /tmp/p.txt
+paste -d'~' /tmp/p.txt /tmp/cs.txt /tmp/rs.txt | awk -F'~' '$2!=$3{print}'
+```
+
+> ダメージは地形適応 (C# は中立地形で 0.6 倍・Rust は env=-1 で 1.0 倍) の整合が要るため別 cut。
+> 本 cut は地形非依存の命中率/クリティカル率に限定。
+
 ## 最新の結果 (2026-06-17)
 
 - **式モード (corpus 76 式): 75/76 が SRCCore と完全一致。** 唯一の差分 `Round(-2.5, 0)`:
@@ -130,6 +157,13 @@ paste -d'~' /tmp/p.txt /tmp/cs.txt /tmp/rs.txt | awk -F'~' '$2!=$3{print}'
 - **武器フィールド (unit_weapon.txt 38 probe): 38/38 一致** (乖離なし＝武器パーサ堅牢)。
 - **パイロット SP/特殊能力 (pilot_feature.txt 13 probe): 11/13 一致。** 残 2 件は `特殊能力名称` 列挙の
   既知乖離 (C# は別名 RHS・Rust は key LHS。`特殊能力所有` 所有判定は一致＝表示のみ、`docs/SRC_SHARP_DIVERGENCE.md`)。
+- **戦闘予測モード (combat_prediction.txt, placeattack): 命中率/クリティカル率 18/18 完全一致 (2026-06-18)。**
+  実 fixture のユニット (マジンガーＺ/マジンカイザー/ガンダム/ゲッター１ × 人工知能 lv10/20) で命中率・
+  クリティカル率を cross-engine 突合。effective_combat_data の全経路 (レベル成長 +2*lv 命中/回避・改造・
+  武器命中補正・サイズ補正) が原典 C# と一致。**pervasive 実バグを検出・是正**: 命中率クランプが
+  `clamp(5,95)` (他 SRPG 慣習) だったのを VB6 `Unit.cls:6694-6696` 準拠の**上限なし・最低 0** へ
+  (`combat.rs`、>100=必中。旧実装は高命中でも 5% 外し/低命中でも 5% 当たる非原典挙動だった)。
+  表示は描画側で `min(100)`。ダメージは地形適応整合が要るため別 cut。
 - 副次発見: `Set var "x" & y` を C# は「引数の数が違う」と拒否、Rust は受理 (Rust が寛容、
   `docs/SRC_SHARP_DIVERGENCE.md` の乖離候補参照)。正規の SRC 形式は `Set var "x$(y)"`。
   C# のリスト初期化は組込みダミー (`AddDummyData`: パイロット不在 / ユニット無し) を 1 件ずつ

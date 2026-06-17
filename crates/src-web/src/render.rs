@@ -2190,7 +2190,7 @@ fn build_combat_preview_line(
         dy,
         weapon.name,
         combat::manhattan((cx, cy), (dx, dy)),
-        cp.hit_chance,
+        cp.hit_chance.min(100),
         cp.damage
     ))
 }

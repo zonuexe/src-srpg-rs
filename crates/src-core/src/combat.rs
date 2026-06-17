@@ -8,7 +8,7 @@
 //! ed_avd = def.dodge + def.intuition + def_unit.mobility
 //! terrain_mult = (100 + def_terrain_hit_mod) / 100   # hit_mod=-10 → 0.90
 //! size_mult = XL:2.0 / LL:1.4 / L:1.2 / M:1.0 / S:0.8 / SS:0.5
-//! hit_chance = clamp((ed_hit - ed_avd) * terrain_mult * size_mult, 5, 95)
+//! hit_chance = max(0, (ed_hit - ed_avd) * terrain_mult * size_mult)  # 上限なし (>100=必中)
 //! ```
 //!
 //! **ダメージ:**
@@ -276,7 +276,12 @@ pub fn predict_with_status_terrain(
     };
 
     let raw_hit_f = ((ed_hit - ed_avd + hit_adj) as f64 * terrain_hit_mult * size_mult) as i32;
-    let mut hit_chance = raw_hit_f.clamp(5, 95);
+    // SRC `Unit.cls:6694-6696`（VB6 原典）/ C# `UnitWeapon.cs` `Math.Max(0, prob)`:
+    // 命中率は最低 0 のみクランプし、上限は設けない（100 超は必中。判定は各所
+    // `roll(0..=99) < hit_chance` のため >100 は常に命中、<1 は殆ど命中しない）。
+    // 旧実装の `clamp(5, 95)` は他 SRPG 慣習由来で原典非準拠だった。表示上の 100 上限は
+    // 描画側で `min(100)` する（C# も COM.cs `MinLng(HitProbability,100)` ＝表示のみ）。
+    let mut hit_chance = raw_hit_f.max(0);
     // 盲目 / 撹乱 (攻撃側): 命中率が半減する (特殊効果攻撃属性 盲 / 撹)。
     if has(atk_statuses, "盲目") || has(atk_statuses, "撹乱") {
         hit_chance /= 2;
