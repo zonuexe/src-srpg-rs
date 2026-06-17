@@ -11,6 +11,11 @@
 //! probe は C# 側の `GetValueAsString(probe)` に対応させ、`Set __probe_N $(<probe>)`
 //! で解決して読む (oracle_scenario と同形式)。空行・`#` 始まりはスキップ。
 //!
+//! `@unit <name> <rank> <party>` 行はユニット実体の生成指令 (C# `placeunit` モードの
+//! `UList.Add(name, rank, party)` と対応)。本実装の `Place` は rank を無視する
+//! (改造段階が UnitInstance に未配線＝既知の差) ため rank は捨て、無人 (`-`) ・衝突回避の
+//! 座標で `Place` する。生成後 `Info(ユニット, <name>, …)` を probe できる。
+//!
 //! 使い方:
 //!   cargo run -q -p verify-archive --bin oracle_loaddata -- <data_dir> < probes.txt
 
@@ -31,25 +36,49 @@ fn main() {
     let mut app = App::new();
     load_data_directory(&mut app, Path::new(&dir));
 
-    // probe をすべて読み込む
+    // stdin を読み、`@unit` 生成指令と probe に分ける。
     let stdin = io::stdin();
     let mut probes: Vec<String> = Vec::new();
+    let mut creates: Vec<String> = Vec::new();
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
+        if let Some(rest) = line.strip_prefix("@unit ") {
+            // `@unit <name> <rank> <party>` → C# `UList.Add(name, rank, party)` と対応。
+            // Rust は `Create <party> <name> <rank> - 0 <x> 1` で生成する (Create は rank=改造段階
+            // を反映する。Place は rank 引数を持たないため Create を使う)。無人 (`-`)・座標は
+            // 指令順 (衝突回避)。
+            let f: Vec<&str> = rest.split_whitespace().collect();
+            if f.len() >= 3 {
+                let (name, rank, party) = (f[0], f[1], f[2]);
+                let x = creates.len() + 1;
+                creates.push(format!("Create {party} {name} {rank} - 0 {x} 1"));
+            }
+            continue;
+        }
         probes.push(line);
     }
 
-    // C# `GetValueAsString(probe)` に対応: `Set __probe_N $(<probe>)` で解決。
+    // データロード後にユニットを生成し、C# `GetValueAsString(probe)` に対応する
+    // `Set __probe_N $(<probe>)` で probe を解決する。
     let mut script = String::new();
+    for c in &creates {
+        script.push_str(c);
+        script.push('\n');
+    }
     for (i, p) in probes.iter().enumerate() {
         script.push_str(&format!("Set __probe_{i} $({p})\n"));
     }
     if let Ok(stmts) = src_core::data::event::parse(&script) {
         let _ = event_runtime::execute(&mut app, &stmts);
     }
+    eprintln!(
+        "created={} unit_instances={}",
+        creates.len(),
+        app.database().unit_instances.len()
+    );
 
     let stdout = io::stdout();
     let mut out = stdout.lock();

@@ -32,6 +32,10 @@ namespace OracleDiff
             {
                 return RunLoadData(args[1]);
             }
+            if (args.Length > 1 && args[0] == "placeunit")
+            {
+                return RunPlaceUnit(args[1]);
+            }
             return RunExpressions();
         }
 
@@ -132,6 +136,64 @@ namespace OracleDiff
                     continue;
                 }
                 Console.WriteLine(Eval(src.Expression, line));
+            }
+            return 0;
+        }
+
+        // ユニット実体状態 diff モード: データロード後、`@unit <name> <rank> <party>` 指令で
+        // ユニットを生成 (UList.Add + FullRecover; GUI 依存の CreateCmd を経ず Units/ テストと
+        // 同じ低レベル API)、`===PROBES===` 不要で `@`/`#` 以外の行を probe として評価。
+        // map 配置 (StandBy) は不要 — MaxHP/HP/装甲/運動性 の getter は Map を参照しない。
+        private static int RunPlaceUnit(string dir)
+        {
+            var src = new SRC { GUI = new MockGUI(), FileSystem = new LocalFileSystem() };
+            try
+            {
+                src.LoadDataDirectory(dir);
+            }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine("LoadDataDirectory failed: " + e);
+                return 1;
+            }
+
+            var probes = new List<string>();
+            var created = 0;
+            string line;
+            while ((line = Console.In.ReadLine()) != null)
+            {
+                if (line.Length == 0 || line[0] == '#')
+                {
+                    continue;
+                }
+                if (line.StartsWith("@unit "))
+                {
+                    var parts = line.Substring(6)
+                        .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length >= 3)
+                    {
+                        var name = parts[0];
+                        var rank = int.TryParse(parts[1], out var r) ? r : 0;
+                        var party = parts[2];
+                        var u = src.UList.Add(name, rank, party);
+                        if (u != null)
+                        {
+                            u.FullRecover();
+                            created++;
+                        }
+                        else
+                        {
+                            Console.Error.WriteLine("UList.Add returned null: " + name);
+                        }
+                    }
+                    continue;
+                }
+                probes.Add(line);
+            }
+            Console.Error.WriteLine("created=" + created + " UList=" + src.UList.Count());
+            foreach (var p in probes)
+            {
+                Console.WriteLine(Eval(src.Expression, p));
             }
             return 0;
         }

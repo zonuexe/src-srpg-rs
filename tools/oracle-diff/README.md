@@ -85,6 +85,29 @@ grep -vE '^#|^$' tools/oracle-diff/unit_data.txt > /tmp/p.txt
 paste -d'~' /tmp/p.txt /tmp/cs.txt /tmp/rs.txt | awk -F'~' '$2!=$3{print}'
 ```
 
+## ユニット実体モード (placeunit) — UnitInstance 状態の差分
+
+データロード後に**ユニット実体を生成**し、`Info(ユニット, …)` で実効値を diff する
+(静的データ層 loaddata の次フロンティア = stage a-2)。`@unit <name> <rank> <party>` 指令で
+両エンジンが同一ユニットを作る:
+- **C#** (`placeunit <dir>`): `UList.Add(name, rank, party)` + `FullRecover()` (GUI 依存の
+  `CreateCmd` を経ず `Units/` テストと同じ低レベル API。`Unit.MaxHP`/`HP`/`装甲` getter は Map を
+  参照しないため map 配置 (`StandBy`) 不要)。
+- **Rust** (`oracle_loaddata` の `@unit` 拡張): `Create <party> <name> <rank> - 0 <x> 1`。
+
+`rank` は改造段階 (1 段ごとに HP+200/装甲+100/EN+10/運動性+5)。コーパスは
+[`unit_instance.txt`](unit_instance.txt)。
+
+```sh
+DIR="$PWD/crates/src-web/tests/fixtures/スパロボ戦記/data/スパロボ戦記"
+$NIX develop .#dotnet --command bash -c \
+  "dotnet run --project tools/oracle-diff/oracle-diff.csproj -c Release placeunit '$DIR' < tools/oracle-diff/unit_instance.txt > /tmp/cs.txt 2>/dev/null"
+$NIX develop --command bash -c \
+  "cargo run -q -p verify-archive --bin oracle_loaddata -- '$DIR' < tools/oracle-diff/unit_instance.txt > /tmp/rs.txt 2>/dev/null"
+grep -vE '^#|^$|^@' tools/oracle-diff/unit_instance.txt > /tmp/p.txt
+paste -d'~' /tmp/p.txt /tmp/cs.txt /tmp/rs.txt | awk -F'~' '$2!=$3{print}'
+```
+
 ## 最新の結果 (2026-06-17)
 
 - **式モード (corpus 76 式): 75/76 が SRCCore と完全一致。** 唯一の差分 `Round(-2.5, 0)`:
@@ -96,6 +119,10 @@ paste -d'~' /tmp/p.txt /tmp/cs.txt /tmp/rs.txt | awk -F'~' '$2!=$3{print}'
   (C#=`全ユニット共通`/Rust=`ＢＧＭ`) = unit パーサが bare marker 行を捨てる差・③ パイロット `性別`
   (C#=`-`/Rust=空) = `Sex` enum 正規化差。**実バグ 1 件を検出・是正**: pilot.txt 能力値行の 5/6 番目
   (技量/反応) 取り違え (`Info(…,技量)` C#=135/旧 Rust=80 → `803e13d` で VB6 順に是正)。
+- **ユニット実体モード (unit_instance.txt 25 probe): 24/25 一致。** 残 1 件は `気力` (無人ユニット):
+  C# はパイロット属性で空・Rust は UnitInstance 既定 100 (有人なら一致、既知乖離)。**実バグ 1 件を
+  検出・是正**: `Create party unit rank …` の rank(改造段階) を無視していた (rank2 で C#=MaxHP+400 に対し
+  旧 Rust=素の値)。`upgrade_level` へ配線して rank 0/2/3/5 の HP/EN/装甲/運動性が cross-engine 一致。
 - 副次発見: `Set var "x" & y` を C# は「引数の数が違う」と拒否、Rust は受理 (Rust が寛容、
   `docs/SRC_SHARP_DIVERGENCE.md` の乖離候補参照)。正規の SRC 形式は `Set var "x$(y)"`。
   C# のリスト初期化は組込みダミー (`AddDummyData`: パイロット不在 / ユニット無し) を 1 件ずつ
