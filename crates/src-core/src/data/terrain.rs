@@ -15,7 +15,8 @@ pub struct Terrain {
     pub class: &'static str,
     /// 元: `.MoveCost`
     pub move_cost: i32,
-    /// 元: `.HitMod` (回避修正)
+    /// 元: `.HitMod` (命中修正 / 回避修正)。SRC 規約で**正の値ほど被命中を下げる**
+    /// (防御地形)。combat 側で `(100 - hit_mod)` として適用 (`combat.rs`)。
     pub hit_mod: i32,
     /// 元: `.DamageMod`
     pub damage_mod: i32,
@@ -61,7 +62,7 @@ pub const DEFAULT_TERRAINS: &[Terrain] = &[
         name: "森林",
         class: "森林",
         move_cost: 2,
-        hit_mod: -10,
+        hit_mod: 10,
         damage_mod: 5,
         color: "#2e7d32",
         glyph: "木",
@@ -72,7 +73,7 @@ pub const DEFAULT_TERRAINS: &[Terrain] = &[
         name: "山",
         class: "山",
         move_cost: 3,
-        hit_mod: -15,
+        hit_mod: 15,
         damage_mod: 10,
         color: "#8d6e63",
         glyph: "山",
@@ -94,7 +95,7 @@ pub const DEFAULT_TERRAINS: &[Terrain] = &[
         name: "都市",
         class: "都市",
         move_cost: 1,
-        hit_mod: -20,
+        hit_mod: 20,
         damage_mod: 15,
         color: "#cfd8dc",
         glyph: "市",

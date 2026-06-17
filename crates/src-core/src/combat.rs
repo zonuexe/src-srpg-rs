@@ -6,7 +6,7 @@
 //! ```text
 //! ed_hit = 100 + atk.hit + atk.intuition + atk_unit.mobility + weapon.precision
 //! ed_avd = def.dodge + def.intuition + def_unit.mobility
-//! terrain_mult = (100 + def_terrain_hit_mod) / 100   # hit_mod=-10 → 0.90
+//! terrain_mult = (100 - def_terrain_hit_mod) / 100   # hit_mod=10 → 0.90 (正=被命中減)
 //! size_mult = XL:2.0 / LL:1.4 / L:1.2 / M:1.0 / S:0.8 / SS:0.5
 //! hit_chance = max(0, (ed_hit - ed_avd) * terrain_mult * size_mult)  # 上限なし (>100=必中)
 //! ```
@@ -262,8 +262,10 @@ pub fn predict_with_status_terrain(
         hit_adj -= 30;
     }
 
-    // 地形命中補正: hit_mod は -10 なら 0.90 倍
-    let terrain_hit_mult = ((100 + def_terrain_hit_mod) as f64 / 100.0).clamp(0.0, 1.5);
+    // 地形命中補正: SRC `Unit.cls:6295` / C# `(100 - HitMod)/100`。命中修正 (回避修正) は
+    // **正の値ほど被命中を下げる** (防御地形)。terrain.txt の 命中修正 列はこの正の規約で格納される
+    // (`マップデータ.md`)。例: 森林 hit_mod=10 → 0.90 倍 / 山 30 → 0.70 倍。
+    let terrain_hit_mult = ((100 - def_terrain_hit_mod) as f64 / 100.0).clamp(0.0, 1.5);
 
     // サイズ補正 (防御側ユニットのサイズ)
     let size_mult: f64 = match def_unit.size {
@@ -1739,7 +1741,7 @@ mod tests {
 
     #[test]
     fn forest_reduces_hit_chance() {
-        // 平地: hit_mod=0、森林: hit_mod=-10 (攻撃側 -10)
+        // 平地: hit_mod=0、森林: hit_mod=10 (正=防御地形で被命中減)
         let on_plains = predict(
             &p(0, 0, 0),
             &u(0, vec![]),
@@ -1756,11 +1758,41 @@ mod tests {
             &weapon(0, 1, 1, 0),
             &p(0, 0, 0),
             &u(0, vec![]),
-            -10,
+            10,
             5,
         )
         .hit_chance;
         assert!(in_forest < on_plains);
+    }
+
+    #[test]
+    fn positive_terrain_hit_mod_reduces_hit() {
+        // SRC `マップデータ.md`/`Unit.cls:6295`: 地形の命中修正 (回避修正) は正の値ほど被命中を
+        // 下げる (防御地形)。terrain.txt はこの正の規約で格納される。`(100 - hit_mod)` で
+        // 命中率が下がることを確認 (旧実装は `(100 + hit_mod)` で正値=被命中増の逆規約だった)。
+        let base = predict(
+            &p(80, 0, 0),
+            &u(0, vec![]),
+            &weapon(0, 1, 1, 0),
+            &p(0, 0, 0),
+            &u(0, vec![]),
+            0,
+            0,
+        )
+        .hit_chance; // 180
+        let on_terrain = predict(
+            &p(80, 0, 0),
+            &u(0, vec![]),
+            &weapon(0, 1, 1, 0),
+            &p(0, 0, 0),
+            &u(0, vec![]),
+            50,
+            0,
+        )
+        .hit_chance; // 180 × (100-50)/100 = 90
+        assert_eq!(base, 180);
+        assert_eq!(on_terrain, 90, "防御地形 hit_mod=50 → ×0.50");
+        assert!(on_terrain < base);
     }
 
     #[test]

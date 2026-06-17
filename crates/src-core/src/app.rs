@@ -8071,8 +8071,8 @@ impl App {
 
     /// `(x, y)` の地形の防御価値。値が大きいほど守りやすい (被ダメージ軽減 + 回避上昇)。
     /// 戦闘では `damage_mod` が正値ほど被ダメージを減らし (`(100 - damage_mod)/100`)、
-    /// `hit_mod` が負値ほど被命中を下げる (`(100 + hit_mod)/100`) ため、両者を合わせた
-    /// `damage_mod - hit_mod` を指標とする (平地=0 / 森林=15 / 山=25 / 都市=35)。
+    /// `hit_mod` も**正値ほど被命中を下げる** (`(100 - hit_mod)/100`、SRC 規約) ため、両者を
+    /// 合わせた `damage_mod + hit_mod` を指標とする (平地=0 / 森林=15 / 山=25 / 都市=35)。
     /// マップ未ロード / 範囲外は 0 (中立)。敵 AI の防御地形選好に使う。
     fn tile_defensive_value(&self, x: u32, y: u32) -> i32 {
         let Some(map) = self.database.map.as_ref() else {
@@ -8082,7 +8082,7 @@ impl App {
             return 0;
         }
         let tid = map.cell(x, y).terrain_id;
-        self.database.terrain_damage_mod(tid) - self.database.terrain_hit_mod(tid)
+        self.database.terrain_damage_mod(tid) + self.database.terrain_hit_mod(tid)
     }
 
     /// `party` に敵対する勢力のオンマップユニットがマップ兵器 (武器 class に全角Ｍ) を
@@ -17236,7 +17236,7 @@ End
         let mut app = App::new();
         app.handle_input(Input::Advance); // Configuration
         app.handle_input(Input::Advance); // MapView
-                                          // 5x3 平地マップ。(3,0) のみ森林 (damage_mod=5 / hit_mod=-10 → 防御価値 15)。
+                                          // 5x3 平地マップ。(3,0) のみ森林 (damage_mod=5 / hit_mod=10 → 防御価値 15)。
         let mut m = crate::data::map::MapData::new(5, 3);
         let mut forest = m.cell(3, 0);
         forest.terrain_id = 2; // 森林
