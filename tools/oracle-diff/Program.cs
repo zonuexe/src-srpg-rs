@@ -226,7 +226,9 @@ namespace OracleDiff
         //   命中率 → UnitWeapon.HitProbability(defender, true)
         //   ダメージ → UnitWeapon.Damage(defender, true)
         //   クリティカル率 → UnitWeapon.CriticalProbability(defender, "")
-        // 地形は EmptyTerrain (HitMod=0/DamageMod=0/Class="" → StandBy で Area="地上") で中立化。
+        // 地形は既定で EmptyTerrain (HitMod=0/DamageMod=0/Class="" → StandBy で Area="地上") で
+        // 中立化。`@terrain <id>` 指令で以降の `@predict` の防御側セル地形を切り替える
+        // (下記参照)。
         private static int RunPlaceAttack(string dir)
         {
             var src = new SRC { GUI = new MockGUI(), GUIMap = new MockGUIMap(), FileSystem = new LocalFileSystem() };
@@ -238,6 +240,27 @@ namespace OracleDiff
             {
                 Console.Error.WriteLine("LoadDataDirectory failed: " + e);
                 return 1;
+            }
+
+            // terrain.txt は LoadDataDirectory が読まないため明示ロードする。原典 SRC は
+            // `<ScenarioPath>/Data/System/terrain.txt` 等を `TDList.Load` で読むが、本ハーネスでは
+            // シナリオ data dir の `../system/terrain.txt` (= <dir>/../system/terrain.txt) を直接渡す。
+            var terrainPath = System.IO.Path.Combine(dir, "..", "system", "terrain.txt");
+            if (System.IO.File.Exists(terrainPath))
+            {
+                try
+                {
+                    src.TDList.Load(terrainPath);
+                    Console.Error.WriteLine("terrain loaded: " + System.IO.Path.GetFullPath(terrainPath));
+                }
+                catch (Exception e)
+                {
+                    Console.Error.WriteLine("TDList.Load failed: " + e.Message);
+                }
+            }
+            else
+            {
+                Console.Error.WriteLine("terrain.txt not found: " + System.IO.Path.GetFullPath(terrainPath));
             }
 
             // map を初期化し、全セルを中立地形 (EmptyTerrain: HitMod=0/DamageMod=0) で埋める。
@@ -252,13 +275,28 @@ namespace OracleDiff
             }
 
             var units = new Dictionary<string, Unit>();
-            var predicts = new List<string>();
+            // predicts は (predict 行, その行が読まれた時点の地形 id) の組で保持する。
+            // `@terrain <id>` 以降の `@predict` に id が付き、予測実行時に防御側セルへ適用する
+            // (id<0 は中立 EmptyTerrain)。これにより 1 つの corpus 内で地形を切り替えられる。
+            var predicts = new List<(string Line, int Terrain)>();
+            var curTerrain = -1; // -1 = 中立 (EmptyTerrain)
             var created = 0;
             string line;
             while ((line = Console.In.ReadLine()) != null)
             {
                 if (line.Length == 0 || line[0] == '#')
                 {
+                    continue;
+                }
+                if (line.StartsWith("@terrain "))
+                {
+                    // `@terrain <id>` → 以降の `@predict` で防御側セルに敷く地形 id を設定。
+                    // id が TDList に未定義なら中立 (-1) 扱いに戻す。
+                    var ts = line.Substring(9).Trim();
+                    if (int.TryParse(ts, out var tid))
+                    {
+                        curTerrain = tid;
+                    }
                     continue;
                 }
                 if (line.StartsWith("@unit "))
@@ -304,7 +342,8 @@ namespace OracleDiff
                 }
                 if (line.StartsWith("@predict "))
                 {
-                    predicts.Add(line);
+                    // 現在アクティブな地形 id (@terrain で設定) を予測行に紐づける。
+                    predicts.Add((line, curTerrain));
                     continue;
                 }
                 if (line.StartsWith("@option "))
@@ -330,7 +369,7 @@ namespace OracleDiff
             }
             Console.Error.WriteLine("created=" + created + " UList=" + src.UList.Count());
 
-            foreach (var pr in predicts)
+            foreach (var (pr, terrainId) in predicts)
             {
                 // `@predict <attacker> <defender> <weapon_index> <field>`
                 var parts = pr.Substring(9)
@@ -350,6 +389,14 @@ namespace OracleDiff
                     Console.WriteLine("<ERR:lookup>");
                     continue;
                 }
+                // 防御側が立つセルの地形を @terrain で指定された id に設定する。
+                // HitProbability/Damage は `Map.Terrain(defender.x, defender.y)` を毎回 live に
+                // 読むため、StandBy 後の本変更も即反映される (UnitWeapon.cs:2056-2059 / 2988-3026)。
+                // 採用地形 (林=11/山=15/洞窟=58/砂地=1) は全て Class="陸" のため StandBy 時に
+                // キャッシュ済みの defender.Area="地上" と整合し、命中/ダメージ修正が正しく適用される。
+                // id<0 は中立 (EmptyTerrain) に戻す。
+                var defTerrain = terrainId >= 0 ? src.TDList.Item(terrainId) : TerrainData.EmptyTerrain;
+                src.Map.MapData[defender.x, defender.y].UnderTerrain = defTerrain;
                 try
                 {
                     var w = attacker.Weapon(widx);

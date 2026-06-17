@@ -171,6 +171,11 @@ paste -d'~' /tmp/p.txt /tmp/cs.txt /tmp/rs.txt | awk -F'~' '$2!=$3{print}'
   **pervasive 実バグを検出・是正**: 最低ダメージが `max(1)` だったのを VB6 `Unit.cls:7460` 準拠の
   **既定 10** (`max(10)`) へ。SRC ダメージ式は Rust と構造同一で、装甲＞攻撃力の 1 ケースの下限差が
   唯一の乖離だった。攻撃力にも武器/ユニットの地形適応が乗る (`戦闘システム詳細.md`) ことも実数で確認。
+- **戦闘予測モード 地形 (combat_terrain.txt, placeattack + `@terrain <id>`): 命中率/ダメージ 13/13 一致 (2026-06-18)。**
+  防御側を実地形 (平地/林/山/洞窟/砂地) に配置し命中率・ダメージを突合 (C#=`TDList.Load`+防御側セルに `UnderTerrain`
+  を敷き live 参照 / Rust=`terrain_file` ロード＋`@terrain` 紐づけで `db.terrain_hit_mod/damage_mod`+env を予測へ)。
+  **地形の命中修正符号の是正を cross-engine で確認**: 林 ×0.85=123 / 山 ×0.70=101 / 洞窟 ×0.75 / 砂地 (負modで攻撃側有利) ×1.10=159、
+  ダメージ修正も 機械獣ガラダＫ７ on 山 = 1020×0.70=714 で一致。丸め差・符号反転なし。`@terrain <id>` は以降の `@predict` の防御側地形を指定。
 - 副次発見: `Set var "x" & y` を C# は「引数の数が違う」と拒否、Rust は受理 (Rust が寛容、
   `docs/SRC_SHARP_DIVERGENCE.md` の乖離候補参照)。正規の SRC 形式は `Set var "x$(y)"`。
   C# のリスト初期化は組込みダミー (`AddDummyData`: パイロット不在 / ユニット無し) を 1 件ずつ

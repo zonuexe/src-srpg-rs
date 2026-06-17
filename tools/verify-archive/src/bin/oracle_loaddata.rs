@@ -20,7 +20,7 @@
 //! 使い方:
 //!   cargo run -q -p verify-archive --bin oracle_loaddata -- <data_dir> < probes.txt
 
-use src_core::data::{item, loader, pilot, special_power, unit};
+use src_core::data::{item, loader, pilot, special_power, terrain_file, unit};
 use src_core::{event_runtime, App};
 use std::io::{self, BufRead, Write};
 use std::path::Path;
@@ -41,16 +41,26 @@ fn main() {
     let stdin = io::stdin();
     let mut probes: Vec<String> = Vec::new();
     let mut creates: Vec<String> = Vec::new();
-    let mut predicts: Vec<String> = Vec::new();
+    // predicts は (predict 引数, その行が読まれた時点の地形 id) の組で保持する。
+    // `@terrain <id>` 以降の `@predict` に id が付き、評価時に防御側地形として用いる
+    // (id<0 は中立: hit_mod=0/damage_mod=0/env=1)。C# `placeattack` の地形紐づけと対応。
+    let mut predicts: Vec<(String, i64)> = Vec::new();
+    let mut cur_terrain: i64 = -1; // -1 = 中立
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
+        if let Some(rest) = line.strip_prefix("@terrain ") {
+            // `@terrain <id>` → 以降の `@predict` で防御側に敷く地形 id を設定。
+            // 解析失敗時は中立 (-1) に戻す。
+            cur_terrain = rest.trim().parse::<i64>().unwrap_or(-1);
+            continue;
+        }
         if let Some(rest) = line.strip_prefix("@predict ") {
             // `@predict <attacker> <defender> <weapon_index(1-based)> <field>`
             // C# `placeattack` と対応。生成後にまとめて評価する。
-            predicts.push(rest.to_string());
+            predicts.push((rest.to_string(), cur_terrain));
             continue;
         }
         if line.starts_with("@option ") {
@@ -109,18 +119,20 @@ fn main() {
         let _ = writeln!(out, "{}", app.script_var(&format!("__probe_{i}")));
     }
     // 戦闘予測 `@predict` を入力順に評価して 1 行ずつ出力する
-    // (C# `placeattack` モードと対応)。
-    for pr in &predicts {
-        let _ = writeln!(out, "{}", eval_predict(&app, pr));
+    // (C# `placeattack` モードと対応)。各 predict に紐づく地形 id を渡す。
+    for (pr, terrain) in &predicts {
+        let _ = writeln!(out, "{}", eval_predict(&app, pr, *terrain));
     }
 }
 
 /// `@predict <attacker> <defender> <weapon_index(1-based)> <field>` を 1 件評価する。
 /// 攻撃側/防御側はユニットデータ名で `unit_instances` を引き、effective なコンバットデータ
-/// (レベル成長 + 改造 + ボーナス込み) で `predict_with_status_terrain` を中立条件で呼ぶ。
+/// (レベル成長 + 改造 + ボーナス込み) で `predict_with_status_terrain` を呼ぶ。
+/// `terrain_id` >= 0 のとき防御側地形としてその地形の hit_mod/damage_mod/env を用いる
+/// (C# 側で防御側セルに敷く地形と対応)。terrain_id < 0 は中立 (hit_mod=0/damage_mod=0/env=1)。
 /// field: 命中率 → hit_chance / ダメージ → damage / クリティカル率 → critical_chance。
 /// 引き当て失敗時は `<ERR:lookup>` (武器インデックス不正は `<ERR:weapon>`)。
-fn eval_predict(app: &App, pr: &str) -> String {
+fn eval_predict(app: &App, pr: &str, terrain_id: i64) -> String {
     let f: Vec<&str> = pr.split_whitespace().collect();
     if f.len() < 4 {
         return "<ERR:args>".to_string();
@@ -156,25 +168,35 @@ fn eval_predict(app: &App, pr: &str) -> String {
     let Some(weapon) = atk_unit.weapons.get(widx - 1) else {
         return "<ERR:weapon>".to_string();
     };
-    // 中立条件: 地形 hit_mod=0 / damage_mod=0、士気 100/100、状態異常なし。
-    // env=1/1 (陸=地上): C# は両ユニットを EmptyTerrain (Class="" → StandBy で Area=地上) に
-    // 配置するため、Rust も地上の地形適応で揃える (地形適応は命中/クリティカルには影響せず
-    // ダメージのみ。`戦闘システム詳細.md`: 攻撃力/防御力 ×地形適応)。両者が同じユニット/
-    // パイロット/武器の陸適応 (S=1.4/A=1.2/B=1.0/C=0.8/D=0.6) を参照する。
+    // 防御側地形の解決: terrain_id>=0 なら DB から hit_mod/damage_mod/env を引く。
+    // env は地形クラスから算出 (combat::terrain_env; 陸=1)。terrain_id<0 (= @terrain 未指定) は
+    // 中立 (hit_mod=0/damage_mod=0/env=1) で従来挙動を維持する。
+    // C# は防御側セルに該当地形を敷き HitProbability/Damage が Map.Terrain(def) の HitMod/DamageMod を
+    // live 参照する。攻撃側は常に中立 (env=1=陸) で双方の地形適応 (S=1.4/A=1.2/B=1.0/C=0.8/D=0.6) を揃える。
+    let (def_hit_mod, def_damage_mod, def_env) = if terrain_id >= 0 {
+        let id = terrain_id as u32;
+        let env = match db.terrain_by_id(id) {
+            Some(t) => src_core::combat::terrain_env(&t.class),
+            None => 1,
+        };
+        (db.terrain_hit_mod(id), db.terrain_damage_mod(id), env)
+    } else {
+        (0, 0, 1)
+    };
     let preview = src_core::combat::predict_with_status_terrain(
         &atk_pilot,
         &atk_unit,
         weapon,
         &def_pilot,
         &def_unit,
-        0,
-        0,
+        def_hit_mod,
+        def_damage_mod,
         100,
         100,
         &[],
         &[],
         1,
-        1,
+        def_env,
     );
     match field {
         "命中率" => preview.hit_chance.to_string(),
@@ -211,13 +233,21 @@ fn load_data_directory(app: &mut App, dir: &Path) {
         let (items, _) = item::parse_lenient(&txt);
         app.database_mut().extend_items(items);
     }
+    // terrain.txt は C# 同様シナリオ data dir には無く `<dir>/../system/terrain.txt` に置かれる。
+    // C# は LoadDataDirectory では読まず `TDList.Load(<System>/terrain.txt)` で別途ロードする。
+    // Rust も同パスを直接読み `extend_terrains` でデータベースへ取り込む。
+    if let Some(txt) = read_data(&dir.join("..").join("system"), "terrain.txt") {
+        let (terrains, _) = terrain_file::parse_lenient(&txt);
+        app.database_mut().extend_terrains(terrains);
+    }
 
     eprintln!(
-        "loaded: pilots={} units={} items={} sp={}",
+        "loaded: pilots={} units={} items={} sp={} terrains={}",
         app.database().pilots.len(),
         app.database().units.len(),
         app.database().items.len(),
         app.database().special_powers.len(),
+        app.database().terrains.len(),
     );
 }
 

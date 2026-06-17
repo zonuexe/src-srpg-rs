@@ -1,0 +1,60 @@
+# 地形命中/ダメージ修正の C#↔Rust 差分 corpus (placeattack モード)。
+#
+# 目的: 防御側が非中立地形 (林/山/洞窟/砂地) に立つときの命中率・ダメージが
+# 両エンジンで一致することを実証する (terrain.txt 4 番目の統計 "命中修正" を
+# 正=防御側有利として (100 - hit_mod)/100 で適用する直近の修正の確認)。
+#
+# 採用地形 (data/system/terrain.txt より、全て Class="陸" → Area="地上"):
+#   id 0  平地     hit_mod=  0  dmg_mod= 0  (baseline)
+#   id 11 林       hit_mod= 15  dmg_mod=10  → 命中 ×0.85
+#   id 15 山       hit_mod= 30  dmg_mod=30  → 命中 ×0.70
+#   id 58 洞窟     hit_mod= 25  dmg_mod=25  → 命中 ×0.75
+#   id 1  砂地     hit_mod=-10  dmg_mod= 0  → 命中 ×1.10 (負修正 = 攻撃側有利)
+#
+# 攻撃側は常に中立 (@terrain は防御側セルにのみ適用) のため、命中/ダメージの
+# 変化は防御側地形のみに依存する。@terrain は以降の @predict に効く。
+
+# 攻撃側 (味方・人工知能 L20) / 防御側 (敵・人工知能 L10)
+@unit マジンガーＺ 0 味方 人工知能 20
+@unit マジンカイザー 0 敵 人工知能 10
+# 別防御側 (装甲/HP の異なる量産機) でも地形修正が同様に効くことを確認する
+@unit 機械獣ガラダＫ７ 0 敵 人工知能 10
+
+# --- 命中率 sweep (防御側 = マジンカイザー) ---
+# 平地 (baseline)
+@terrain 0
+@predict マジンガーＺ マジンカイザー 1 命中率
+# 林 (hit_mod=15)
+@terrain 11
+@predict マジンガーＺ マジンカイザー 1 命中率
+# 山 (hit_mod=30)
+@terrain 15
+@predict マジンガーＺ マジンカイザー 1 命中率
+# 洞窟 (hit_mod=25)
+@terrain 58
+@predict マジンガーＺ マジンカイザー 1 命中率
+# 砂地 (hit_mod=-10, 負修正)
+@terrain 1
+@predict マジンガーＺ マジンカイザー 1 命中率
+
+# --- ダメージ sweep (防御側 = マジンカイザー) ---
+# 平地 (baseline)
+@terrain 0
+@predict マジンガーＺ マジンカイザー 1 ダメージ
+# 林 (dmg_mod=10)
+@terrain 11
+@predict マジンガーＺ マジンカイザー 1 ダメージ
+# 山 (dmg_mod=30)
+@terrain 15
+@predict マジンガーＺ マジンカイザー 1 ダメージ
+# 洞窟 (dmg_mod=25)
+@terrain 58
+@predict マジンガーＺ マジンカイザー 1 ダメージ
+
+# --- 別防御側 (機械獣ガラダＫ７) で命中/ダメージを地形ごとに ---
+@terrain 0
+@predict マジンガーＺ 機械獣ガラダＫ７ 1 命中率
+@predict マジンガーＺ 機械獣ガラダＫ７ 1 ダメージ
+@terrain 15
+@predict マジンガーＺ 機械獣ガラダＫ７ 1 命中率
+@predict マジンガーＺ 機械獣ガラダＫ７ 1 ダメージ
