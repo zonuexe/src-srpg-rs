@@ -37,13 +37,20 @@ fn main() {
     let mut app = App::new();
     load_data_directory(&mut app, Path::new(&dir));
 
-    // stdin を読み、`@unit` 生成指令と probe に分ける。
+    // stdin を読み、`@unit` 生成指令・`@predict` 戦闘予測指令・probe に分ける。
     let stdin = io::stdin();
     let mut probes: Vec<String> = Vec::new();
     let mut creates: Vec<String> = Vec::new();
+    let mut predicts: Vec<String> = Vec::new();
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
         if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("@predict ") {
+            // `@predict <attacker> <defender> <weapon_index(1-based)> <field>`
+            // C# `placeattack` と対応。生成後にまとめて評価する。
+            predicts.push(rest.to_string());
             continue;
         }
         if let Some(rest) = line.strip_prefix("@unit ") {
@@ -93,6 +100,76 @@ fn main() {
     let mut out = stdout.lock();
     for i in 0..probes.len() {
         let _ = writeln!(out, "{}", app.script_var(&format!("__probe_{i}")));
+    }
+    // 戦闘予測 `@predict` を入力順に評価して 1 行ずつ出力する
+    // (C# `placeattack` モードと対応)。
+    for pr in &predicts {
+        let _ = writeln!(out, "{}", eval_predict(&app, pr));
+    }
+}
+
+/// `@predict <attacker> <defender> <weapon_index(1-based)> <field>` を 1 件評価する。
+/// 攻撃側/防御側はユニットデータ名で `unit_instances` を引き、effective なコンバットデータ
+/// (レベル成長 + 改造 + ボーナス込み) で `predict_with_status_terrain` を中立条件で呼ぶ。
+/// field: 命中率 → hit_chance / ダメージ → damage / クリティカル率 → critical_chance。
+/// 引き当て失敗時は `<ERR:lookup>` (武器インデックス不正は `<ERR:weapon>`)。
+fn eval_predict(app: &App, pr: &str) -> String {
+    let f: Vec<&str> = pr.split_whitespace().collect();
+    if f.len() < 4 {
+        return "<ERR:args>".to_string();
+    }
+    let (aname, dname, widx_s, field) = (f[0], f[1], f[2], f[3]);
+    let Ok(widx) = widx_s.parse::<usize>() else {
+        return "<ERR:args>".to_string();
+    };
+    if widx == 0 {
+        return "<ERR:weapon>".to_string();
+    }
+    let db = app.database();
+    let Some(atk_idx) = db
+        .unit_instances
+        .iter()
+        .position(|u| u.unit_data_name == aname)
+    else {
+        return "<ERR:lookup>".to_string();
+    };
+    let Some(def_idx) = db
+        .unit_instances
+        .iter()
+        .position(|u| u.unit_data_name == dname)
+    else {
+        return "<ERR:lookup>".to_string();
+    };
+    let Some((atk_pilot, atk_unit)) = db.effective_combat_data(atk_idx) else {
+        return "<ERR:lookup>".to_string();
+    };
+    let Some((def_pilot, def_unit)) = db.effective_combat_data(def_idx) else {
+        return "<ERR:lookup>".to_string();
+    };
+    let Some(weapon) = atk_unit.weapons.get(widx - 1) else {
+        return "<ERR:weapon>".to_string();
+    };
+    // 中立条件: 地形 hit_mod=0 / damage_mod=0、士気 100/100、状態異常なし、env -1/-1 (適応 ×1.0)。
+    let preview = src_core::combat::predict_with_status_terrain(
+        &atk_pilot,
+        &atk_unit,
+        weapon,
+        &def_pilot,
+        &def_unit,
+        0,
+        0,
+        100,
+        100,
+        &[],
+        &[],
+        -1,
+        -1,
+    );
+    match field {
+        "命中率" => preview.hit_chance.to_string(),
+        "ダメージ" => preview.damage.to_string(),
+        "クリティカル率" => preview.critical_chance.to_string(),
+        _ => "<ERR:field>".to_string(),
     }
 }
 

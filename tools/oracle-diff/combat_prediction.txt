@@ -1,0 +1,31 @@
+# Combat-prediction oracle corpus (cut 1: hit% + crit%, neutral terrain)
+# 中立地形 (HitMod=0/DamageMod=0, Area=地上) でユニットを生成・配置し、
+# @predict <attacker> <defender> <weapon_index(1-based)> <field> を評価する。
+# field = 命中率 (hit%) / クリティカル率 (crit%)。ダメージは cut2 で別途。
+# 全ユニットは distinct なユニットデータ名 (dict は名前キー)。パイロットは 人工知能。
+@unit マジンガーＺ 0 味方 人工知能 10
+@unit マジンカイザー 0 敵 人工知能 10
+@unit ガンダム 0 味方 人工知能 20
+@unit ゲッター１ 0 敵 人工知能 20
+# --- マジンガーＺ <-> マジンカイザー (weapon 1) ---
+@predict マジンガーＺ マジンカイザー 1 命中率
+@predict マジンガーＺ マジンカイザー 1 クリティカル率
+@predict マジンカイザー マジンガーＺ 1 命中率
+@predict マジンカイザー マジンガーＺ 1 クリティカル率
+# --- マジンガーＺ の複数武器 vs マジンカイザー ---
+@predict マジンガーＺ マジンカイザー 3 命中率
+@predict マジンガーＺ マジンカイザー 6 命中率
+@predict マジンガーＺ マジンカイザー 7 命中率
+@predict マジンガーＺ マジンカイザー 6 クリティカル率
+# --- ガンダム <-> ゲッター１ (level 20) ---
+@predict ガンダム ゲッター１ 1 命中率
+@predict ガンダム ゲッター１ 1 クリティカル率
+@predict ガンダム ゲッター１ 3 命中率
+@predict ゲッター１ ガンダム 1 命中率
+@predict ゲッター１ ガンダム 1 クリティカル率
+@predict ゲッター１ ガンダム 4 命中率
+@predict ゲッター１ ガンダム 4 クリティカル率
+# --- cross pairs (異レベル) ---
+@predict マジンガーＺ ガンダム 1 命中率
+@predict ガンダム マジンカイザー 3 命中率
+@predict マジンカイザー ゲッター１ 2 命中率
