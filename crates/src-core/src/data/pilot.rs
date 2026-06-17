@@ -6,7 +6,7 @@
 //! ```text
 //! {Name}                                            // パイロット識別子
 //! {Nickname},[{KanaName},][{Sex},]{Class},{Adaption},{ExpValue}
-//! {Infight} {Shooting} {Hit} {Dodge} {Intuition} {Technique} [{Personality} [{SP}]]
+//! {Infight} {Shooting} {Hit} {Dodge} {Technique} {Intuition} [{Personality} [{SP}]]
 //! [{BGM}]
 //! [SpecialPower / Skill / Weapon ... 任意行]
 //! ```
@@ -260,8 +260,13 @@ fn parse_record(record: &[SourceLine]) -> Result<PilotData, ParseError> {
     let shooting = n(1)?;
     let hit = n(2)?;
     let dodge = n(3)?;
-    let intuition = n(4)?;
-    let technique = n(5)?;
+    // 能力値行の 5 番目=技量(Technique)・6 番目=反応(Intuition)。
+    // VB6 原典 `PilotDataList.cls:677-692`（`.Technique` を先に読み、次に `.Intuition`）
+    // および C# `PilotDataList.cs` がこの順。旧実装は両者を取り違えており、差分オラクル
+    // (`oracle_loaddata`) で C# SRCCore と突合して検出・是正した
+    // (`Info(パイロットデータ,…,技量/反応)`。`docs/SRC_SHARP_DIVERGENCE.md`)。
+    let technique = n(4)?;
+    let intuition = n(5)?;
     let personality = toks.get(6).map(|s| s.to_string());
     // 能力値行 8 トークン目の SP（旧式・任意）。`ＳＰ` 行が無いときのフォールバック。
     let sp_from_stats = toks.get(7).and_then(|s| s.parse::<i32>().ok());
@@ -502,6 +507,26 @@ mod tests {
     }
 
     #[test]
+    fn stats_line_field_order_is_technique_then_intuition() {
+        // 差分オラクル (oracle_loaddata) で C# SRCCore と突合して検出した回帰の固定。
+        // 能力値行は 格闘 射撃 命中 回避 技量(Technique) 反応(Intuition) の順
+        // (VB6 `PilotDataList.cls:677-692` / C# `PilotDataList.cs`)。旧実装は 5/6 番目を
+        // 取り違えており、`Info(パイロットデータ, 人工知能, 技量)` が C#=135 に対し Rust=80 と
+        // 乖離していた。
+        let src = "人工知能(ザコ)\n\
+                   人工知能, -, 汎用, AACA, 120\n\
+                   100, 100, 145, 120, 135, 80, 普通\n";
+        let pilots = parse(src).expect("parse ok");
+        let p = &pilots[0];
+        assert_eq!(p.infight, 100);
+        assert_eq!(p.shooting, 100);
+        assert_eq!(p.hit, 145);
+        assert_eq!(p.dodge, 120);
+        assert_eq!(p.technique, 135, "5 番目=技量");
+        assert_eq!(p.intuition, 80, "6 番目=反応");
+    }
+
+    #[test]
     fn parses_two_records() {
         let pilots = parse(SAMPLE).expect("parse ok");
         assert_eq!(pilots.len(), 2);
@@ -515,7 +540,9 @@ mod tests {
         assert_eq!(hero.adaption.as_str(), "SSSS");
         assert_eq!(hero.exp_value, 300);
         assert_eq!(hero.infight, 160);
-        assert_eq!(hero.technique, 200);
+        // 能力値行 `160 220 200 220 240 200`: 5 番目=技量, 6 番目=反応 (VB6/C# 準拠)。
+        assert_eq!(hero.technique, 240);
+        assert_eq!(hero.intuition, 200);
         assert_eq!(hero.personality.as_deref(), Some("冷静"));
         assert_eq!(hero.sp, Some(70));
         assert_eq!(hero.bgm.as_deref(), Some("ブレイバー.mid"));
