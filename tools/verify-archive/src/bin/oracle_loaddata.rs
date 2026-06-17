@@ -11,10 +11,11 @@
 //! probe は C# 側の `GetValueAsString(probe)` に対応させ、`Set __probe_N $(<probe>)`
 //! で解決して読む (oracle_scenario と同形式)。空行・`#` 始まりはスキップ。
 //!
-//! `@unit <name> <rank> <party>` 行はユニット実体の生成指令 (C# `placeunit` モードの
-//! `UList.Add(name, rank, party)` と対応)。本実装の `Place` は rank を無視する
-//! (改造段階が UnitInstance に未配線＝既知の差) ため rank は捨て、無人 (`-`) ・衝突回避の
-//! 座標で `Place` する。生成後 `Info(ユニット, <name>, …)` を probe できる。
+//! `@unit <name> <rank> <party> [<pilot> <level>]` 行はユニット実体の生成指令
+//! (C# `placeunit` モードの `UList.Add(name,rank,party)` (+ `PList.Add(pilot,level,party)`+Ride)
+//! と対応)。Rust は `Create <party> <name> <rank> <pilot> <level> <x> 1` で生成する
+//! (Create は rank=改造段階・level=初期レベルを反映。pilot/level 省略時は無人 `-`・level 0)。
+//! 生成後 `Info(ユニット|パイロット, <name>, …)` を probe できる。座標は衝突回避のため指令順。
 //!
 //! 使い方:
 //!   cargo run -q -p verify-archive --bin oracle_loaddata -- <data_dir> < probes.txt
@@ -46,15 +47,23 @@ fn main() {
             continue;
         }
         if let Some(rest) = line.strip_prefix("@unit ") {
-            // `@unit <name> <rank> <party>` → C# `UList.Add(name, rank, party)` と対応。
-            // Rust は `Create <party> <name> <rank> - 0 <x> 1` で生成する (Create は rank=改造段階
-            // を反映する。Place は rank 引数を持たないため Create を使う)。無人 (`-`)・座標は
-            // 指令順 (衝突回避)。
+            // `@unit <name> <rank> <party>` (無人) / `@unit <name> <rank> <party> <pilot> <level>`
+            // (有人) → C# `UList.Add(name,rank,party)` (+ `PList.Add(pilot,level,party)`+Ride) と対応。
+            // Rust は `Create <party> <name> <rank> <pilot> <level> <x> 1` で生成する
+            // (Create は rank=改造段階・level=初期レベルを反映する。Place は rank/level 引数を
+            // 持たないため Create を使う)。座標は指令順 (衝突回避)。
             let f: Vec<&str> = rest.split_whitespace().collect();
             if f.len() >= 3 {
                 let (name, rank, party) = (f[0], f[1], f[2]);
+                let (pilot, level) = if f.len() >= 5 {
+                    (f[3], f[4])
+                } else {
+                    ("-", "0")
+                };
                 let x = creates.len() + 1;
-                creates.push(format!("Create {party} {name} {rank} - 0 {x} 1"));
+                creates.push(format!(
+                    "Create {party} {name} {rank} {pilot} {level} {x} 1"
+                ));
             }
             continue;
         }

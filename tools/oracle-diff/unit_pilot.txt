@@ -1,0 +1,30 @@
+# 差分オラクル: 有人ユニット (パイロット実体) の cross-engine 突合コーパス。
+# `@unit <unit> <rank> <party> <pilot> <level>` で両エンジンが有人ユニットを生成
+#   C#   = UList.Add + PList.Add(pilot, level, party) + Pilot.Ride(unit)
+#   Rust = Create <party> <unit> <rank> <pilot> <level> <x> 1
+# `Info(パイロット, <pilot>, …)` で実効値を diff する。stage b: 決定論的なパイロット状態。
+# 主眼: ① レベル/累積経験値 が level 引数から cross-engine 一致するか (Create level 配線の検証)。
+#       ② レベル成長後の能力値 (格闘/射撃/…) の一致 — Rust は class ベース簡易成長で SRC の
+#          成長タイプ準拠成長と乖離する見込み (既知ギャップ、docs/SRC_SHARP_DIVERGENCE.md)。
+# 対象データ: crates/src-web/tests/fixtures/スパロボ戦記/data/スパロボ戦記
+
+@unit マジンガーＺ 0 味方 人工知能 10
+@unit マジンカイザー 0 味方 人工知能改 20
+@unit アフロダイＡ 0 味方 超人工知能 30
+
+# ─── レベル / 累積経験値 (Create level 配線の検証 = 一致するはず) ───
+Info(パイロット, 人工知能, レベル)
+Info(パイロット, 人工知能改, レベル)
+Info(パイロット, 超人工知能, レベル)
+
+# ─── レベル成長後の能力値 (成長モデルの cross-engine 差を可視化) ───
+Info(パイロット, 人工知能, 格闘)
+Info(パイロット, 人工知能, 射撃)
+Info(パイロット, 人工知能, 命中)
+Info(パイロット, 人工知能, 回避)
+Info(パイロット, 人工知能, 技量)
+Info(パイロット, 人工知能, 反応)
+Info(パイロット, 人工知能改, 格闘)
+Info(パイロット, 人工知能改, 射撃)
+Info(パイロット, 超人工知能, 格闘)
+Info(パイロット, 超人工知能, 射撃)

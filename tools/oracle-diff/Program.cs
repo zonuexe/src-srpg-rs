@@ -168,6 +168,8 @@ namespace OracleDiff
                 }
                 if (line.StartsWith("@unit "))
                 {
+                    // `@unit <name> <rank> <party>` (無人) または
+                    // `@unit <name> <rank> <party> <pilot> <level>` (有人)。
                     var parts = line.Substring(6)
                         .Split(' ', StringSplitOptions.RemoveEmptyEntries);
                     if (parts.Length >= 3)
@@ -178,6 +180,20 @@ namespace OracleDiff
                         var u = src.UList.Add(name, rank, party);
                         if (u != null)
                         {
+                            if (parts.Length >= 5)
+                            {
+                                var pname = parts[3];
+                                var plevel = int.TryParse(parts[4], out var l) ? l : 1;
+                                var p = src.PList.Add(pname, plevel, party);
+                                if (p != null)
+                                {
+                                    p.Ride(u);
+                                }
+                                else
+                                {
+                                    Console.Error.WriteLine("PList.Add returned null: " + pname);
+                                }
+                            }
                             u.FullRecover();
                             created++;
                         }
