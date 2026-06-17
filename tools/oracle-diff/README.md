@@ -123,6 +123,13 @@ paste -d'~' /tmp/p.txt /tmp/cs.txt /tmp/rs.txt | awk -F'~' '$2!=$3{print}'
   C# はパイロット属性で空・Rust は UnitInstance 既定 100 (有人なら一致、既知乖離)。**実バグ 1 件を
   検出・是正**: `Create party unit rank …` の rank(改造段階) を無視していた (rank2 で C#=MaxHP+400 に対し
   旧 Rust=素の値)。`upgrade_level` へ配線して rank 0/2/3/5 の HP/EN/装甲/運動性が cross-engine 一致。
+- **有人ユニットモード (unit_pilot.txt 13 probe): 13/13 一致。** Create level を初期 exp へ配線 (level/累積
+  経験値が一致)。**pervasive 実バグを検出・是正**: パイロットのレベル成長式が class ベース過大成長だった
+  → VB6 `Pilot.cls:582-593` 準拠 (`lv=Level`・格闘等 +lv・命中/回避 +2*lv) へ。併せて `Info(パイロットデータ)` の
+  成長 conflation も是正。
+- **武器フィールド (unit_weapon.txt 38 probe): 38/38 一致** (乖離なし＝武器パーサ堅牢)。
+- **パイロット SP/特殊能力 (pilot_feature.txt 13 probe): 11/13 一致。** 残 2 件は `特殊能力名称` 列挙の
+  既知乖離 (C# は別名 RHS・Rust は key LHS。`特殊能力所有` 所有判定は一致＝表示のみ、`docs/SRC_SHARP_DIVERGENCE.md`)。
 - 副次発見: `Set var "x" & y` を C# は「引数の数が違う」と拒否、Rust は受理 (Rust が寛容、
   `docs/SRC_SHARP_DIVERGENCE.md` の乖離候補参照)。正規の SRC 形式は `Set var "x$(y)"`。
   C# のリスト初期化は組込みダミー (`AddDummyData`: パイロット不在 / ユニット無し) を 1 件ずつ
