@@ -53,6 +53,13 @@ fn main() {
             predicts.push(rest.to_string());
             continue;
         }
+        if line.starts_with("@option ") {
+            // `@option <name>` は C# `placeattack` でグローバルオプションを立てる指令
+            // (例: `地形適応命中率修正` で C# 側の地形適応を ×1.0 へ強制)。Rust 側は
+            // ダメージ予測で env=-1 (適応 ×1.0) を常に用い既に適応中立なので無視する
+            // (Create にも probe にも変換しない)。
+            continue;
+        }
         if let Some(rest) = line.strip_prefix("@unit ") {
             // `@unit <name> <rank> <party>` (無人) / `@unit <name> <rank> <party> <pilot> <level>`
             // (有人) → C# `UList.Add(name,rank,party)` (+ `PList.Add(pilot,level,party)`+Ride) と対応。
@@ -149,7 +156,11 @@ fn eval_predict(app: &App, pr: &str) -> String {
     let Some(weapon) = atk_unit.weapons.get(widx - 1) else {
         return "<ERR:weapon>".to_string();
     };
-    // 中立条件: 地形 hit_mod=0 / damage_mod=0、士気 100/100、状態異常なし、env -1/-1 (適応 ×1.0)。
+    // 中立条件: 地形 hit_mod=0 / damage_mod=0、士気 100/100、状態異常なし。
+    // env=1/1 (陸=地上): C# は両ユニットを EmptyTerrain (Class="" → StandBy で Area=地上) に
+    // 配置するため、Rust も地上の地形適応で揃える (地形適応は命中/クリティカルには影響せず
+    // ダメージのみ。`戦闘システム詳細.md`: 攻撃力/防御力 ×地形適応)。両者が同じユニット/
+    // パイロット/武器の陸適応 (S=1.4/A=1.2/B=1.0/C=0.8/D=0.6) を参照する。
     let preview = src_core::combat::predict_with_status_terrain(
         &atk_pilot,
         &atk_unit,
@@ -162,8 +173,8 @@ fn eval_predict(app: &App, pr: &str) -> String {
         100,
         &[],
         &[],
-        -1,
-        -1,
+        1,
+        1,
     );
     match field {
         "命中率" => preview.hit_chance.to_string(),

@@ -132,8 +132,9 @@ grep '^@predict' tools/oracle-diff/combat_prediction.txt > /tmp/p.txt
 paste -d'~' /tmp/p.txt /tmp/cs.txt /tmp/rs.txt | awk -F'~' '$2!=$3{print}'
 ```
 
-> ダメージは地形適応 (C# は中立地形で 0.6 倍・Rust は env=-1 で 1.0 倍) の整合が要るため別 cut。
-> 本 cut は地形非依存の命中率/クリティカル率に限定。
+> 命中率/クリティカル率 (combat_prediction.txt) は地形適応非依存。ダメージ (combat_damage.txt) は
+> 両エンジンを地上に置き env=陸 で地形適応を揃えて突合する (`戦闘システム詳細.md` のダメージ式は
+> 攻撃力/防御力ともに地形適応が乗る)。`@option <name>` 指令で C# 側のオプションも定義できる。
 
 ## 最新の結果 (2026-06-17)
 
@@ -163,7 +164,13 @@ paste -d'~' /tmp/p.txt /tmp/cs.txt /tmp/rs.txt | awk -F'~' '$2!=$3{print}'
   武器命中補正・サイズ補正) が原典 C# と一致。**pervasive 実バグを検出・是正**: 命中率クランプが
   `clamp(5,95)` (他 SRPG 慣習) だったのを VB6 `Unit.cls:6694-6696` 準拠の**上限なし・最低 0** へ
   (`combat.rs`、>100=必中。旧実装は高命中でも 5% 外し/低命中でも 5% 当たる非原典挙動だった)。
-  表示は描画側で `min(100)`。ダメージは地形適応整合が要るため別 cut。
+  表示は描画側で `min(100)`。
+- **戦闘予測モード ダメージ (combat_damage.txt, placeattack): 14/14 完全一致 (2026-06-18)。**
+  両エンジンを中立地形の地上に配置し、実データの地形適応 (S/A/B/C/D) を素直に効かせて
+  ダメージ式 `(攻撃力−防御力)×地形ダメージ修正` を突合 (Rust は env=陸、C# は EmptyTerrain→地上)。
+  **pervasive 実バグを検出・是正**: 最低ダメージが `max(1)` だったのを VB6 `Unit.cls:7460` 準拠の
+  **既定 10** (`max(10)`) へ。SRC ダメージ式は Rust と構造同一で、装甲＞攻撃力の 1 ケースの下限差が
+  唯一の乖離だった。攻撃力にも武器/ユニットの地形適応が乗る (`戦闘システム詳細.md`) ことも実数で確認。
 - 副次発見: `Set var "x" & y` を C# は「引数の数が違う」と拒否、Rust は受理 (Rust が寛容、
   `docs/SRC_SHARP_DIVERGENCE.md` の乖離候補参照)。正規の SRC 形式は `Set var "x$(y)"`。
   C# のリスト初期化は組込みダミー (`AddDummyData`: パイロット不在 / ユニット無し) を 1 件ずつ

@@ -307,7 +307,26 @@ namespace OracleDiff
                     predicts.Add(line);
                     continue;
                 }
-                // それ以外の行は本モードでは無視 (combat corpus は @unit + @predict のみ)。
+                if (line.StartsWith("@option "))
+                {
+                    // `@option <name>` → グローバル変数 `Option(<name>)` を 1 で定義し、
+                    // `Expression.IsOptionDefined(<name>)` を true にする (原典 OptionCmd と同経路:
+                    // CmdDatas/Commands/Other/OptionCmd.cs)。予測実行前に効くよう即時定義する。
+                    // 用途: `地形適応命中率修正` を立て UnitWeapon.Damage の uadaption を 1.0 へ強制
+                    // (UnitWeapon.cs:2774-2836)、Rust 側 env=-1 (適応 ×1.0) と整合させる。
+                    var oname = line.Substring(8).Trim();
+                    if (oname.Length > 0)
+                    {
+                        var vname = "Option(" + oname + ")";
+                        if (!src.Expression.IsGlobalVariableDefined(vname))
+                        {
+                            src.Expression.DefineGlobalVariable(vname);
+                        }
+                        src.Expression.SetVariableAsLong(vname, 1);
+                    }
+                    continue;
+                }
+                // それ以外の行は本モードでは無視 (combat corpus は @unit + @predict + @option のみ)。
             }
             Console.Error.WriteLine("created=" + created + " UList=" + src.UList.Count());
 
