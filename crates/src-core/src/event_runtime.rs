@@ -12233,25 +12233,29 @@ fn parse_term(tokens: &[ExprTok], idx: &mut usize) -> Option<f64> {
             ExprTok::Slash => {
                 *idx += 1;
                 let r = parse_power(tokens, idx)?;
-                if r != 0.0 {
-                    left /= r;
-                }
+                // SRC.Sharp `Expression.EvalExpr` は除数 0 のとき結果を 0 に潰す
+                // (`rnum != 0d` ガード)。左辺を残すと `x / 0 == x` となり原典と乖離する。
+                left = if r != 0.0 { left / r } else { 0.0 };
             }
             ExprTok::IntDiv => {
-                // VB6 integer division: truncate toward zero
+                // VB6 integer division: truncate toward zero。除数 0 は SRC 同様 0。
                 *idx += 1;
                 let r = parse_power(tokens, idx)?;
-                if r as i64 != 0 {
-                    left = (left as i64 / r as i64) as f64;
-                }
+                left = if r as i64 != 0 {
+                    (left as i64 / r as i64) as f64
+                } else {
+                    0.0
+                };
             }
             ExprTok::Mod => {
-                // VB6 Mod: integer modulo
+                // VB6 Mod: integer modulo。除数 0 は SRC 同様 0。
                 *idx += 1;
                 let r = parse_power(tokens, idx)?;
-                if r as i64 != 0 {
-                    left = (left as i64 % r as i64) as f64;
-                }
+                left = if r as i64 != 0 {
+                    (left as i64 % r as i64) as f64
+                } else {
+                    0.0
+                };
             }
             _ => break,
         }
