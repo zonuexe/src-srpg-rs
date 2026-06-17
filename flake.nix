@@ -51,6 +51,25 @@
           '';
         };
 
+        # 原典 SRC.Sharp (C# エンジン) を macOS でビルド/テストするための shell。
+        # 差分オラクル用: SRCCore (netstandard2.1) と SRCCoreTests (net10.0) が対象。
+        # WinForms ターゲット (SRCSharpForm 等 net10.0-windows) は macOS では不可。
+        # 使い方: nix develop .#dotnet
+        devShells.dotnet = pkgs.mkShell {
+          name = "src-srpg-rs-dotnet";
+          packages = [ pkgs.dotnet-sdk_10 ];
+
+          shellHook = ''
+            export DOTNET_CLI_TELEMETRY_OPTOUT=1
+            export DOTNET_NOLOGO=1
+            echo "src-srpg-rs dotnet (oracle) shell"
+            echo "  dotnet : $(dotnet --version)"
+            echo ""
+            echo "Build engine: dotnet build SRC.Sharp/SRC.Sharp/SRCCore/SRCCore.csproj -c Release"
+            echo "Run tests   : dotnet test  SRC.Sharp/SRC.Sharp/SRCCoreTests/SRCCoreTests.csproj -c Release"
+          '';
+        };
+
         formatter = pkgs.nixpkgs-fmt;
       });
 }
