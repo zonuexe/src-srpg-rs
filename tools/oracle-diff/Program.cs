@@ -4,6 +4,7 @@ using SRCCore;
 using SRCCore.CmdDatas;
 using SRCCore.Events;
 using SRCCore.Expressions;
+using SRCCore.Filesystem;
 using SRCCore.TestLib;
 
 namespace OracleDiff
@@ -26,6 +27,10 @@ namespace OracleDiff
             if (args.Length > 0 && args[0] == "scenario")
             {
                 return RunScenario();
+            }
+            if (args.Length > 1 && args[0] == "loaddata")
+            {
+                return RunLoadData(args[1]);
             }
             return RunExpressions();
         }
@@ -94,6 +99,39 @@ namespace OracleDiff
             foreach (var p in probes)
             {
                 Console.WriteLine(Eval(src.Expression, p));
+            }
+            return 0;
+        }
+
+        // データロード検証モード: pilot.txt/unit.txt をロードし、標準入力の probe を評価。
+        // 調査結果 (2026-06-17): LoadDataDirectory は headless で動き PDList/UDList を populate するが、
+        // (a) Info/HP/MaxHP 等のユニットクエリは **PLACED ユニット (UList)** を読むため、データを
+        //     ロードしただけでは解決しない (Create/Place + map 初期化が要る)。
+        // (b) UDList の件数が少ないのは IncludeData 機構 (scenario の Include 指定で複数 data dir を
+        //     合成) を通していないため。フル単体検証には scenario ロード経路が要る。
+        // → ユニット/combat 状態の cross-engine diff はこの map 初期化 + 配置 (+combat は RNG 一致) を
+        //    要する大きめの統合。本モードは「データロード API が headless で動く」ことの実証用。
+        private static int RunLoadData(string dir)
+        {
+            var src = new SRC { GUI = new MockGUI(), FileSystem = new LocalFileSystem() };
+            try
+            {
+                src.LoadDataDirectory(dir);
+            }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine("LoadDataDirectory failed: " + e);
+                return 1;
+            }
+            Console.Error.WriteLine("loaded: PDList=" + src.PDList.Count() + " UDList=" + src.UDList.Count());
+            string line;
+            while ((line = Console.In.ReadLine()) != null)
+            {
+                if (line.Length == 0 || line[0] == '#')
+                {
+                    continue;
+                }
+                Console.WriteLine(Eval(src.Expression, line));
             }
             return 0;
         }
