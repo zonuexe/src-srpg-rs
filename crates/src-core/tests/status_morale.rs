@@ -112,16 +112,16 @@ fn exp_up_accumulates() {
 }
 
 #[test]
-fn level_up_adds_100_exp_per_level() {
-    // LevelUp unit [n] → n * 100 exp 加算
+fn level_up_adds_500_exp_per_level() {
+    // LevelUp unit [n] → n * 500 exp 加算 (SRC: 500 exp/level)
     let app = run_setup("LevelUp リオ 3\n");
-    assert_eq!(unit_total_exp(&app, "ブレイバー"), 300);
+    assert_eq!(unit_total_exp(&app, "ブレイバー"), 1500);
 }
 
 #[test]
 fn level_up_default_one_level() {
     let app = run_setup("LevelUp リオ\n");
-    assert_eq!(unit_total_exp(&app, "ブレイバー"), 100);
+    assert_eq!(unit_total_exp(&app, "ブレイバー"), 500);
 }
 
 // ============================================================

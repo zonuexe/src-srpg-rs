@@ -43,8 +43,8 @@ fn level_defined_pilot_without_unit_returns_one() {
 
 #[test]
 fn level_pilot_on_unit_uses_total_exp() {
-    // LevelUp で total_exp が 200 (= 2 レベル分) になり level = 2 + 1 = 3。
-    // 実装は floor(total_exp / 100) + 1。
+    // LevelUp 2 で 2 レベル上がり level = 1 + 2 = 3。
+    // SRC: 500 exp/level (level_from_exp)。
     let app = run(r#"
 Place "ブレイバー" "リオ" Player 0 0
 LevelUp リオ 2
@@ -164,6 +164,6 @@ Place "ブレイバー" "リオ" Player 0 0
 LevelUp リオ 3
 Set e Exp(リオ)
 "#);
-    // LevelUp 3 → total_exp += 300
-    assert_eq!(app.script_var("e"), "300");
+    // LevelUp 3 → total_exp += 3 * 500 = 1500 (SRC: 500 exp/level)
+    assert_eq!(app.script_var("e"), "1500");
 }

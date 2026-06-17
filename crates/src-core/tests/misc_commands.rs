@@ -744,8 +744,8 @@ fn expup_increases_total_exp() {
 
 #[test]
 fn expup_causes_levelup_event_to_fire() {
-    // total_exp 0→100 で level 1→2 に上がる → `レベルアップ リオ:` が発火。
-    let app = run("ExpUp ブレイバー 100\n\
+    // total_exp 0→500 で level 1→2 に上がる (SRC: 500 exp/level) → `レベルアップ リオ:` が発火。
+    let app = run("ExpUp ブレイバー 500\n\
          Exit\n\
          レベルアップ リオ:\n\
          Set leveled_up 1\n\
@@ -775,8 +775,8 @@ fn expup_does_not_fire_levelup_event_when_no_level_change() {
 #[test]
 fn level_function_reflects_expup() {
     // Level(pilot) が ExpUp 後のレベルを正しく返す。
-    // total_exp=200 → level = 200/100 + 1 = 3。
-    let app = run("ExpUp ブレイバー 200\nSet lv Level(リオ)\n");
+    // total_exp=1000 → level = 1000/500 + 1 = 3 (SRC: 500 exp/level)。
+    let app = run("ExpUp ブレイバー 1000\nSet lv Level(リオ)\n");
     assert_eq!(app.script_var("lv"), "3");
 }
 
@@ -789,7 +789,7 @@ fn expup_leveled_pilot_has_higher_effective_stats() {
     // ExpUp でレベルアップしたパイロットの実効スタットが
     // effective_pilot_data() から返されることを確認。
     // リオ (infight=100) が level 1 → 4 になると infight が上がる。
-    let app = run("ExpUp ブレイバー 300\n"); // level = 300/100 + 1 = 4
+    let app = run("ExpUp ブレイバー 1500\n"); // level = 1500/500 + 1 = 4 (SRC: 500 exp/level)
     let data = app
         .database()
         .effective_pilot_data("リオ")

@@ -6,6 +6,20 @@
 
 use serde::{Deserialize, Serialize};
 
+/// 1 レベルに必要な累積経験値。SRC 原典 `Pilot.cls:1183` (`proEXP = new_exp Mod 500`
+/// / `proLevel = proLevel + new_exp \ 500`) 準拠で **500 exp = 1 level**。
+pub const EXP_PER_LEVEL: i32 = 500;
+
+/// 累積経験値からパイロットレベルを算出する正典関数。
+/// `level = total_exp / 500 + 1`、1..=99 にクランプ。負の exp は 0 として扱う。
+///
+/// 以前は `total_exp / 100` という式が実装中に 16 箇所重複しており、(a) SRC の
+/// 500/level と乖離 (5 倍速成長)、(b) 1 箇所修正漏れでレベル不整合、という二重の罠
+/// だった。レベル導出は必ず本関数を経由すること。
+pub fn level_from_exp(total_exp: i32) -> i32 {
+    (1 + total_exp.max(0) / EXP_PER_LEVEL).min(99)
+}
+
 /// Runtime state for a pilot assigned to a unit.
 /// References static `PilotData` from `GameDatabase::pilots` but tracks mutable state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -129,13 +143,12 @@ impl PilotInstance {
         inst
     }
 
-    /// Add experience. Returns true if this caused a level-up (every 100 exp = 1 level).
-    /// Level is capped at 99 (SRC.Sharp 準拠)。
+    /// Add experience. Returns true if this caused a level-up.
+    /// SRC 原典準拠で 500 exp = 1 level、上限 99 ([[level_from_exp]])。
     pub fn add_exp(&mut self, amount: i32) -> bool {
-        const MAX_LEVEL: i32 = 99;
         let old_level = self.level;
         self.total_exp += amount;
-        self.level = (1 + self.total_exp / 100).min(MAX_LEVEL);
+        self.level = level_from_exp(self.total_exp);
         self.level > old_level
     }
 
@@ -272,19 +285,20 @@ mod tests {
         let pdata = make_pilot_data();
         let mut inst = PilotInstance::from_data("テストパイロット", "p1", &pdata);
 
+        // SRC 原典: 500 exp = 1 level。
         assert_eq!(inst.level, 1);
-        assert!(!inst.add_exp(50)); // not enough for level up
+        assert!(!inst.add_exp(400)); // not enough for level up (< 500)
         assert_eq!(inst.level, 1);
-        assert_eq!(inst.total_exp, 50);
+        assert_eq!(inst.total_exp, 400);
 
-        assert!(inst.add_exp(50)); // 100 total = level 2
+        assert!(inst.add_exp(100)); // 500 total = level 2
         assert_eq!(inst.level, 2);
-        assert_eq!(inst.total_exp, 100);
+        assert_eq!(inst.total_exp, 500);
 
-        // 200 total = level 3
-        inst.add_exp(100);
+        // 1000 total = level 3
+        inst.add_exp(500);
         assert_eq!(inst.level, 3);
-        assert_eq!(inst.total_exp, 200);
+        assert_eq!(inst.total_exp, 1000);
     }
 
     #[test]
@@ -408,7 +422,7 @@ mod tests {
         pdata.class = "格闘家".to_string();
         let mut inst = PilotInstance::from_data("テストパイロット", "p1", &pdata);
         assert_eq!(inst.level, 1);
-        inst.add_exp(100);
+        inst.add_exp(500); // SRC: 500 exp = 1 level
         assert_eq!(inst.level, 2);
     }
 
@@ -417,9 +431,9 @@ mod tests {
         let mut pdata = make_pilot_data();
         pdata.class = "格闘家".to_string();
         let mut inst = PilotInstance::from_data("テストパイロット", "p1", &pdata);
-        inst.add_exp(50);
-        inst.add_exp(50);
-        assert_eq!(inst.total_exp, 100);
+        inst.add_exp(250);
+        inst.add_exp(250);
+        assert_eq!(inst.total_exp, 500);
         assert_eq!(inst.level, 2);
     }
 

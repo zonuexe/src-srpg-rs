@@ -515,9 +515,8 @@ fn custom_command_targets_party(target: &str, party: crate::Party) -> bool {
 
 /// 修理 / 補給 の獲得経験値を、対象パイロットと実行者のレベル差で増減させる
 /// (SRC `Unit.cs::GetExp`)。`base` は 修理 / 補給 の基準値で、差 (target - actor) が
-/// 大きいほど倍率が上がる (> +7 で ×5、-1 以下で逓減)。倍率テーブルは原典準拠だが、
-/// 基準値の絶対量は本実装の経験値スケール (level = total_exp/100) に合わせ、
-/// 同レベル時に従来の一律値を保つよう小さく取る (原典は 修理=100/補給=150)。
+/// 大きいほど倍率が上がる (> +7 で ×5、-1 以下で逓減)。倍率テーブル・基準値とも
+/// 原典準拠 (修理=100 / 補給=150、exp スケールは 500/level)。
 /// 素質 / 遅成長 等の技能補正は未対応。
 fn support_exp_with_level_diff(base: i32, target_level: i32, actor_level: i32) -> i32 {
     let xp = match target_level - actor_level {
@@ -5254,7 +5253,7 @@ impl App {
         {
             return pi.level;
         }
-        ((u.total_exp / 100).max(0) + 1).min(99)
+        crate::pilot_instance::level_from_exp(u.total_exp)
     }
 
     /// ユニットの主パイロットの (最大 SP, 残り SP) を返す。`PilotInstance` があれば
@@ -6400,9 +6399,13 @@ impl App {
         // 撃墜数 +1 (撃破者メインパイロット)。撃墜数Lv* の必要技能ゲートが読む。
         self.increment_kill_count(killer_idx);
         // 経験値: UnitInstance.total_exp + メインパイロットの PilotInstance 成長。
-        let old_level = (self.database.unit_instances[killer_idx].total_exp / 100).max(0) + 1;
+        let old_level = crate::pilot_instance::level_from_exp(
+            self.database.unit_instances[killer_idx].total_exp,
+        );
         self.database.unit_instances[killer_idx].total_exp += exp;
-        let new_level = (self.database.unit_instances[killer_idx].total_exp / 100).max(0) + 1;
+        let new_level = crate::pilot_instance::level_from_exp(
+            self.database.unit_instances[killer_idx].total_exp,
+        );
         self.database.unit_instances[killer_idx].remove_condition("努力");
         let pilot_ids = self.database.unit_instances[killer_idx].pilot_ids.clone();
         for pilot_id in &pilot_ids {
@@ -6466,9 +6469,11 @@ impl App {
         if exp <= 0 {
             return;
         }
-        let old_level = (self.database.unit_instances[unit_idx].total_exp / 100).max(0) + 1;
+        let old_level =
+            crate::pilot_instance::level_from_exp(self.database.unit_instances[unit_idx].total_exp);
         self.database.unit_instances[unit_idx].total_exp += exp;
-        let new_level = (self.database.unit_instances[unit_idx].total_exp / 100).max(0) + 1;
+        let new_level =
+            crate::pilot_instance::level_from_exp(self.database.unit_instances[unit_idx].total_exp);
         let pilot_ids = self.database.unit_instances[unit_idx].pilot_ids.clone();
         for pilot_id in &pilot_ids {
             let pdata = self
@@ -6680,14 +6685,15 @@ impl App {
             }
         }
         // 修理 / 補給 を行った側は経験値を得る。獲得量は対象パイロットのレベルが
-        // 高いほど多い (SRC: 相手のレベルが高いほど多い)。基準値は 修理:補給 = 2:3。
+        // 高いほど多い (SRC: 相手のレベルが高いほど多い)。基準値は SRC 原典準拠で
+        // 修理=100 / 補給=150 (exp スケールが 500/level になったため原典値へ復帰)。
         if let (Some(ci), Some(ti)) = (
             self.database.idx_by_uid(caster),
             self.database.idx_by_uid(target),
         ) {
             let base = match kind {
-                SupportKind::Repair => 10,
-                SupportKind::Supply => 15,
+                SupportKind::Repair => 100,
+                SupportKind::Supply => 150,
             };
             let actor_lv = self.unit_pilot_level(&self.database.unit_instances[ci]);
             let target_lv = self.unit_pilot_level(&self.database.unit_instances[ti]);
@@ -10618,8 +10624,8 @@ mod tests {
         app.apply_support_to_target(&caster, &ally, SupportKind::Repair);
         assert_eq!(
             app.database().unit_by_uid(&caster).unwrap().total_exp,
-            exp0 + 10,
-            "同レベル対象の修理で経験値 +10 (基準値)"
+            exp0 + 100,
+            "同レベル対象の修理で経験値 +100 (SRC 基準値)"
         );
     }
 
@@ -10660,16 +10666,16 @@ mod tests {
             .unit_by_uid_mut(&caster)
             .unwrap()
             .active_features = vec![crate::feature::ActiveFeature::new("修理装置", "")];
-        // 対象を高レベル (total_exp 400 → level 5) に。
+        // 対象を高レベル (total_exp 2000 → level 5、SRC: 500 exp/level) に。
         {
             let a = app.database_mut().unit_by_uid_mut(&ally).unwrap();
-            a.total_exp = 400;
+            a.total_exp = 2000;
             a.damage = 50;
         }
         let exp0 = app.database().unit_by_uid(&caster).unwrap().total_exp;
         app.apply_support_to_target(&caster, &ally, SupportKind::Repair);
         let gained = app.database().unit_by_uid(&caster).unwrap().total_exp - exp0;
-        assert_eq!(gained, 30, "高レベル対象 (+4) の修理で経験値 10×3=30");
+        assert_eq!(gained, 300, "高レベル対象 (+4) の修理で経験値 100×3=300");
     }
 
     /// 特殊能力が無い / 隣接に要支援の味方が居ないときは支援コマンドを出さない。

@@ -16,6 +16,7 @@
 use src_core::combat::adaptation_mult;
 use src_core::data::event;
 use src_core::event_runtime;
+use src_core::pilot_instance::level_from_exp;
 use src_core::App;
 
 fn approx(a: f64, b: f64) -> bool {
@@ -82,4 +83,22 @@ fn upgrade_level_increments_match_src() {
     assert_eq!(db.effective_max_hp(u) - base_hp, 600, "HP +200/段 × 3");
     assert_eq!(db.effective_max_en(u) - base_en, 30, "EN +10/段 × 3");
     assert_eq!(db.effective_armor(u) - base_armor, 300, "装甲 +100/段 × 3");
+}
+
+// ============================================================
+//  パイロットレベル算出 — SRC 原典 `Pilot.cls:1183` 準拠で 500 exp = 1 level
+//  (本実装は以前 100 exp/level で 5 倍速成長していた乖離を是正)。
+// ============================================================
+
+#[test]
+fn level_from_exp_is_500_per_level() {
+    assert_eq!(level_from_exp(0), 1);
+    assert_eq!(level_from_exp(499), 1);
+    assert_eq!(level_from_exp(500), 2); // 境界
+    assert_eq!(level_from_exp(999), 2);
+    assert_eq!(level_from_exp(1000), 3);
+    assert_eq!(level_from_exp(2000), 5); // (Level-1)*500 = total_exp
+    assert_eq!(level_from_exp(49000), 99); // 上限直前
+    assert_eq!(level_from_exp(1_000_000), 99); // 上限 99 クランプ
+    assert_eq!(level_from_exp(-100), 1); // 負は 0 扱い
 }

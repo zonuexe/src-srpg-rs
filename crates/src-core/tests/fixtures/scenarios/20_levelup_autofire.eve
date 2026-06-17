@@ -23,14 +23,14 @@ MapSize 8 8
 Place "ブレイバー" "リオ" Player 1 1
 Place "ゾルダ" "ガロ" Enemy 5 5
 
-# ExpUp 99 — Lv2 まであと 1 → 発火しない (Lv1 → Lv1)
-ExpUp リオ 99
+# ExpUp 499 — Lv2 まであと 1 → 発火しない (Lv1 → Lv1)。SRC: 500 exp/level。
+ExpUp リオ 499
 
-# 続けて ExpUp 1 → 計 100 で Lv2 へ → LevelUp リオ 発火
+# 続けて ExpUp 1 → 計 500 で Lv2 へ → LevelUp リオ 発火
 ExpUp リオ 1
 
-# 別 unit でも (unit-name マッチ)
-ExpUp ガロ 300
+# 別 unit でも (unit-name マッチ)。1500 exp → Lv4。
+ExpUp ガロ 1500
 
 # LevelUp 命令経由は発火しない (原典準拠)
 LevelUp リオ 1

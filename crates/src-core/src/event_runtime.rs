@@ -1533,7 +1533,7 @@ fn exec_command_pc(
                             .unit_instances
                             .iter()
                             .find(|u| u.pilot_name == *pname)
-                            .map(|u| (u.total_exp / 100).max(0) as i64 + 1)
+                            .map(|u| i64::from(crate::pilot_instance::level_from_exp(u.total_exp)))
                             .unwrap_or(1),
                         "ＳＰ" | "SP" => ep.sp.unwrap_or(0) as i64,
                         "格闘" | "Infight" => ep.infight as i64,
@@ -1595,7 +1595,9 @@ fn exec_command_pc(
                                     .unwrap_or(0)
                             })
                             .unwrap_or(0),
-                        "レベル" | "Level" => (1 + inst.total_exp / 100).min(99) as i64,
+                        "レベル" | "Level" => {
+                            i64::from(crate::pilot_instance::level_from_exp(inst.total_exp))
+                        }
                         "気力" | "Morale" => inst.morale as i64,
                         _ => 0,
                     };
@@ -5722,14 +5724,14 @@ fn exec_command_pc(
                 .unit_instances
                 .iter()
                 .position(|u| matches_unit_handle(u, &xargs[0]));
-            // `Level()` 関数の規約に合わせ、`level = total_exp / 100 + 1` で算出。
+            // `Level()` 関数の規約に合わせ、`level_from_exp` (SRC: 500 exp/level) で算出。
             // レベル繰り上がりは event 発火条件。
             let (old_level, new_level, pilot_ids): (i32, i32, Vec<String>) =
                 if let Some(i) = target_idx {
                     let u = &mut app.database_mut().unit_instances[i];
-                    let old = (u.total_exp / 100).max(0) + 1;
+                    let old = crate::pilot_instance::level_from_exp(u.total_exp);
                     u.total_exp += n;
-                    let new_ = (u.total_exp / 100).max(0) + 1;
+                    let new_ = crate::pilot_instance::level_from_exp(u.total_exp);
                     (old, new_, u.pilot_ids.clone())
                 } else {
                     (0, 0, Vec::new())
@@ -5935,7 +5937,7 @@ fn exec_command_pc(
             return Ok(pc + 1);
         }
         "levelup" => {
-            // LevelUp unit [n]   ─ 1 レベル = 100 exp 換算で total_exp に加算
+            // LevelUp unit [n]   ─ n レベル上げる (1 レベル = EXP_PER_LEVEL(500) exp)。
             // SRC.Sharp 準拠: 対象が存在しない場合はエラー。
             if xargs.is_empty() {
                 return Err(err(line, "LevelUp には対象名が必要。"));
@@ -5963,7 +5965,7 @@ fn exec_command_pc(
                 .iter_mut()
                 .find(|u| matches_unit_handle(u, &key))
                 .map(|u| {
-                    u.total_exp += n * 100;
+                    u.total_exp += n * crate::pilot_instance::EXP_PER_LEVEL;
                     u.pilot_ids.clone()
                 })
                 .unwrap_or_default();
@@ -5978,7 +5980,7 @@ fn exec_command_pc(
                 if let Some(pilot_data) = pilot_data {
                     if let Some(pilot_inst) = app.database_mut().pilot_instance_by_id_mut(&pilot_id)
                     {
-                        if pilot_inst.add_exp(n * 100) {
+                        if pilot_inst.add_exp(n * crate::pilot_instance::EXP_PER_LEVEL) {
                             pilot_inst.apply_stat_growth(&pilot_data);
                         }
                     }
@@ -9667,8 +9669,8 @@ fn eval_script_function(app: &App, name: &str, args_str: &str) -> Option<String>
                 .iter()
                 .find(|u| u.pilot_name == key || matches_unit_handle(u, key))
             {
-                // C# LevelUpCmd.cs: レベル上限は 99。
-                let level = ((inst.total_exp / 100).max(0) + 1).min(99);
+                // C# LevelUpCmd.cs: レベル上限は 99 (level_from_exp が担保)。
+                let level = crate::pilot_instance::level_from_exp(inst.total_exp);
                 return Some(level.to_string());
             }
             // ② PilotInstance があればその level を返す (ユニット未配置)
@@ -10494,9 +10496,9 @@ fn info_pilot(app: &App, name: &str, info: &str, sub: &[&str], is_instance: bool
             .map(|u| u.total_exp.to_string())
             .unwrap_or_else(|| "0".into()),
         "レベル" => {
-            // 累積経験値 / 100 を簡易レベルとする (元 SRC 仕様の近似)。
+            // 累積経験値からレベルを算出 (SRC: 500 exp/level、level_from_exp)。
             let total = inst.map(|u| u.total_exp).unwrap_or(0);
-            (1 + total / 100).to_string()
+            crate::pilot_instance::level_from_exp(total).to_string()
         }
         "特殊能力数" => data.features.len().to_string(),
         "特殊能力" => feature_at(&data.features, sub.first(), app),
@@ -11271,7 +11273,7 @@ fn system_variable_value(app: &App, name: &str) -> Option<String> {
             .unit_instances
             .iter()
             .filter(|u| !u.off_map && u.party == p)
-            .map(|u| (((u.total_exp / 100).max(0) + 1).min(99)) as i64)
+            .map(|u| i64::from(crate::pilot_instance::level_from_exp(u.total_exp)))
             .collect();
         if levels.is_empty() {
             "0".to_string()
@@ -11735,7 +11737,10 @@ fn collect_roster(app: &App, mode: &str, pilots: bool) -> Vec<String> {
         if key.is_empty() || !seen.insert(key.clone()) {
             continue;
         }
-        rows.push((key, i64::from(u.total_exp) / 100 + 1));
+        rows.push((
+            key,
+            i64::from(crate::pilot_instance::level_from_exp(u.total_exp)),
+        ));
     }
     if by_level {
         rows.sort_by_key(|(_, level)| std::cmp::Reverse(*level));
@@ -14405,8 +14410,8 @@ LevelUp ブレイバー 2
 ";
         let stmts = event::parse(src).unwrap();
         execute(&mut app, &stmts).unwrap();
-        // ExpUp 50 + LevelUp 2 → 50 + 200 = 250
-        assert_eq!(app.database().unit_instances[0].total_exp, 250);
+        // ExpUp 50 + LevelUp 2 → 50 + 2*500 = 1050 (SRC: 500 exp/level)
+        assert_eq!(app.database().unit_instances[0].total_exp, 1050);
     }
 
     fn setup_units_with_item(app: &mut App) {
@@ -15723,8 +15728,8 @@ Exit
             .unwrap_or(0);
         assert_eq!(initial, 100, "初期格闘は 100 のはず");
 
-        // ExpUp でレベルを上げる (300 exp → level 4, リアル系 rate=12)
-        let exp_src = "ExpUp ブレイバー 300\n";
+        // ExpUp でレベルを上げる (1500 exp → level 4, SRC: 500 exp/level, リアル系 rate=12)
+        let exp_src = "ExpUp ブレイバー 1500\n";
         let exp_stmts = event::parse(exp_src).unwrap();
         execute(&mut app, &exp_stmts).unwrap();
 

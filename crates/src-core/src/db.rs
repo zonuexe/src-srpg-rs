@@ -862,9 +862,10 @@ pub struct CombatBonuses {
 }
 
 /// `base` パイロットに `total_exp` 由来のレベル成長を適用した `PilotData` を返す。
-/// レベル = `total_exp / 100 + 1` (1..=99)。成長率はクラス依存。level<=1 は無補正。
+/// レベルは `pilot_instance::level_from_exp` (SRC 原典: 500 exp/level、1..=99)。
+/// 成長率はクラス依存。level<=1 は無補正。
 pub fn grown_pilot(base: &PilotData, total_exp: i32) -> PilotData {
-    let level = ((total_exp / 100).max(0) + 1).min(99);
+    let level = crate::pilot_instance::level_from_exp(total_exp);
     if level <= 1 {
         return base.clone();
     }
