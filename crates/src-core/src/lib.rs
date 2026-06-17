@@ -22,7 +22,6 @@ pub mod db;
 pub mod dialog;
 pub mod entrypoint;
 pub mod event_runtime;
-pub mod expression;
 pub mod feature;
 pub mod flow;
 pub mod item_slot;
