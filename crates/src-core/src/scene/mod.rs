@@ -14,6 +14,7 @@ pub mod title;
 
 pub mod map_view;
 pub mod pilot_list;
+pub mod unit_detail;
 pub mod unit_list;
 
 /// 現在表示中のシーン / Currently rendered scene.
@@ -35,6 +36,10 @@ pub enum Scene {
     PilotList,
     /// 移植版独自: GameDatabase の unit 一覧（同上）。
     UnitList,
+    /// インターミッション「ステータス」から開く単機ステータス詳細画面。
+    /// 味方ロスター 1 機ぶんの実効ステータス (機体 + 搭乗パイロット + 武器) を
+    /// 表示し、`◀ / ▶` で巡回する。`App::status_detail_index` が表示中の機体を指す。
+    UnitDetail,
 }
 
 /// 描画が読む `App` 状態の種類。
@@ -105,6 +110,10 @@ impl Scene {
             ),
             Scene::PilotList => (pilot_list::PILOT_LIST_WIDTH, pilot_list::PILOT_LIST_HEIGHT),
             Scene::UnitList => (unit_list::UNIT_LIST_WIDTH, unit_list::UNIT_LIST_HEIGHT),
+            Scene::UnitDetail => (
+                unit_detail::UNIT_DETAIL_WIDTH,
+                unit_detail::UNIT_DETAIL_HEIGHT,
+            ),
             Scene::MapView => (map_view::MAP_VIEW_WIDTH, map_view::MAP_VIEW_HEIGHT),
         }
     }
@@ -136,6 +145,7 @@ impl Scene {
             ],
             Scene::PilotList => &[SceneRead::Assets, SceneRead::Database],
             Scene::UnitList => &[SceneRead::Assets, SceneRead::Database],
+            Scene::UnitDetail => &[SceneRead::Assets, SceneRead::Database],
         }
     }
 
@@ -171,6 +181,7 @@ mod tests {
             Scene::MapView,
             Scene::PilotList,
             Scene::UnitList,
+            Scene::UnitDetail,
         ] {
             let reads = scene.render_reads();
             assert!(!reads.is_empty(), "{scene:?} の render_reads が空");
@@ -187,6 +198,7 @@ mod tests {
             Scene::Intermission,
             Scene::PilotList,
             Scene::UnitList,
+            Scene::UnitDetail,
         ] {
             assert!(
                 !scene.render_reads().contains(&SceneRead::ScriptOverlay),

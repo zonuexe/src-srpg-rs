@@ -23,6 +23,9 @@ use src_core::scene::pilot_list::{
 use src_core::scene::title::{
     self, Rect, TitleLayout, AUTHORS, LICENSE_NOTICE, TITLE_HEIGHT, TITLE_WIDTH,
 };
+use src_core::scene::unit_detail::{
+    self as udetail, StatusDetail, UNIT_DETAIL_HEIGHT, UNIT_DETAIL_WIDTH,
+};
 use src_core::scene::unit_list::{
     self as ulist, COLUMNS as UL_COLUMNS, HEADER_TOP as UL_HEADER_TOP, ROW_HEIGHT as UL_ROW_HEIGHT,
     UNIT_LIST_HEIGHT, UNIT_LIST_WIDTH,
@@ -58,6 +61,7 @@ pub fn draw_scene(
     intermission_cursor: usize,
     battle_anim: Option<&src_core::BattleAnim>,
     move_anim: Option<&src_core::MoveAnim>,
+    unit_detail: Option<&StatusDetail>,
 ) {
     clear(ctx, "#2a2a30"); // 周囲のレターボックスは暗色
     match scene {
@@ -113,6 +117,7 @@ pub fn draw_scene(
         }
         Scene::PilotList => draw_pilot_list(ctx, database, assets),
         Scene::UnitList => draw_unit_list(ctx, database, assets),
+        Scene::UnitDetail => draw_unit_detail(ctx, unit_detail, assets),
     }
     // Dialog (Talk / Confirm) は全シーンより上に描画
     if let Some(d) = pending_dialog {
@@ -2402,6 +2407,349 @@ fn draw_unit_list(ctx: &CanvasRenderingContext2d, database: &GameDatabase, asset
         ox as f64 + f64::from(UNIT_LIST_WIDTH) / 2.0,
         oy as f64 + f64::from(UNIT_LIST_HEIGHT) - 10.0,
     );
+}
+
+/// 単機ステータス詳細画面 (`Scene::UnitDetail`) を描画する。
+/// 味方ロスター 1 機ぶんの実効ステータス (機体 + 搭乗パイロット + 武器) を
+/// 2 カラムで表示し、フッタに ◀ / ▶ / 閉じる ボタンを置く。
+fn draw_unit_detail(
+    ctx: &CanvasRenderingContext2d,
+    detail: Option<&StatusDetail>,
+    assets: &Assets,
+) {
+    let ox = (i64::from(CANVAS_WIDTH) - i64::from(UNIT_DETAIL_WIDTH)) / 2;
+    let oy = (i64::from(CANVAS_HEIGHT) - i64::from(UNIT_DETAIL_HEIGHT)) / 2;
+    let w = f64::from(UNIT_DETAIL_WIDTH);
+    let h = f64::from(UNIT_DETAIL_HEIGHT);
+
+    // 背景 + 外枠
+    ctx.set_fill_style_str("#eef2f6");
+    ctx.fill_rect(ox as f64, oy as f64, w, h);
+    ctx.set_stroke_style_str("#44525e");
+    ctx.set_line_width(1.0);
+    ctx.stroke_rect(ox as f64 + 0.5, oy as f64 + 0.5, w - 1.0, h - 1.0);
+
+    ctx.set_text_baseline("middle");
+
+    let Some(d) = detail else {
+        // ロスターが空 (本来 ステータス 項目自体が出ないが防御的に)。
+        ctx.set_fill_style_str("#445");
+        ctx.set_font(&format!("14px {JP_SANS}"));
+        ctx.set_text_align("center");
+        let _ = ctx.fill_text(
+            "表示できるユニットがいません",
+            ox as f64 + w / 2.0,
+            oy as f64 + h / 2.0,
+        );
+        draw_detail_button(ctx, ox, oy, udetail::close_button(), "閉じる");
+        return;
+    };
+
+    // タイトルバー
+    ctx.set_fill_style_str("#2b3a4a");
+    ctx.fill_rect(ox as f64 + 1.0, oy as f64 + 1.0, w - 2.0, 27.0);
+    ctx.set_fill_style_str("#fff");
+    ctx.set_font(&format!("bold 14px {JP_SANS}"));
+    ctx.set_text_align("left");
+    let title = if d.unit_nickname.is_empty() || d.unit_nickname == d.unit_name {
+        d.unit_name.clone()
+    } else {
+        format!("{}（{}）", d.unit_name, d.unit_nickname)
+    };
+    let _ = ctx.fill_text(
+        &format!("ステータス  ◆ {title}  [{}]", d.party_label),
+        ox as f64 + 12.0,
+        oy as f64 + 15.0,
+    );
+    ctx.set_text_align("right");
+    let _ = ctx.fill_text(
+        &format!("{} / {}", d.index + 1, d.total),
+        ox as f64 + w - 12.0,
+        oy as f64 + 15.0,
+    );
+    ctx.set_text_align("left");
+
+    // ===== 機体カラム (左) =====
+    let lx = ox + 16;
+    let mut ly = oy + 44;
+    section_header(ctx, lx, ly, "■ 機体");
+    // ユニットサムネ (右肩)
+    if let Some(img) = assets.find_image(&d.unit_name) {
+        let _ = ctx.draw_image_with_html_image_element_and_dw_and_dh(
+            img,
+            (ox + 250) as f64,
+            (oy + 36) as f64,
+            48.0,
+            48.0,
+        );
+    }
+    ly += 24;
+    ctx.set_font(&format!("12px {JP_SANS}"));
+    ctx.set_fill_style_str("#102030");
+    let stat_line = |ctx: &CanvasRenderingContext2d, y: i64, label: &str, val: &str| {
+        ctx.set_fill_style_str("#54616c");
+        let _ = ctx.fill_text(label, lx as f64, y as f64);
+        ctx.set_fill_style_str("#102030");
+        let _ = ctx.fill_text(val, lx as f64 + 64.0, y as f64);
+    };
+    stat_line(
+        ctx,
+        ly,
+        "クラス",
+        if d.class.is_empty() { "—" } else { &d.class },
+    );
+    ly += 20;
+    stat_line(
+        ctx,
+        ly,
+        "サイズ",
+        &format!("{}   適応 {}", d.size, d.unit_adaption),
+    );
+    ly += 20;
+    stat_line(ctx, ly, "HP", &format!("{} / {}", d.hp_cur, d.hp_max));
+    ly += 20;
+    stat_line(ctx, ly, "EN", &format!("{} / {}", d.en_cur, d.en_max));
+    ly += 20;
+    stat_line(
+        ctx,
+        ly,
+        "装甲",
+        &format!("{}    運動性 {}", d.armor, d.mobility),
+    );
+    ly += 20;
+    stat_line(
+        ctx,
+        ly,
+        "移動力",
+        &format!("{}    改造 +{}", d.speed, d.upgrade_level),
+    );
+    ly += 20;
+    stat_line(ctx, ly, "士気", &d.unit_morale.to_string());
+    ly += 20;
+    let cond = if d.conditions.is_empty() {
+        "—".to_string()
+    } else {
+        d.conditions.join(" / ")
+    };
+    ctx.set_fill_style_str("#54616c");
+    let _ = ctx.fill_text("状態", lx as f64, ly as f64);
+    ctx.set_fill_style_str(if d.conditions.is_empty() {
+        "#102030"
+    } else {
+        "#b5483a"
+    });
+    draw_wrapped(ctx, &[cond], lx + 64, ly, 232.0, 18, 2);
+
+    // ===== パイロットカラム (右) =====
+    let rx = ox + 330;
+    let mut ry = oy + 44;
+    section_header(ctx, rx, ry, "■ パイロット");
+    if let Some(img) = assets.find_image(&d.pilot_name) {
+        let _ = ctx.draw_image_with_html_image_element_and_dw_and_dh(
+            img,
+            (ox + 568) as f64,
+            (oy + 36) as f64,
+            48.0,
+            48.0,
+        );
+    }
+    ry += 24;
+    ctx.set_font(&format!("12px {JP_SANS}"));
+    if !d.has_pilot {
+        ctx.set_fill_style_str("#8a6");
+        let _ = ctx.fill_text("（パイロット不在）", rx as f64, ry as f64);
+    } else {
+        let rstat = |ctx: &CanvasRenderingContext2d, y: i64, label: &str, val: &str| {
+            ctx.set_fill_style_str("#54616c");
+            let _ = ctx.fill_text(label, rx as f64, y as f64);
+            ctx.set_fill_style_str("#102030");
+            let _ = ctx.fill_text(val, rx as f64 + 64.0, y as f64);
+        };
+        let pname = if d.pilot_nickname.is_empty() || d.pilot_nickname == d.pilot_name {
+            d.pilot_name.clone()
+        } else {
+            format!("{}（{}）", d.pilot_name, d.pilot_nickname)
+        };
+        ctx.set_fill_style_str("#102030");
+        ctx.set_font(&format!("bold 12px {JP_SANS}"));
+        let _ = ctx.fill_text(&pname, rx as f64, ry as f64);
+        ctx.set_font(&format!("12px {JP_SANS}"));
+        ry += 20;
+        rstat(ctx, ry, "Lv", &format!("{}    Exp {}", d.level, d.exp));
+        ry += 20;
+        rstat(ctx, ry, "SP", &format!("{} / {}", d.sp_cur, d.sp_max));
+        ry += 20;
+        rstat(
+            ctx,
+            ry,
+            "格闘",
+            &format!("{}    射撃 {}", d.infight, d.shooting),
+        );
+        ry += 20;
+        rstat(ctx, ry, "命中", &format!("{}    回避 {}", d.hit, d.dodge));
+        ry += 20;
+        rstat(
+            ctx,
+            ry,
+            "技量",
+            &format!("{}    反応 {}", d.technique, d.intuition),
+        );
+        ry += 20;
+        rstat(ctx, ry, "適応", &d.pilot_adaption);
+        ry += 22;
+        ctx.set_fill_style_str("#54616c");
+        let _ = ctx.fill_text("精神", rx as f64, ry as f64);
+        ctx.set_fill_style_str("#234");
+        if d.spirit_commands.is_empty() {
+            let _ = ctx.fill_text("—", rx as f64 + 40.0, ry as f64);
+        } else {
+            draw_wrapped(ctx, &d.spirit_commands, rx + 40, ry, 240.0, 18, 3);
+        }
+        ry += if d.spirit_commands.len() > 4 { 56 } else { 38 };
+        ctx.set_fill_style_str("#54616c");
+        let _ = ctx.fill_text("技能", rx as f64, ry as f64);
+        ctx.set_fill_style_str("#234");
+        if d.skills.is_empty() {
+            let _ = ctx.fill_text("—", rx as f64 + 40.0, ry as f64);
+        } else {
+            draw_wrapped(ctx, &d.skills, rx + 40, ry, 240.0, 18, 2);
+        }
+    }
+
+    // ===== 武器セクション (下) =====
+    let wy0 = oy + 308;
+    section_header(ctx, lx, wy0, "■ 武器");
+    ctx.set_stroke_style_str("#aab4bc");
+    ctx.set_line_width(1.0);
+    ctx.begin_path();
+    ctx.move_to(lx as f64, (wy0 + 14) as f64 + 0.5);
+    ctx.line_to(
+        (ox + UNIT_DETAIL_WIDTH as i64 - 16) as f64,
+        (wy0 + 14) as f64 + 0.5,
+    );
+    ctx.stroke();
+    // ヘッダ
+    ctx.set_font(&format!("bold 11px {JP_SANS}"));
+    ctx.set_fill_style_str("#54616c");
+    let col_name = lx;
+    let col_pow = ox + 280;
+    let col_rng = ox + 380;
+    let col_ammo = ox + 470;
+    let hy = wy0 + 28;
+    let _ = ctx.fill_text("名称", col_name as f64, hy as f64);
+    let _ = ctx.fill_text("攻撃力", col_pow as f64, hy as f64);
+    let _ = ctx.fill_text("射程", col_rng as f64, hy as f64);
+    let _ = ctx.fill_text("弾/EN", col_ammo as f64, hy as f64);
+    ctx.set_font(&format!("12px {JP_SANS}"));
+    let max_wrows = 5usize;
+    for (i, wrow) in d.weapons.iter().take(max_wrows).enumerate() {
+        let y = hy + 20 + i as i64 * 20;
+        ctx.set_fill_style_str("#102030");
+        let _ = ctx.fill_text(&wrow.name, col_name as f64, y as f64);
+        let _ = ctx.fill_text(&wrow.power.to_string(), col_pow as f64, y as f64);
+        let _ = ctx.fill_text(&wrow.range, col_rng as f64, y as f64);
+        let _ = ctx.fill_text(&wrow.ammo, col_ammo as f64, y as f64);
+    }
+    if d.weapons.is_empty() {
+        ctx.set_fill_style_str("#8a929a");
+        let _ = ctx.fill_text("（武器なし）", col_name as f64, (hy + 20) as f64);
+    } else if d.weapons.len() > max_wrows {
+        ctx.set_fill_style_str("#8a929a");
+        let _ = ctx.fill_text(
+            &format!("… 他 {} 件", d.weapons.len() - max_wrows),
+            col_name as f64,
+            (hy + 20 + max_wrows as i64 * 20) as f64,
+        );
+    }
+
+    // ===== フッタボタン =====
+    draw_detail_button(ctx, ox, oy, udetail::prev_button(), "◀ 前");
+    draw_detail_button(ctx, ox, oy, udetail::next_button(), "次 ▶");
+    draw_detail_button(ctx, ox, oy, udetail::close_button(), "閉じる");
+    ctx.set_fill_style_str("#5a6b78");
+    ctx.set_font(&format!("italic 10px {JP_SANS}"));
+    ctx.set_text_align("center");
+    let _ = ctx.fill_text(
+        "◀ / ▶ で他の機体  ·  Enter / 右クリックで戻る",
+        ox as f64 + w / 2.0,
+        oy as f64 + h - 8.0,
+    );
+    ctx.set_text_align("left");
+}
+
+/// セクション見出しを描く。
+fn section_header(ctx: &CanvasRenderingContext2d, x: i64, y: i64, label: &str) {
+    ctx.set_fill_style_str("#2b6080");
+    ctx.set_font(&format!("bold 13px {JP_SANS}"));
+    ctx.set_text_align("left");
+    let _ = ctx.fill_text(label, x as f64, y as f64);
+}
+
+/// フッタのナビゲーションボタン (シーンローカル `rect` をオフセット `(ox, oy)` で描画)。
+fn draw_detail_button(ctx: &CanvasRenderingContext2d, ox: i64, oy: i64, rect: Rect, label: &str) {
+    let x = ox + rect.x as i64;
+    let y = oy + rect.y as i64;
+    ctx.set_fill_style_str("#d4dde4");
+    ctx.fill_rect(x as f64, y as f64, f64::from(rect.w), f64::from(rect.h));
+    ctx.set_stroke_style_str("#6b7a86");
+    ctx.set_line_width(1.0);
+    ctx.stroke_rect(
+        x as f64 + 0.5,
+        y as f64 + 0.5,
+        f64::from(rect.w) - 1.0,
+        f64::from(rect.h) - 1.0,
+    );
+    ctx.set_fill_style_str("#1a2730");
+    ctx.set_font(&format!("bold 12px {JP_SANS}"));
+    ctx.set_text_align("center");
+    ctx.set_text_baseline("middle");
+    let _ = ctx.fill_text(
+        label,
+        x as f64 + f64::from(rect.w) / 2.0,
+        y as f64 + f64::from(rect.h) / 2.0,
+    );
+    ctx.set_text_align("left");
+}
+
+/// `items` を `/` 区切りで `max_w` 幅に折り返して描画する (最大 `max_lines` 行)。
+fn draw_wrapped(
+    ctx: &CanvasRenderingContext2d,
+    items: &[String],
+    x: i64,
+    y: i64,
+    max_w: f64,
+    line_h: i64,
+    max_lines: usize,
+) {
+    let mut line = String::new();
+    let mut yy = y;
+    let mut drawn = 0usize;
+    for it in items {
+        let candidate = if line.is_empty() {
+            it.clone()
+        } else {
+            format!("{line} / {it}")
+        };
+        let width = ctx
+            .measure_text(&candidate)
+            .map(|m| m.width())
+            .unwrap_or(0.0);
+        if width > max_w && !line.is_empty() {
+            let _ = ctx.fill_text(&line, x as f64, yy as f64);
+            drawn += 1;
+            if drawn >= max_lines {
+                let _ = ctx.fill_text("…", (x as f64) + max_w - 8.0, yy as f64);
+                return;
+            }
+            yy += line_h;
+            line = it.clone();
+        } else {
+            line = candidate;
+        }
+    }
+    if !line.is_empty() {
+        let _ = ctx.fill_text(&line, x as f64, yy as f64);
+    }
 }
 
 // ===== VB6 ウィジェット描画ヘルパ / VB6 widget drawing helpers =====

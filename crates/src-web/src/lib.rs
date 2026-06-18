@@ -1282,6 +1282,12 @@ fn redraw(ctx: &SharedCtx, app: &SharedApp, assets: &SharedAssets) {
     let intermission_items: Vec<String> = (0..app_ref.intermission_item_count())
         .filter_map(|i| app_ref.intermission_item_label(i))
         .collect();
+    // 単機ステータス詳細のビューモデル (UnitDetail シーン時のみ構築)。
+    let unit_detail = if app_ref.scene() == src_core::Scene::UnitDetail {
+        app_ref.build_status_detail(app_ref.status_detail_index())
+    } else {
+        None
+    };
     render::draw_scene(
         ctx,
         app_ref.scene(),
@@ -1304,5 +1310,6 @@ fn redraw(ctx: &SharedCtx, app: &SharedApp, assets: &SharedAssets) {
         app_ref.intermission_cursor(),
         app_ref.battle_anim(),
         app_ref.move_anim(),
+        unit_detail.as_ref(),
     );
 }

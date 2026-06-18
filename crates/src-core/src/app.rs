@@ -355,6 +355,10 @@ pub struct App {
     /// (Title)。transient。
     #[serde(skip)]
     scene_return_to: Option<Scene>,
+    /// 単機ステータス詳細 (`Scene::UnitDetail`) で表示中の機体の、味方ロスター内
+    /// 0 始まり位置。`◀ / ▶` で更新する。transient。
+    #[serde(skip)]
+    status_detail_index: usize,
     /// 敗北 (`game_over`) でシナリオ / `GameOver.eve` の出口イベントが無く、組込みの
     /// コンティニュー/タイトル選択を待っている状態。soft-lock 防止のフォールバック。
     /// この間 Enter/クリック = コンティニュー、右クリック/Esc = タイトルへ。
@@ -613,6 +617,7 @@ impl App {
             wall_clock_ms: 0.0,
             intermission_commands: Vec::new(),
             intermission_cursor: 0,
+            status_detail_index: 0,
             intermission_mode: IntermissionMode::Menu,
             ride_change_source: None,
             scene_return_to: None,
@@ -811,6 +816,11 @@ impl App {
 
     pub fn set_intermission_cursor(&mut self, n: usize) {
         self.intermission_cursor = n;
+    }
+
+    /// 単機ステータス詳細 (`Scene::UnitDetail`) で表示中の機体のロスター内位置。
+    pub fn status_detail_index(&self) -> usize {
+        self.status_detail_index
     }
 
     pub fn push_audio_request(&mut self, req: crate::audio::AudioRequest) {
@@ -2852,6 +2862,12 @@ impl App {
         // 敗北フォールバック中のキャンセル (右クリック/Esc) → タイトルへ。
         if self.pending_game_over {
             self.return_to_title();
+            return true;
+        }
+        // 単機ステータス詳細のキャンセル (右クリック/Esc) → インターミッションへ戻る
+        // (元 SRC: パイロット/ユニットステータスは右クリックで戻る)。
+        if self.scene == Scene::UnitDetail {
+            self.exit_list_scene();
             return true;
         }
         // 乗り換えの移動先選択中のキャンセル → 移動元選択へ戻る (メニューには戻らない)。
@@ -7944,6 +7960,13 @@ impl App {
     }
 
     fn move_cursor(&mut self, dir: Direction) -> bool {
+        // 単機ステータス詳細: Left/Up=前の機体, Right/Down=次の機体 (ラップ)。
+        if self.scene == Scene::UnitDetail {
+            return match dir {
+                Direction::Left | Direction::Up => self.cycle_status_detail(-1),
+                Direction::Right | Direction::Down => self.cycle_status_detail(1),
+            };
+        }
         if self.scene == Scene::Intermission {
             // インターミッション画面では Up/Down が項目選択カーソル移動。
             // Left/Right は無視。
@@ -8046,6 +8069,12 @@ impl App {
                 self.exit_list_scene();
                 true
             }
+            // 単機ステータス詳細: Enter で閉じてインターミッションへ戻る
+            // (巡回は ◀ / ▶ ボタンか矢印キー)。
+            Scene::UnitDetail => {
+                self.exit_list_scene();
+                true
+            }
         }
     }
 
@@ -8061,6 +8090,206 @@ impl App {
             Some(s) => self.scene = s,
             None => self.scene = Scene::Title,
         }
+    }
+
+    /// 単機ステータス詳細で巡回対象になる味方ロスター (off_map 含む)。
+    /// `intermission_upgrade_units` と同じく Player 陣営の `unit_instances` index 列。
+    fn status_roster(&self) -> Vec<usize> {
+        self.intermission_upgrade_units()
+    }
+
+    /// 単機ステータス詳細で次/前の機体へ巡回する (ロスター内をラップ)。
+    /// `delta` は +1 (次) / -1 (前)。ロスターが空なら何もしない。
+    fn cycle_status_detail(&mut self, delta: isize) -> bool {
+        let total = self.status_roster().len();
+        if total == 0 {
+            return false;
+        }
+        let cur = self.status_detail_index.min(total - 1) as isize;
+        let next = (cur + delta).rem_euclid(total as isize) as usize;
+        self.status_detail_index = next;
+        true
+    }
+
+    /// `Scene::UnitDetail` で表示する単機ステータスのビューモデルを構築する。
+    /// `roster_pos` は味方ロスター (`status_roster`) 内の 0 始まり位置。範囲外 /
+    /// ロスター空なら `None`。改造段階・装備・レベル成長・状態異常込みの実効値を
+    /// 反映する (`GameDatabase::effective_*` / `effective_pilot_data`)。
+    pub fn build_status_detail(
+        &self,
+        roster_pos: usize,
+    ) -> Option<crate::scene::unit_detail::StatusDetail> {
+        use crate::scene::unit_detail::{StatusDetail, WeaponRow};
+
+        let roster = self.status_roster();
+        let total = roster.len();
+        let &unit_idx = roster.get(roster_pos)?;
+        let u = self.database.unit_instances.get(unit_idx)?;
+        let unit_data = self.database.unit_by_name(&u.unit_data_name)?;
+
+        let hp_max = self.database.effective_max_hp(u);
+        let hp_cur = (hp_max - u.damage).max(0);
+        let en_max = self.database.effective_max_en(u);
+        let en_cur = (en_max - u.en_consumed).max(0);
+
+        // 搭乗パイロット (メイン)。無人なら has_pilot=false。
+        let main_pilot = u.main_pilot_name();
+        let pilot_data = if main_pilot.is_empty() {
+            None
+        } else {
+            self.database.effective_pilot_data(main_pilot)
+        };
+        let pilot_inst = u
+            .pilot_ids
+            .first()
+            .and_then(|id| self.database.pilot_instance_by_id(id));
+
+        // 武器一覧 (runtime 状態を反映: 残弾 / EN)。
+        let weapons: Vec<WeaponRow> = u
+            .weapons
+            .iter()
+            .filter_map(|uw| {
+                let wd = unit_data.weapons.get(uw.weapon_index)?;
+                let range = if wd.min_range == wd.max_range {
+                    wd.max_range.to_string()
+                } else {
+                    format!("{}-{}", wd.min_range, wd.max_range)
+                };
+                let ammo = if wd.bullet > 0 {
+                    format!("残{}/{}", uw.bullet_remaining.max(0), wd.bullet)
+                } else if wd.en_consumption > 0 {
+                    format!("EN{}", wd.en_consumption)
+                } else {
+                    "-".to_string()
+                };
+                Some(WeaponRow {
+                    name: wd.name.clone(),
+                    power: wd.power,
+                    range,
+                    ammo,
+                })
+            })
+            .collect();
+
+        let conditions: Vec<String> = u.conditions.iter().map(|c| c.name.clone()).collect();
+
+        // パイロット項目。
+        let (
+            has_pilot,
+            pilot_name,
+            pilot_nickname,
+            level,
+            exp,
+            sp_cur,
+            sp_max,
+            infight,
+            shooting,
+            hit,
+            dodge,
+            intuition,
+            technique,
+            pilot_adaption,
+            spirit_commands,
+            skills,
+        ) = if let Some(pd) = pilot_data.as_ref() {
+            let level = pilot_inst.map(|p| p.level).unwrap_or(1);
+            let exp = pilot_inst.map(|p| p.total_exp).unwrap_or(u.total_exp);
+            let sp_max = pd.sp.unwrap_or(0);
+            let sp_cur = pilot_inst.map(|p| p.sp_remaining).unwrap_or(sp_max);
+            let spirit_commands: Vec<String> = pd
+                .spirit_commands
+                .iter()
+                .map(|sc| format!("{} Lv{}", sc.name, sc.level))
+                .collect();
+            // 特殊技能: runtime PilotInstance.skills を優先し、無ければ静的特殊能力名。
+            let skills: Vec<String> = if let Some(pi) = pilot_inst {
+                if !pi.skills.is_empty() {
+                    pi.skills.clone()
+                } else {
+                    pd.features.iter().map(|(n, _)| n.clone()).collect()
+                }
+            } else {
+                pd.features.iter().map(|(n, _)| n.clone()).collect()
+            };
+            (
+                true,
+                pd.name.clone(),
+                pd.nickname.clone(),
+                level,
+                exp,
+                sp_cur,
+                sp_max,
+                pd.infight,
+                pd.shooting,
+                pd.hit,
+                pd.dodge,
+                pd.intuition,
+                pd.technique,
+                pd.adaption.as_str().to_string(),
+                spirit_commands,
+                skills,
+            )
+        } else {
+            (
+                false,
+                String::new(),
+                String::new(),
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                String::new(),
+                Vec::new(),
+                Vec::new(),
+            )
+        };
+
+        Some(StatusDetail {
+            index: roster_pos,
+            total,
+            unit_name: unit_data.name.clone(),
+            unit_nickname: unit_data.nickname.clone(),
+            party_label: u.party.short_label().to_string(),
+            class: u
+                .class_override
+                .clone()
+                .unwrap_or_else(|| unit_data.class.clone()),
+            size: unit_data.size.label().to_string(),
+            unit_adaption: unit_data.adaption.as_str().to_string(),
+            hp_cur,
+            hp_max,
+            en_cur,
+            en_max,
+            armor: self.database.effective_armor(u),
+            mobility: self.database.effective_mobility(u),
+            speed: self.database.effective_speed(u),
+            upgrade_level: u.upgrade_level,
+            unit_morale: u.morale,
+            conditions,
+            has_pilot,
+            pilot_name,
+            pilot_nickname,
+            level,
+            exp,
+            sp_cur,
+            sp_max,
+            infight,
+            shooting,
+            hit,
+            dodge,
+            intuition,
+            technique,
+            pilot_adaption,
+            spirit_commands,
+            skills,
+            weapons,
+        })
     }
 
     /// 戦闘中に勝敗を判定。Player 側ユニットが居なくなれば敗北、
@@ -8221,6 +8450,22 @@ impl App {
                 self.exit_list_scene();
                 true
             }
+            Scene::UnitDetail => self.handle_click_unit_detail(lx, ly),
+        }
+    }
+
+    /// 単機ステータス詳細でのクリック: フッタの ◀ / ▶ / 閉じる ボタンのみ反応する
+    /// (ボタン外クリックは無反応＝誤操作で閉じない)。
+    fn handle_click_unit_detail(&mut self, lx: i32, ly: i32) -> bool {
+        use crate::scene::unit_detail::{hit_button, DetailButton};
+        match hit_button(lx, ly) {
+            Some(DetailButton::Prev) => self.cycle_status_detail(-1),
+            Some(DetailButton::Next) => self.cycle_status_detail(1),
+            Some(DetailButton::Close) => {
+                self.exit_list_scene();
+                true
+            }
+            None => false,
         }
     }
 
@@ -9270,10 +9515,10 @@ impl App {
                         true
                     }
                     InterItem::Status => {
-                        // 部隊ロスター (パイロット / ユニット一覧) を開く。閲覧後は
-                        // インターミッションへ戻す (Enter / クリックで一覧を送り、
-                        // 末尾でこのシーンに復帰)。
-                        self.scene = Scene::PilotList;
+                        // 味方ロスター先頭機の単機ステータス詳細を開く。`◀ / ▶` で
+                        // 巡回し、閉じる / Esc / 右クリックでインターミッションへ戻る。
+                        self.status_detail_index = 0;
+                        self.scene = Scene::UnitDetail;
                         self.scene_return_to = Some(Scene::Intermission);
                         true
                     }
@@ -12518,10 +12763,10 @@ mod tests {
         );
     }
 
-    /// インターミッション「ステータス」は部隊ロスターを開き、閲覧後に
+    /// インターミッション「ステータス」は単機ステータス詳細を開き、Enter で
     /// インターミッションへ戻る。
     #[test]
-    fn intermission_status_opens_roster_and_returns() {
+    fn intermission_status_opens_unit_detail_and_returns() {
         let mut app = App::new();
         enter_mapview_with_demo_map(&mut app);
         place_player_unit(&mut app, "Hero", 2, 6);
@@ -12534,11 +12779,16 @@ mod tests {
             .expect("ステータス 項目がある");
         app.set_intermission_cursor(idx);
         assert!(app.confirm_intermission_selection());
-        assert_eq!(app.scene(), Scene::PilotList);
+        assert_eq!(app.scene(), Scene::UnitDetail);
+        assert_eq!(app.status_detail_index(), 0);
 
-        // 送り: PilotList → UnitList → インターミッションへ復帰。
-        app.handle_input(Input::Advance);
-        assert_eq!(app.scene(), Scene::UnitList);
+        // ビューモデルが実体から構築できる。
+        let detail = app.build_status_detail(0).expect("先頭機の詳細");
+        assert_eq!(detail.unit_name, "Hero");
+        assert_eq!(detail.total, 1);
+        assert!(detail.has_pilot, "PILOT が搭乗");
+
+        // Enter でインターミッションへ復帰。
         app.handle_input(Input::Advance);
         assert_eq!(
             app.scene(),
@@ -12546,6 +12796,186 @@ mod tests {
             "ステータス閲覧後はインターミッションへ戻る"
         );
         assert_eq!(app.intermission_mode, IntermissionMode::Menu);
+    }
+
+    /// 単機ステータス詳細: ◀ / ▶ ボタンでロスターを巡回し、右クリック (Esc) /
+    /// 閉じる ボタンでインターミッションへ戻る。
+    #[test]
+    fn unit_detail_cycles_roster_and_closes() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Alpha", 2, 6);
+        place_player_unit(&mut app, "Bravo", 3, 6);
+        app.set_script_var("次ステージ".to_string(), "x.eve".to_string());
+        app.scene = Scene::Intermission;
+        app.intermission_mode = IntermissionMode::Menu;
+        let idx = (0..app.intermission_item_count())
+            .find(|&n| app.intermission_item_label(n).as_deref() == Some("ステータス"))
+            .expect("ステータス 項目");
+        app.set_intermission_cursor(idx);
+        assert!(app.confirm_intermission_selection());
+        assert_eq!(app.scene(), Scene::UnitDetail);
+        assert_eq!(app.status_detail_index(), 0);
+
+        // ▶ ボタンで次の機体へ。
+        let nb = crate::scene::unit_detail::next_button();
+        assert!(app.handle_input(Input::ClickAt {
+            x: nb.x + 2,
+            y: nb.y + 2,
+        }));
+        assert_eq!(app.status_detail_index(), 1);
+        // 末尾で ▶ → 先頭へラップ。
+        assert!(app.handle_input(Input::ClickAt {
+            x: nb.x + 2,
+            y: nb.y + 2,
+        }));
+        assert_eq!(app.status_detail_index(), 0);
+        // ◀ ボタンで前 (= ラップして末尾) へ。
+        let pb = crate::scene::unit_detail::prev_button();
+        assert!(app.handle_input(Input::ClickAt {
+            x: pb.x + 2,
+            y: pb.y + 2,
+        }));
+        assert_eq!(app.status_detail_index(), 1);
+
+        // 閉じる ボタンでインターミッションへ。
+        let cb = crate::scene::unit_detail::close_button();
+        assert!(app.handle_input(Input::ClickAt {
+            x: cb.x + 2,
+            y: cb.y + 2,
+        }));
+        assert_eq!(app.scene(), Scene::Intermission);
+
+        // 再度開いて右クリック (Cancel) で戻る。
+        app.set_intermission_cursor(idx);
+        assert!(app.confirm_intermission_selection());
+        assert_eq!(app.scene(), Scene::UnitDetail);
+        assert!(app.handle_input(Input::Cancel));
+        assert_eq!(app.scene(), Scene::Intermission);
+    }
+
+    /// 単機ステータス詳細のビューモデルが実効値 (改造段階・残ダメージ・武器の残弾/EN・
+    /// 状態異常・パイロットの精神コマンド/SP) を正しく反映する。
+    #[test]
+    fn build_status_detail_reflects_effective_values() {
+        use crate::condition::Condition;
+        use crate::data::pilot::{Adaption, PilotData, Sex, SpiritCommand};
+        use crate::data::unit::{Size, UnitData, WeaponData};
+        use crate::unit_weapon::UnitWeapon;
+        use crate::{Party, UnitInstance};
+
+        let mut app = App::new();
+
+        let pilot = PilotData {
+            spirit_commands: vec![
+                SpiritCommand {
+                    name: "ひらめき".into(),
+                    cost: Some(10),
+                    level: 1,
+                },
+                SpiritCommand {
+                    name: "熱血".into(),
+                    cost: Some(30),
+                    level: 9,
+                },
+            ],
+            name: "アスカ".into(),
+            nickname: "A".into(),
+            kana_name: "あすか".into(),
+            sex: Sex::Female,
+            class: String::new(),
+            adaption: Adaption::parse("ABAA").unwrap(),
+            exp_value: 0,
+            infight: 120,
+            shooting: 130,
+            hit: 20,
+            dodge: 25,
+            intuition: 15,
+            technique: 18,
+            personality: None,
+            sp: Some(80),
+            bgm: None,
+            bitmap: None,
+            features: vec![("底力".into(), "1".into())],
+        };
+        let weapon = |name: &str, power: i64, lo, hi, bullet, en| WeaponData {
+            name: name.into(),
+            power,
+            min_range: lo,
+            max_range: hi,
+            precision: 0,
+            bullet,
+            en_consumption: en,
+            necessary_morale: 0,
+            adaption: "AAAA".into(),
+            critical: 0,
+            class: String::new(),
+            extras: Vec::new(),
+        };
+        let unit_data = UnitData {
+            abilities: Vec::new(),
+            name: "エヴァ".into(),
+            kana_name: String::new(),
+            nickname: "初号機".into(),
+            class: "リアル".into(),
+            pilot_num: 1,
+            item_num: 0,
+            transportation: "陸".into(),
+            speed: 6,
+            size: Size::L,
+            value: 0,
+            exp_value: 0,
+            hp: 5000,
+            en: 100,
+            armor: 800,
+            mobility: 120,
+            adaption: Adaption::parse("AAAA").unwrap(),
+            bitmap: String::new(),
+            weapons: vec![
+                weapon("バルカン", 800, 1, 1, 0, 0),
+                weapon("ミサイル", 1500, 1, 4, 6, 0),
+                weapon("ビーム", 2000, 1, 3, 0, 15),
+            ],
+            features: Vec::new(),
+        };
+        app.database_mut().pilots.push(pilot);
+        app.database_mut().units.push(unit_data);
+
+        let mut inst = UnitInstance::new("エヴァ", "アスカ", Party::Player, 0, 0);
+        inst.upgrade_level = 3;
+        inst.damage = 1000;
+        inst.weapons = vec![
+            UnitWeapon::from_data("バルカン", 0, 0),
+            UnitWeapon::from_data("ミサイル", 1, 6),
+            UnitWeapon::from_data("ビーム", 2, 0),
+        ];
+        inst.weapons[1].bullet_remaining = 4; // ミサイルを 2 発消費。
+        inst.add_condition(Condition::new("加速", 5));
+        app.database_mut().register_unit(inst);
+
+        let d = app.build_status_detail(0).expect("先頭機の詳細");
+        // 機体: 改造込みの実効 HP と残ダメージ反映。
+        assert_eq!(d.unit_name, "エヴァ");
+        assert_eq!(d.upgrade_level, 3);
+        assert!(d.hp_max > 5000, "改造段階で素 HP を上回る");
+        assert_eq!(d.hp_cur, d.hp_max - 1000);
+        assert_eq!(d.size, "L");
+        assert!(d.conditions.iter().any(|c| c == "加速"));
+        // パイロット: SP/精神コマンド。
+        assert!(d.has_pilot);
+        assert_eq!(d.sp_max, 80);
+        // 実効値: レベル成長込み (VB6: 格闘 += level、level 1 でも +1)。
+        assert_eq!(d.infight, 121);
+        assert_eq!(
+            d.spirit_commands,
+            vec!["ひらめき Lv1".to_string(), "熱血 Lv9".to_string()]
+        );
+        // 武器: 射程表記と残弾/EN 表記。
+        assert_eq!(d.weapons.len(), 3);
+        assert_eq!(d.weapons[0].ammo, "-", "弾/EN なしは '-'");
+        assert_eq!(d.weapons[1].range, "1-4");
+        assert_eq!(d.weapons[1].ammo, "残4/6");
+        assert_eq!(d.weapons[2].ammo, "EN15");
     }
 
     /// 通常の部隊表 (戻り先指定なし) は従来どおり UnitList → Title で抜ける。
