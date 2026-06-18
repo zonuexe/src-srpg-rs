@@ -9,20 +9,25 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 
 ## 現在地（2026-06-19）
 
-**テスト**: `cargo test -p src-core` 全緑（**1969 件**）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。  
-**最新セッション（2026-06-19・`master` 直接コミット）= GBA 着手 Phase 2/3（図形 primitive）**:
+**テスト**: `cargo test -p src-core` 全緑（**1973 件**）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。  
+**最新セッション（2026-06-19・`master` 直接コミット）= GBA 着手 Phase 1〜3（図形 primitive＋画面意味論＋実データ検証）**:
 ★★ **前提ブロッカーの誤認を是正**: 前セッションは「in-repo に GBA シナリオが無い」と結論したが、これは grep を `_GBA_` という狭い語に
 限定したための誤り。実際には **in-repo の スパロボ戦記 fixture に汎用戦闘アニメ Lib 相当の `lib/BattleAnime*.eve`（無印/G/O/R/S）が既に存在**
 （`設定[全身戦闘アニメ]`＝クローズアップを描画 primitive で実現）。**GBA は当初からブロックされていなかった**。エンジンも `try_play_battle_animation`
 （`animation.txt` 解決→script_library 実在サブルーチンを再生）で再生経路を持つ。
-✅ **図形描画 primitive を実装（commit `dc6bdcd`）**: 戦闘アニメ Lib が多用する `Circle`(x21)/`Polygon`(x19)/`Oval`/`Arc` が **no-op だった**
-（catalog Stub＝光線扇形 Polygon・収束円 Circle 等が一切描画されず）。SRC 原典構文どおり実装し、`FillStyle`(塗りつぶし/透明)・`FillColor`(線色と独立)
-を状態分離（旧 fillcolor は SetColor に潰す配線を是正）。src-web は Canvas2D ellipse/arc_with_anticlockwise/path で描画（Arc は SRC の CCW 角度を
-y 下向き canvas へ変換）。native test 7 件。**残（次の一手）**: ヘッドレスで戦闘アニメを駆動し未対応命令を実測（Phase 1 gap 監査の精緻化・特に Redraw/Keep clear 意味論）→
-固定レイアウト配線→実機検証。詳細は §4「GBA 着手準備」。
+① ✅ **図形描画 primitive を実装（`dc6bdcd`）**: 戦闘アニメ Lib が多用する `Circle`/`Polygon`/`Oval`/`Arc` が **no-op だった**
+（catalog Stub）。SRC 原典構文どおり実装し、`FillStyle`/`FillColor` を状態分離（旧 fillcolor が SetColor に潰す配線を是正）。Canvas2D で描画。
+② ✅ **画面クリア意味論を是正（`5e58a0b`）**: フレームループ `Paint; Refresh; ClearPicture; Wait`（Lib に 1989 箇所）で **ClearPicture が Wait 前に
+overlay を即クリア＝毎フレーム空表示**だった。SRC immediate-mode に倣い ClearPicture を**遅延クリア**化（次の描画 push か Refresh まで保持）＝Wait 中もフレームが見える。
+③ ✅ **描画ペン状態を ClearPicture 跨ぎで永続化（`8ab258a`）**: Color/FillStyle/FillColor/DrawWidth はループ外で 1 度設定し毎フレーム ClearPicture するため、
+保持しないと図形が既定色（白）に。SRC の ObjColor 永続性を再現（永続フィールド＋レンダラ seed・`clear()` シーン遷移はリセット）。
+④ ✅ **実 fixture で解決パイプライン＋GBA 分岐を検証（`596f7bd`）**: animation.txt の武器→`resolve_weapon`→Lib ラベル実在を突合する統合テスト。
+GBA クローズアップが **`設定[全身戦闘アニメ]=オン` で分岐**することを実データで固定（Phase 3 配線の前提）。**Phase 1 gap 監査の結論**: 戦闘アニメ Lib が使う命令動詞に
+**未実装/Stub は 0 件**（図形 primitive 実装後。残ノイズは `#`/`//` コメント行と `List(...)` 継続断片のみ）。VFS file I/O（Open/Print/Close/Load）も駆動中に正常実行を確認。
+**配線確認**: combat が `対象ユニットＩＤ`/`相手ユニットＩＤ` を `try_play_battle_animation` 前に束縛済（`app.rs:3282-3284`→`:3654`）。
+native test 9 件＋統合 2 件。**残（Phase 3/4・要ブラウザ）**: クローズアップ本体の固定レイアウトでのユニット個別スプライト配置検証・実機の見栄え確認。詳細は §4「GBA 着手準備」。
 
 **前セッション（2026-06-18・`master` 直接コミット）**: ① ✅ **B 単機ステータス詳細（`Scene::UnitDetail`）完了**（§1.2 B）。
-**最新セッション（2026-06-18・`master` 直接コミット）**: ① ✅ **B 単機ステータス詳細（`Scene::UnitDetail`）完了**（§1.2 B）。
 ② ✅ **差分オラクルを combat 予測（c）＋移動（d）＋気力/精神（e）＋改造/極端 level（f）＋別 fixture/サイズ差（g）へ拡張**。combat `placeattack` 45/45・移動 `moverange` 平地一致・
 気力/精神 10/10・改造/level `combat_rank_level` **20/20**・サイズ差 `combat_size_tales` **7/7**。過程で **実バグ 11 件**を発掘・是正（全て VB6/C# 裏取り）: ①命中率クランプ→上限なし・最低0
 ②最低ダメージ→既定10 ③地形命中修正の符号（正=防御地形）④防御側パイロット Defense（耐久）⑤飛行/水中等の特殊移動コスト（2→1 game MP）
@@ -504,16 +509,19 @@ Briefing → Title [【START】|…|真ゲッター/マジンガー/…] → 難
 - ⚠ engine ネイティブの `battle_anim`（命中フラッシュ/ダメージ数字、`battle_anim.rs`）は **SRC 汎用戦闘アニメとは別物**。GBA は後者（シナリオ駆動）。
 
 **段階計画**:
-1. **Phase 1 — gap 監査（静的は実施済・ヘッドレス駆動が次手）**: ✅ 静的監査済（`BattleAnime*.eve` の使用命令/関数を catalog と突合。
-   命令は `name.to_ascii_lowercase()` で case-insensitive・関数は正規化マップで case-insensitive ＝大文字小文字差は問題なし。
-   抽出した「ASCII 関数 absent」の大半は `EFFECT_xxx(Color)01.bmp` の bmp ファイル名の括弧誤検出ノイズ）。**真の gap は描画 primitive の no-op**だった。
-   **残（次手）**: `animate_battle` + `settings.battle_animation` ON で**実戦闘をヘッドレス駆動**し、`戦闘アニメ_*` 再生中に落ちる/no-op になる命令を実測
-   （特に `Redraw`/`Keep`/`ClearPicture`/`Refresh` の**画面クリア・保持意味論**、`HotPoint`/`Foreach` 等の動的挙動）。
-2. **Phase 2 — primitives 充足**: ✅ **図形 `Circle`/`Oval`/`Polygon`/`Arc`＋`FillStyle`/`FillColor` 実装済（`dc6bdcd`）**。
-   **残**: Redraw/Keep の画面クリア意味論（現状 `Refresh` で overlay クリア＝原典準拠だが、Keep 画面保持は未確認）。
-3. **Phase 3 — 固定レイアウト描画の配線**（src-web）: ⏳ 部分着手（図形は Canvas2D で描く）。`BaseX/BaseY=0` 固定画面に script_overlay 経由で
-   ユニット個別スプライト（`戦闘アニメ[対象ユニット画像]` 等）を描く配線・解決の検証が残る。
-4. **Phase 4 — 実機検証**（対話/描画ゆえ headless 不可の見栄え確認）。
+1. **Phase 1 — gap 監査**: ✅ **完了**。`BattleAnime*.eve` の使用命令を catalog と case-insensitive 突合（命令は `to_ascii_lowercase`・
+   関数は正規化マップ）。**戦闘アニメ Lib が使う命令動詞に未実装/Stub は 0 件**（図形 primitive 実装後）。残「absent」は全て `#`/`//` コメント行
+   （.eve パーサは `#` 始まり・`//` 以降を非命令として除外）と `List(...)` の継続断片＝ノイズ。実 fixture 駆動で **VFS file I/O（Open/Print/Close/Load）も正常実行**を確認。
+2. **Phase 2 — primitives 充足**: ✅ **完了**。① 図形 `Circle`/`Oval`/`Polygon`/`Arc`＋`FillStyle`/`FillColor`（`dc6bdcd`）。
+   ② **画面クリア意味論**＝`ClearPicture` を遅延クリア化（`5e58a0b`）。フレームループ `Paint; Refresh; ClearPicture; Wait`（Lib に 1989 箇所）で
+   ClearPicture が Wait 前に overlay を即クリア＝毎フレーム空表示だった真因を是正（SRC immediate-mode のバックバッファ消去意味論を retained-overlay で再現）。
+   ③ 描画ペン状態（色/塗り/線幅/フォント）を ClearPicture 跨ぎで永続化（`8ab258a`、SRC ObjColor 準拠）。
+   **注**: `Keep` は依然 BGM 用 `KeepBgm` のみ＝画面 Keep は戦闘アニメ Lib で未使用（gap 監査で出現せず）＝対応不要。
+3. **Phase 3 — 固定レイアウト描画の配線**（src-web）: ⏳ 進行中。✅ **GBA 分岐の前提を実データで固定**（`596f7bd`）＝クローズアップは
+   **`設定[全身戦闘アニメ]=オン`** で開く。✅ **配線確認**: combat が `対象ユニットＩＤ`/`相手ユニットＩＤ` を `try_play_battle_animation` 前に束縛（`app.rs:3282-3284`→`:3654`）。
+   図形は Canvas2D で描画済。**残**: クローズアップ本体が `BaseX/BaseY=0` 固定画面に `戦闘アニメ[対象ユニット画像]`/`Info(…,全身画像)` 等で
+   ユニット個別スプライトを置く配置・解像（実ユニット＋アセットパックが要る＝ブラウザ駆動が現実的）。
+4. **Phase 4 — 実機検証**（対話/描画ゆえ headless 不可の見栄え確認）。`設定[全身戦闘アニメ]=オン` ＋ 戦闘アニメ表示設定で実機の見栄えを確認。
 > **方針メモ**: GBA は「engine に GBA 画面を作り込む」のではなく「**汎用戦闘アニメ Lib が要求する primitives を engine が満たす**」のが正道。
 > 推測で GBA 画面を実装せず、Lib スクリプトを駆動して gap を埋める（温泉旅館/スパロボ戦記で実証した「fixture を駆動して未対応を洗い出す」手法を踏襲）。
 
@@ -635,7 +643,7 @@ target/debug/scan_eve /tmp/out
 
 詳細実装はコード・`git log`・memory `project_gap_audit_roadmap` を参照。以下は「もう触らなくてよい」既消化項目の索引。
 
-### 2026-06-19 セッション（GBA 着手 Phase 2/3 — 図形描画 primitive）
+### 2026-06-19 セッション（GBA 着手 Phase 1〜3 — 図形 primitive＋画面意味論＋実データ検証）
 
 - **GBA 前提ブロッカーの誤認を是正**: 前セッションは「in-repo に GBA シナリオ無し」と結論したが、grep を `_GBA_` に限定したための誤り。
   スパロボ戦記 fixture の `lib/BattleAnime{,G,O,R,S}.eve` が汎用戦闘アニメ Lib 相当（`戦闘アニメ_<武器>攻撃:`＋`設定[全身戦闘アニメ]`）＝シナリオは在った。
@@ -644,6 +652,16 @@ target/debug/scan_eve /tmp/out
   `script_overlay::DrawCmd` に `Circle`/`Oval`/`Polygon`/`Arc`＋`SetFillSolid`/`SetFillColor` を追加。`FillStyle`(塗り/透明)・`FillColor`(線色と独立)
   を状態分離（旧 fillcolor が SetColor に潰す配線を是正）。src-web は Canvas2D ellipse/arc_with_anticlockwise/path で描画（Arc は SRC の CCW 角度規約を
   y 下向き canvas へ `arc_with_anticlockwise` で変換、C# DrawArc 準拠）。catalog で Stub→Implemented へ昇格。native test 7 件。
+- **ClearPicture 遅延クリア（`5e58a0b`）**: フレームループ `Paint; Refresh; ClearPicture; Wait`（Lib に 1989 箇所）で ClearPicture が Wait 前に
+  overlay を即クリアし**毎フレーム空表示**＝アニメ不可視だった。SRC immediate-mode（ClearPicture はバックバッファのみ消し画面は次 present まで保持）を
+  retained-overlay で再現: `ScriptOverlay.pending_clear`＋`defer_clear()`/`present()`、push() が新フレーム最初の描画で適用、`clear()`(シーン遷移) は即時。
+  回帰 `battle_anim_frame_visible_during_wait`。
+- **描画ペン状態の永続化（`8ab258a`）**: Color/FillStyle/FillColor/DrawWidth はループ外で 1 度設定し毎フレーム ClearPicture するため、cmds から消えると
+  図形が既定色（白）に。SRC の ObjColor 等の永続性を再現＝`current_fill_solid`/`current_fill_color`/`current_line_width` 永続フィールド＋レンダラ seed・
+  `clear()`(シーン遷移) でリセット・`defer_clear()`(ClearPicture) で保持。回帰 `pen_state_persists_across_clearpicture`。
+- **実 fixture 解決パイプライン＋GBA 分岐の検証（`596f7bd`、`tests/battle_anim_lib.rs`）**: animation.txt の武器→`resolve_weapon`→Lib ラベル実在を突合。
+  GBA クローズアップが `設定[全身戦闘アニメ]=オン` で分岐することを実データで固定。**Phase 1 gap 監査の結論**: 戦闘アニメ Lib が使う命令動詞に未実装/Stub は 0 件。
+  配線確認: combat が `対象ユニットＩＤ`/`相手ユニットＩＤ` を `try_play_battle_animation`（`app.rs:3654`）前に束縛（`:3282-3284`）。
 
 ### 2026-06-17 セッション（C# オラクル監査・差分 harness）
 
