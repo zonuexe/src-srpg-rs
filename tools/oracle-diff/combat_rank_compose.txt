@@ -1,0 +1,23 @@
+# Combat-prediction oracle: 改造段階 rank>0 を 防御側地形 + 攻撃側気力 と**合成**して
+# ダメージ/命中の composition を突合する (改造武器攻撃力の加算是正後、terrain damage_mod /
+# 気力スケーリング / ブースト高気力×1.25 との合成が C# と一致するかの確認)。
+# 攻撃側 マジンガーＺ(rank4,L20) / 防御側 マジンカイザー(rank2,L10)。地形 id: 0=平地 15=山(dmg_mod30)。
+@unit マジンガーＺ 4 味方 人工知能 20
+@unit マジンカイザー 2 敵 人工知能 10
+# --- rank4 vs rank2、平地 (baseline) ---
+@terrain 0
+@predict マジンガーＺ マジンカイザー 7 ダメージ
+@predict マジンガーＺ マジンカイザー 1 命中率
+# --- 防御側 rank2 が 山 (dmg_mod=30) に立つ: rank装甲 + 地形軽減の合成 ---
+@terrain 15
+@predict マジンガーＺ マジンカイザー 7 ダメージ
+@predict マジンガーＺ マジンカイザー 7 命中率
+# --- 攻撃側 気力 130 (ブースト発動域) + rank4、平地 ---
+@terrain 0
+@morale マジンガーＺ 130
+@predict マジンガーＺ マジンカイザー 7 ダメージ
+# --- 攻撃側 気力 150 + rank4 + 防御側 山: rank + ブースト + 地形 の三重合成 ---
+@terrain 15
+@morale マジンガーＺ 150
+@predict マジンガーＺ マジンカイザー 1 ダメージ
+@predict マジンガーＺ マジンカイザー 3 ダメージ
