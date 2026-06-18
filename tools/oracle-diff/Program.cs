@@ -42,6 +42,10 @@ namespace OracleDiff
             {
                 return RunPlaceAttack(args[1]);
             }
+            if (args.Length > 1 && args[0] == "moverange")
+            {
+                return RunMoveRange(args[1]);
+            }
             return RunExpressions();
         }
 
@@ -428,6 +432,207 @@ namespace OracleDiff
                     Console.WriteLine("<ERR:" + e.GetType().Name + ">");
                 }
             }
+            return 0;
+        }
+
+        // 移動範囲 diff モード: データロード後、指令言語でマップ・ユニットを組み立て、
+        // 各ユニットの到達可能マス集合を共通正規化 `<x> <y> <cost2x>` で出力する。
+        //
+        // 原典 SRC は `Map.AreaInSpeed(u)` が `Map.TotalMoveCost[x,y]` (2× game scale,
+        // start=0、不到達=1000000) を埋める。到達可能判定は `TotalMoveCost <= 2*Speed`。
+        // 注意: `MaskData` は AreaInSpeed 末尾で「到達可能かつ空きマス → false」「不到達 or
+        // ユニット存在 → true」と **反転** して使われる (Map.cs:1737-1766)。start セルには
+        // currentUnit がいるため MaskData[start]=true となり「不到達」と区別できない。よって
+        // ここでは MaskData ではなく `TotalMoveCost[x,y] <= 2*Speed` を到達可能の基準にする
+        // (start=0 も含まれ、Rust `compute_range_with` の戻り (start 込み) と整合する)。
+        //
+        // 指令言語 (stdin):
+        //   @map <w> <h>                         w×h の平地マップ (terrain id 0) を生成。
+        //   @cell <x> <y> <terrain_id>           セル (0-indexed) の地形 id を上書き。
+        //   @unit <name> <rank> <party> <pilot> <level> <x> <y>   ユニットを (x,y) 0-indexed に配置。
+        //   @move <name>                         そのユニットの到達マスを出力 (ヘッダ付き)。
+        //
+        // 座標正規化: C# は 1-indexed のため出力時に x-1/y-1 する。配置は StandBy(x+1,y+1)。
+        private static int RunMoveRange(string dir)
+        {
+            var src = new SRC { GUI = new MockGUI(), GUIMap = new MockGUIMap(), FileSystem = new LocalFileSystem() };
+            try
+            {
+                src.LoadDataDirectory(dir);
+            }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine("LoadDataDirectory failed: " + e);
+                return 1;
+            }
+
+            // terrain.txt は LoadDataDirectory が読まないため明示ロードする
+            // (placeattack モードと同経路: <dir>/../system/terrain.txt)。
+            var terrainPath = System.IO.Path.Combine(dir, "..", "system", "terrain.txt");
+            if (System.IO.File.Exists(terrainPath))
+            {
+                try
+                {
+                    src.TDList.Load(terrainPath);
+                    Console.Error.WriteLine("terrain loaded: " + System.IO.Path.GetFullPath(terrainPath));
+                }
+                catch (Exception e)
+                {
+                    Console.Error.WriteLine("TDList.Load failed: " + e.Message);
+                }
+            }
+            else
+            {
+                Console.Error.WriteLine("terrain.txt not found: " + System.IO.Path.GetFullPath(terrainPath));
+            }
+
+            // 指令を順に処理: @map → @cell → @unit → @move。読みながら状態を更新する。
+            var units = new Dictionary<string, Unit>();
+            var mapReady = false;
+            var output = new System.Text.StringBuilder();
+            string line;
+            while ((line = Console.In.ReadLine()) != null)
+            {
+                if (line.Length == 0 || line[0] == '#')
+                {
+                    continue;
+                }
+                // 行末コメント (" #...") を剥がす (corpus 可読性のため)。
+                var hash = line.IndexOf(" #", StringComparison.Ordinal);
+                if (hash >= 0)
+                {
+                    line = line.Substring(0, hash);
+                }
+                line = line.TrimEnd();
+                if (line.Length == 0)
+                {
+                    continue;
+                }
+
+                if (line.StartsWith("@map "))
+                {
+                    var parts = line.Substring(5)
+                        .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length >= 2
+                        && int.TryParse(parts[0], out var w)
+                        && int.TryParse(parts[1], out var h))
+                    {
+                        src.Map.SetMapSize(w, h);
+                        foreach (var x in src.Map.MapData.XRange)
+                        {
+                            foreach (var y in src.Map.MapData.YRange)
+                            {
+                                // 全セルを平地 (terrain id 0) に初期化する。
+                                src.Map.MapData[x, y].TerrainType = 0;
+                                src.Map.MapData[x, y].UnderTerrain = src.TDList.Item(0);
+                            }
+                        }
+                        mapReady = true;
+                    }
+                    continue;
+                }
+                if (line.StartsWith("@cell "))
+                {
+                    // `@cell <x> <y> <terrain_id>` (x,y は 0-indexed → 内部 1-indexed)。
+                    var parts = line.Substring(6)
+                        .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    if (mapReady && parts.Length >= 3
+                        && int.TryParse(parts[0], out var x0)
+                        && int.TryParse(parts[1], out var y0)
+                        && int.TryParse(parts[2], out var tid))
+                    {
+                        var x = x0 + 1;
+                        var y = y0 + 1;
+                        if (x >= 1 && x <= src.Map.MapWidth && y >= 1 && y <= src.Map.MapHeight)
+                        {
+                            src.Map.MapData[x, y].TerrainType = tid;
+                            src.Map.MapData[x, y].UnderTerrain = src.TDList.Item(tid);
+                        }
+                    }
+                    continue;
+                }
+                if (line.StartsWith("@unit "))
+                {
+                    // `@unit <name> <rank> <party> <pilot> <level> <x> <y>` (x,y は 0-indexed)。
+                    var parts = line.Substring(6)
+                        .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length >= 7)
+                    {
+                        var name = parts[0];
+                        var rank = int.TryParse(parts[1], out var r) ? r : 0;
+                        var party = parts[2];
+                        var pname = parts[3];
+                        var plevel = int.TryParse(parts[4], out var l) ? l : 1;
+                        var x0 = int.TryParse(parts[5], out var px) ? px : 0;
+                        var y0 = int.TryParse(parts[6], out var py) ? py : 0;
+                        var u = src.UList.Add(name, rank, party);
+                        if (u != null)
+                        {
+                            if (pname != "-")
+                            {
+                                var p = src.PList.Add(pname, plevel, party);
+                                if (p != null)
+                                {
+                                    p.Ride(u);
+                                }
+                                else
+                                {
+                                    Console.Error.WriteLine("PList.Add returned null: " + pname);
+                                }
+                            }
+                            u.FullRecover();
+                            // 0-indexed → 1-indexed で配置。StandBy は地形/占有を考慮し
+                            // 実際の着地セルを u.x/u.y に確定させる (= 真の start)。
+                            u.StandBy(x0 + 1, y0 + 1);
+                            units[name] = u;
+                        }
+                        else
+                        {
+                            Console.Error.WriteLine("UList.Add returned null: " + name);
+                        }
+                    }
+                    continue;
+                }
+                if (line.StartsWith("@move "))
+                {
+                    var name = line.Substring(6).Trim();
+                    output.Append("=== move " + name + " ===\n");
+                    if (!units.TryGetValue(name, out var u))
+                    {
+                        output.Append("<ERR:nounit>\n");
+                        continue;
+                    }
+                    // 2× scale の移動力 (AreaInSpeed 内部と同じ uspeed)。
+                    var uspeed = 2 * u.Speed;
+                    Console.Error.WriteLine(
+                        "move " + name + ": speed=" + u.Speed + " area=" + u.Area
+                        + " start=(" + (u.x - 1) + "," + (u.y - 1) + ")");
+                    src.Map.AreaInSpeed(u);
+                    // 到達可能 = TotalMoveCost <= uspeed。共通正規化 `<x> <y> <cost2x>`、
+                    // 座標は 0-indexed、(x,y) 昇順で出力する。
+                    var rows = new List<(int X, int Y, int C)>();
+                    for (var x = 1; x <= src.Map.MapWidth; x++)
+                    {
+                        for (var y = 1; y <= src.Map.MapHeight; y++)
+                        {
+                            var c = src.Map.TotalMoveCost[x, y];
+                            if (c <= uspeed)
+                            {
+                                rows.Add((x - 1, y - 1, c));
+                            }
+                        }
+                    }
+                    rows.Sort((a, b) => a.X != b.X ? a.X.CompareTo(b.X) : a.Y.CompareTo(b.Y));
+                    foreach (var (x, y, c) in rows)
+                    {
+                        output.Append(x + " " + y + " " + c + "\n");
+                    }
+                    continue;
+                }
+                // それ以外は無視。
+            }
+            Console.Error.WriteLine("placed=" + units.Count);
+            Console.Out.Write(output.ToString());
             return 0;
         }
 

@@ -181,6 +181,28 @@ paste -d'~' /tmp/p.txt /tmp/cs.txt /tmp/rs.txt | awk -F'~' '$2!=$3{print}'
   C# のリスト初期化は組込みダミー (`AddDummyData`: パイロット不在 / ユニット無し) を 1 件ずつ
   足すため、件数は C#=ファイル件数+1 (PDList/UDList とも) になる。
 
+## 移動範囲モード (moverange) — Dijkstra 移動範囲の差分
+
+ユニットを小マップに配置し、**移動可能セルと到達コスト**を両エンジンで突合する。C# は
+`Map.AreaInSpeed(u)` が `TotalMoveCost[x,y]` (1始まり・**2倍スケール**・到達コスト) を埋める、
+Rust は `movement::compute_range_with` (`cell→残MP`)。両者を「2倍スケールの到達コスト」へ正規化して
+比較する (Rust=`(speed-残MP)*2` / C#=`TotalMoveCost` をそのまま、座標は 0 始まりへ)。
+
+C# モード `moverange <dir>` ＋ Rust bin `oracle_move`。指令: `@map <w> <h>` / `@cell <x> <y> <id>` /
+`@unit <name> <rank> <party> <pilot> <level> <x> <y>` / `@move <name>`。コーパスは
+[`move_flat.txt`](move_flat.txt)(平地で正規化検証＝完全一致)・[`move_terrain.txt`](move_terrain.txt)(地形・移動タイプ)。
+
+```sh
+DIR="$PWD/crates/src-web/tests/fixtures/スパロボ戦記/data/スパロボ戦記"
+$NIX develop --command bash -c "cargo run -q -p verify-archive --bin oracle_move -- '$DIR' < tools/oracle-diff/move_terrain.txt > /tmp/rs.txt"
+$NIX develop .#dotnet --command bash -c "dotnet run --project tools/oracle-diff/oracle-diff.csproj -c Release moverange '$DIR' < tools/oracle-diff/move_terrain.txt > /tmp/cs.txt"
+diff <(sort /tmp/cs.txt) <(sort /tmp/rs.txt)
+```
+
+> **注**: 地上ユニットの森林/山 (move_cost 1.5/2.5) の差は **整数移動の設計上の既知乖離**
+> (Rust は ceil・C# は 2倍スケールで半コスト保持。`CLAUDE.md`「移動範囲計算は整数に統一」)。
+> 飛行/水中/宇宙移動の**特殊コストのスケール移植バグ**は別途是正対象 (下記)。
+
 ## 拡張
 
 同じ machinery を**ゲーム状態**の diff へ拡張できる: 実シナリオを両エンジンで駆動し、
