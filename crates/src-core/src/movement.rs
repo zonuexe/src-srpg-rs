@@ -171,6 +171,13 @@ pub fn normalize_terrain_class(class: &str) -> &str {
 /// 通行不能コスト (9999)。`terrain_file.rs` の "-" move_cost と同じ値。
 const BLOCKED: i32 = 9999;
 
+/// 飛行/水上/水中/宇宙移動が地形を「乗り越えて」通過するときの一律コスト (1 game MP)。
+/// 原典 C# `FillMoveCost` は内部 2 倍スケールで `move_cost = 2`（= 1 game MP）とする。
+/// 本実装は game スケールの整数で動くため 1。旧実装は C# のリテラル 2 をそのまま game スケールへ
+/// 移植して 2 game MP としていた（スケール取り違えの pervasive バグ＝飛行/水中等が地形上で
+/// 射程半減していた。差分オラクル `moverange` で発見、`戦闘システム詳細`/`Map.cs` 2倍スケールで裏取り）。
+const TRAVERSE: i32 = 1;
+
 // --- 領域別コスト計算 ---
 
 fn cost_air(tc: &str, base: i32, is_adaptable_in_space: bool) -> i32 {
@@ -185,8 +192,8 @@ fn cost_air(tc: &str, base: i32, is_adaptable_in_space: bool) -> i32 {
                 BLOCKED
             }
         }
-        // その他地形 (陸/水/深水/月面 等) は飛行して通過: コスト min(base, 2)
-        _ => base.min(2),
+        // その他地形 (陸/水/深水/月面 等) は飛行して通過: 一律 1 game MP (C# `min(MoveCost,2)`=2倍スケールの2)。
+        _ => base.min(TRAVERSE),
     }
 }
 
@@ -211,7 +218,7 @@ fn cost_ground(
         }
         "水" => {
             if is_trans_in_water || is_trans_on_water {
-                2
+                TRAVERSE
             } else if is_adaptable_in_water {
                 base
             } else {
@@ -220,7 +227,7 @@ fn cost_ground(
         }
         "深水" => {
             if is_trans_in_water || is_trans_on_water {
-                2
+                TRAVERSE
             } else if is_swimable {
                 base
             } else {
@@ -248,7 +255,7 @@ fn cost_surface(tc: &str, base: i32, is_trans_on_ground: bool, is_adaptable_in_s
                 BLOCKED
             }
         }
-        "水" | "深水" => 2,
+        "水" | "深水" => TRAVERSE,
         "空" => BLOCKED,
         "宇宙" => {
             if is_adaptable_in_space {
@@ -279,14 +286,14 @@ fn cost_underwater(
         }
         "水" => {
             if is_trans_in_water {
-                2
+                TRAVERSE
             } else {
                 base
             }
         }
         "深水" => {
             if is_trans_in_water {
-                2
+                TRAVERSE
             } else if is_swimable {
                 base
             } else {
@@ -316,7 +323,7 @@ fn cost_space(
         "宇宙" => base,
         "陸" | "屋内" => {
             if is_trans_in_sky {
-                2
+                TRAVERSE
             } else if is_trans_on_ground {
                 base
             } else {
@@ -325,7 +332,7 @@ fn cost_space(
         }
         "月面" => {
             if is_trans_in_moon_sky {
-                2
+                TRAVERSE
             } else if is_trans_on_ground {
                 base
             } else {
@@ -739,8 +746,8 @@ mod tests {
             vec![],
             vec![],
         );
-        assert_eq!(cost_fn(0), 1); // 陸クラス → min(1, 2) = 1
-        assert_eq!(cost_fn(1), 2); // 水クラス → min(3, 2) = 2
+        assert_eq!(cost_fn(0), 1); // 陸クラス → 飛行で通過 TRAVERSE = 1
+        assert_eq!(cost_fn(1), 1); // 水クラス → 飛行で通過 TRAVERSE = 1
     }
 
     /// 空中移動ユニットは "空" クラス地形を通常コストで移動できる。
@@ -800,10 +807,10 @@ mod tests {
             vec!["空中移動".to_string()], // feature で飛行
             vec![],
         );
-        // 陸クラス → min(1, 2) = 1
+        // 陸クラス → 飛行で通過 TRAVERSE = 1
         assert_eq!(cost_fn(0), 1);
-        // 水クラス → 飛行 → min(3, 2) = 2 (侵入可)
-        assert_eq!(cost_fn(1), 2);
+        // 水クラス → 飛行で通過 TRAVERSE = 1 (侵入可)
+        assert_eq!(cost_fn(1), 1);
     }
 
     /// 水中移動ユニット (transportation "水") は "水" クラス地形に侵入できる。
@@ -820,8 +827,8 @@ mod tests {
         );
         // 陸は侵入不可 (is_trans_on_ground = false)
         assert_eq!(cost_fn(0), BLOCKED);
-        // 水は侵入可 (is_trans_in_water = true → cost 2)
-        assert_eq!(cost_fn(1), 2);
+        // 水は侵入可 (is_trans_in_water = true → TRAVERSE = 1)
+        assert_eq!(cost_fn(1), 1);
     }
 
     /// current_area="空中" が設定されているユニットは地上移動ルールではなく空中ルールを使う。
@@ -836,8 +843,8 @@ mod tests {
             vec![],
             vec![],
         );
-        // 水クラス → 空中飛行 → min(3, 2) = 2
-        assert_eq!(cost_fn(1), 2);
+        // 水クラス → 空中飛行で通過 TRAVERSE = 1
+        assert_eq!(cost_fn(1), 1);
     }
 
     /// 組み込みデフォルト地形 (terrain.rs) との統合: id=4 "海" は "水" クラスとして扱われ
@@ -858,7 +865,7 @@ mod tests {
         assert_eq!(cost_fn(4), BLOCKED);
     }
 
-    /// 組み込み地形 id=4 "海" を空中ユニットは飛行で通過できる (min(99,2)=2)。
+    /// 組み込み地形 id=4 "海" を空中ユニットは飛行で通過できる (TRAVERSE = 1)。
     #[test]
     fn builtin_sea_terrain_flyable_for_air_unit() {
         let cost_fn = make_unit_cost_fn(
@@ -869,7 +876,7 @@ mod tests {
             vec![],
             vec![],
         );
-        assert_eq!(cost_fn(4), 2);
+        assert_eq!(cost_fn(4), 1);
     }
 
     // ============================================================
