@@ -3210,9 +3210,16 @@ impl App {
         let def_combat = self.database.effective_combat_data(def_idx);
         let map = self.database.map.as_ref();
         let def_terrain_id = map.map(|m| m.cell(def_inst.x, def_inst.y).terrain_id);
-        let (Some((def_pilot, def_unit)), Some(terrain_id)) = (def_combat, def_terrain_id) else {
+        let (Some((def_pilot, mut def_unit)), Some(terrain_id)) = (def_combat, def_terrain_id)
+        else {
             return false;
         };
+        // 弱点 (防御特性): 武器属性が防御側の弱点に一致するとき装甲を半減する
+        // (VB6 `Unit.cls:6949` `If .Weakness(wclass) Then arm = arm \ 2`＝被ダメージ増)。
+        // 予測前に `def_unit.armor` を ÷2 することで防御力が半減し被ダメージが増える。
+        if self.weapon_hits_weakness(def_idx, &weapon.class) {
+            def_unit.armor /= 2;
+        }
         let def_hit_mod = self.database.terrain_hit_mod(terrain_id);
         let def_damage_mod = self.database.terrain_damage_mod(terrain_id);
         // Ｃ 属性武器を使った場合、charged フラグを消費 (次回攻撃前に再 Charge 必要)。
@@ -5728,63 +5735,97 @@ impl App {
         applied
     }
 
+    /// 武器 class が防御特性の属性リスト `attr_list` に該当するか
+    /// (VB6 `Unit.cls::Weakness/Resist/Absorb` 準拠の字単位部分文字列照合)。
+    /// `attr_list` の各属性 (空白は無視) が weapon_class に**部分文字列**として含まれれば該当する
+    /// (例: 弱点 "火" は複合 class "格実火" に該当)。`全`=常に該当 / `物`=武器に 魔・精 が無ければ該当。
+    /// 旧実装は `split_whitespace` の完全トークン一致で、無空白複合 class ("格実火" 等) が
+    /// 弱点 "火" に一致せず防御特性が事実上機能していなかった (VB6 は `InStrNotNest`=部分一致)。
+    fn defense_attr_matches(weapon_class: &str, attr_list: &str) -> bool {
+        for c in attr_list.chars() {
+            if c.is_whitespace() {
+                continue;
+            }
+            match c {
+                '全' => return true,
+                '物' => {
+                    if !weapon_class.contains('魔') && !weapon_class.contains('精') {
+                        return true;
+                    }
+                }
+                _ => {
+                    if weapon_class.contains(c) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// 武器属性が防御側の `弱点` (静的特殊能力 + 一時付加 condition `弱点:<属性>`) に一致するか。
+    /// 一致時は VB6 `Unit.cls:6949` 準拠で被ダメージ計算の装甲を半減させる
+    /// (`attack_resolve_and_run` が予測前に `def_unit.armor` を ÷2 する)。
+    fn weapon_hits_weakness(&self, def_idx: usize, weapon_class: &str) -> bool {
+        let inst = &self.database.unit_instances[def_idx];
+        let weak = crate::feature::feature_value(&inst.active_features, "弱点").unwrap_or("");
+        if Self::defense_attr_matches(weapon_class, weak) {
+            return true;
+        }
+        inst.conditions
+            .iter()
+            .filter_map(|c| c.name.strip_prefix("弱点:"))
+            .any(|el| weapon_class.contains(el))
+    }
+
     /// 特殊効果の発動確率を、対象の `耐性` / `弱点` 特殊能力で調整する
-    /// (SRC `Unit.cs::CriticalProbability` 準拠: 弱点属性に対しては発動確率 +10、
-    /// 耐性属性に対しては半減。与ダメージ自体は「変化なし」)。武器 class のいずれかの
-    /// 属性が対象の弱点に一致すれば +10、耐性に一致すれば ÷2。
+    /// (VB6 `Unit.cls::CriticalProbability`: 弱点属性に対しては発動確率 +10、耐性属性には半減)。
     fn adjust_proc_for_resistance(&self, def_idx: usize, weapon_class: &str, prob: i32) -> i32 {
         let inst = &self.database.unit_instances[def_idx];
         let weak = crate::feature::feature_value(&inst.active_features, "弱点").unwrap_or("");
         let resist = crate::feature::feature_value(&inst.active_features, "耐性").unwrap_or("");
         // 弱/効 属性で付加された一時的弱点 (condition `弱点:<属性>`)。
-        let added_weak: Vec<&str> = inst
+        let added_weak_match = inst
             .conditions
             .iter()
             .filter_map(|c| c.name.strip_prefix("弱点:"))
-            .collect();
-        if weak.is_empty() && resist.is_empty() && added_weak.is_empty() {
+            .any(|el| weapon_class.contains(el));
+        if weak.is_empty() && resist.is_empty() && !added_weak_match {
             return prob;
         }
         let mut p = prob;
-        for tok in weapon_class.split_whitespace() {
-            if weak.split_whitespace().any(|w| w == tok) || added_weak.contains(&tok) {
-                p += 10;
-                break;
-            }
-            if resist.split_whitespace().any(|r| r == tok) {
-                p /= 2;
-                break;
-            }
+        if Self::defense_attr_matches(weapon_class, weak) || added_weak_match {
+            p += 10;
+        } else if Self::defense_attr_matches(weapon_class, resist) {
+            p /= 2;
         }
         p.clamp(1, 100)
     }
 
-    /// 防御特性 (`耐性` / `無効化` / `吸収`) を与ダメージへ適用する (SRC `Unit.cs::Damage`)。
-    /// 武器属性が対象の防御特性属性に一致するとき: 無効化→0、耐性→÷2、吸収→`-damage/2`(回復)。
-    /// 弱点 / 有効 が一致する場合はいずれも適用しない (与ダメージは変化なし、クリ率のみ)。
+    /// 防御特性 (`吸収` / `無効化` / `耐性`) を与ダメージへ適用する (VB6 `Unit.cls::Damage`)。
+    /// 武器属性が一致するとき: 吸収→`-damage/2`(回復)、無効化→0、耐性→÷2。優先順は
+    /// spec `防御特性に関する特殊能力.md`「弱点 > 有効 > 吸収 > 無効化 > 耐性」。
+    /// `弱点` の装甲半減は `weapon_hits_weakness` で予測前に適用済みのためここでは無処理
+    /// (`有効` は防御特性を打ち消すため、`弱点`/`有効` 一致時は吸収/無効化/耐性を適用しない)。
     /// 対象が該当特性を持たなければ `damage` をそのまま返す。
+    /// 注: 吸収は spec では「装甲無視ダメージ÷2」だが、本実装は最終ダメージ基準の近似 (要精緻化)。
     fn defense_attribute_damage(&self, def_idx: usize, weapon_class: &str, damage: i64) -> i64 {
         let inst = &self.database.unit_instances[def_idx];
-        let feat = |name: &str| -> &str {
-            crate::feature::feature_value(&inst.active_features, name).unwrap_or("")
+        let m = |name: &str| -> bool {
+            let list = crate::feature::feature_value(&inst.active_features, name).unwrap_or("");
+            Self::defense_attr_matches(weapon_class, list)
         };
-        let matches = |list: &str| -> bool {
-            !list.is_empty()
-                && weapon_class
-                    .split_whitespace()
-                    .any(|t| list.split_whitespace().any(|e| e == t))
-        };
-        // 弱点 / 有効 が一致するときは防御特性 (耐性/無効化/吸収) を適用しない。
-        if matches(feat("弱点")) || matches(feat("有効")) {
+        // 弱点 / 有効 が一致するときは後段の防御特性 (吸収/無効化/耐性) を適用しない。
+        if m("弱点") || m("有効") {
             return damage;
         }
-        if matches(feat("無効化")) {
-            return 0;
-        }
-        if damage > 0 && matches(feat("吸収")) {
+        if damage > 0 && m("吸収") {
             return -(damage / 2);
         }
-        if matches(feat("耐性")) {
+        if m("無効化") {
+            return 0;
+        }
+        if m("耐性") {
             return damage / 2;
         }
         damage
@@ -17378,6 +17419,60 @@ End
             ],
         );
         assert_eq!(app.defense_attribute_damage(idx, "火 実", 100), 100);
+    }
+
+    /// 防御特性の属性照合は字単位の**部分一致** (VB6 `InStrNotNest`)。無空白複合 class
+    /// ("格実火") も弱点/耐性 "火" に一致する (旧 `split_whitespace` 完全一致では非一致で
+    /// 防御特性が事実上機能していなかった)。併せて弱点検出 (装甲半減トリガ) を確認。
+    #[test]
+    fn defense_attr_substring_matching_and_weakness_detection() {
+        use crate::feature::ActiveFeature;
+        // 純関数 defense_attr_matches の字単位照合。
+        assert!(
+            App::defense_attr_matches("格実火", "火"),
+            "複合 class が弱点 火 に部分一致"
+        );
+        assert!(!App::defense_attr_matches("格実水", "火"));
+        assert!(
+            App::defense_attr_matches("格実火", "火地獣"),
+            "弱点リストのいずれかに一致"
+        );
+        assert!(App::defense_attr_matches("射", "全"), "全=常に一致");
+        assert!(
+            App::defense_attr_matches("格実火", "物"),
+            "物=魔/精 でなければ一致"
+        );
+        assert!(
+            !App::defense_attr_matches("魔術火", "物"),
+            "物 は 魔 武器に不一致"
+        );
+        assert!(!App::defense_attr_matches("射", ""), "空リストは不一致");
+
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Tank", 2, 6);
+        let idx = app.database().idx_by_uid(&first_player_uid(&app)).unwrap();
+        // 耐性=火 → 無空白複合武器 "格実火" のダメージ半減 (旧実装は非一致で素通りだった)。
+        app.database_mut().unit_instances[idx].active_features =
+            vec![ActiveFeature::new("耐性", "火")];
+        assert_eq!(app.defense_attribute_damage(idx, "格実火", 1000), 500);
+        // 弱点=火 検出 (装甲半減のトリガ)。
+        app.database_mut().unit_instances[idx].active_features =
+            vec![ActiveFeature::new("弱点", "火")];
+        assert!(
+            app.weapon_hits_weakness(idx, "格実火"),
+            "弱点 火 が複合 火武器に該当"
+        );
+        assert!(!app.weapon_hits_weakness(idx, "格実水"));
+        // 一時付加 condition `弱点:火` も検出。
+        app.database_mut().unit_instances[idx].active_features = vec![];
+        app.database_mut().unit_instances[idx]
+            .conditions
+            .push(crate::condition::Condition::new("弱点:火", 3));
+        assert!(
+            app.weapon_hits_weakness(idx, "格実火"),
+            "一時付加 弱点:火 も該当"
+        );
     }
 
     #[test]
