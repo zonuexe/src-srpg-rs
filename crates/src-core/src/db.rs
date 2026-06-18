@@ -819,11 +819,35 @@ impl GameDatabase {
         unit.mobility = self.effective_mobility(inst);
         unit.hp = self.effective_max_hp(inst);
         unit.en = self.effective_max_en(inst);
-        // 機体改造: 武器攻撃力を 1 段階あたり +10% (HP/EN/装甲/運動性は effective_* 側)。
+        // 機体改造 (Rank) による武器攻撃力の加算。SRC.NET `Unit.cs` UpdateWeaponPower 準拠:
+        //   - 攻撃力 0 の武器は据え置き (`Unit.cs:4094`「もともと攻撃力が0の武器は0に固定」)。
+        //   - 固 (固定ダメージ) 武器は加算なし (`Unit.cs:4407`)。
+        //   - Ｒ / 改 属性: `<attr>L<n>` のレベル指定があれば +10×n×Rank、無ければ +50×Rank
+        //     (`Unit.cs:4422/4466/4513/4518`)。
+        //   - それ以外の通常武器: +100×Rank (`Unit.cs:4551`)。
+        // 旧実装は `+base×10%×Rank` (乗算) で、C# の **加算** 方式と乖離していた
+        // (改造ユニットの攻撃ダメージが base>1000 の武器で過大、固定ダメージ武器も誤増加)。
+        // V-UP アイテム (num) は未モデルのため Rank のみ。
         if inst.upgrade_level > 0 {
             let lv = i64::from(inst.upgrade_level);
             for w in &mut unit.weapons {
-                w.power += w.power * lv / 10;
+                if w.power == 0 || w.class.contains('固') {
+                    continue;
+                }
+                let boost = if w.class.contains('Ｒ') {
+                    match weapon_class_level(&w.class, 'Ｒ') {
+                        Some(n) => (10.0 * n * lv as f64) as i64,
+                        None => 50 * lv,
+                    }
+                } else if w.class.contains('改') {
+                    match weapon_class_level(&w.class, '改') {
+                        Some(n) => (10.0 * n * lv as f64) as i64,
+                        None => 50 * lv,
+                    }
+                } else {
+                    100 * lv
+                };
+                w.power += boost;
             }
         }
         // ボスランク: 全武器の攻撃力に加算 (BossRankコマンド.md)。
@@ -877,6 +901,19 @@ pub fn boss_mobility_boost(rank: i32) -> i32 {
         _ => 0,
     }
 }
+/// 武器 class 文字列から `<attr>L<number>` 形式のレベル指定を読む
+/// (SRC.NET `Unit.WeaponLevel` 準拠)。例: `class="ＲL3"`, `attr='Ｒ'` → `Some(3.0)`。
+/// `<attr>L` が無ければ `None` (= レベル未指定)。数値部は `0-9 . -` を読む。
+fn weapon_class_level(class: &str, attr: char) -> Option<f64> {
+    let needle = format!("{attr}L");
+    let start = class.find(&needle)? + needle.len();
+    let num: String = class[start..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
+        .collect();
+    num.parse::<f64>().ok()
+}
+
 /// ボスランクによる攻撃力加算 (全武器の power に加算)。
 pub fn boss_attack_boost(rank: i32) -> i64 {
     match rank {
