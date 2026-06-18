@@ -359,6 +359,16 @@ pub struct App {
     /// 0 始まり位置。`◀ / ▶` で更新する。transient。
     #[serde(skip)]
     status_detail_index: usize,
+    /// 分離 (合体形態) の着地点選択キュー: まだ配置していない構成ユニットの uid 列。
+    /// `LandingSelect` 確定ごとに先頭から取り出して次の選択へ進む。transient。
+    #[serde(skip)]
+    landing_queue: Vec<String>,
+    /// 着地点選択キューの起点 (合体元 host の位置)。候補算出に使う。transient。
+    #[serde(skip)]
+    landing_source: Option<(u32, u32)>,
+    /// 着地点選択キュー完了後にメニューを再表示する対象 uid (分離の host)。transient。
+    #[serde(skip)]
+    landing_menu_uid: Option<String>,
     /// 敗北 (`game_over`) でシナリオ / `GameOver.eve` の出口イベントが無く、組込みの
     /// コンティニュー/タイトル選択を待っている状態。soft-lock 防止のフォールバック。
     /// この間 Enter/クリック = コンティニュー、右クリック/Esc = タイトルへ。
@@ -618,6 +628,9 @@ impl App {
             intermission_commands: Vec::new(),
             intermission_cursor: 0,
             status_detail_index: 0,
+            landing_queue: Vec::new(),
+            landing_source: None,
+            landing_menu_uid: None,
             intermission_mode: IntermissionMode::Menu,
             ride_change_source: None,
             scene_return_to: None,
@@ -2942,11 +2955,24 @@ impl App {
                 self.action_mode = ActionMode::Browse;
                 true
             }
-            ActionMode::LandingSelect { carrier, .. } => {
-                // 着地点選択キャンセル: 配置せず stored のまま。母艦経路なら母艦メニューへ戻す。
+            ActionMode::LandingSelect { uid, carrier, .. } => {
                 self.action_mode = ActionMode::Browse;
                 if let Some(carrier) = carrier {
+                    // 発進: 配置せず格納のまま、母艦メニューへ戻す。
                     self.reopen_unit_menu_for(&carrier);
+                } else {
+                    // 分離: 分離自体は成立済なので、残り全機を隣接自動配置で確定する。
+                    let source = self.landing_source.unwrap_or((0, 0));
+                    if let Some((tx, ty)) = self.find_empty_adjacent_tile(source) {
+                        self.place_separated_unit_at(&uid, tx, ty);
+                    }
+                    let remaining = std::mem::take(&mut self.landing_queue);
+                    for ru in remaining {
+                        if let Some((tx, ty)) = self.find_empty_adjacent_tile(source) {
+                            self.place_separated_unit_at(&ru, tx, ty);
+                        }
+                    }
+                    self.finish_landing_queue();
                 }
                 true
             }
@@ -7615,10 +7641,10 @@ impl App {
             self.action_mode = crate::command_menu::ActionMode::Browse;
             self.reopen_unit_menu_for(&carrier);
         } else {
-            // 分離経路 (carrier なし): off_map の構成ユニットを盤上へ戻す。
-            self.database.move_unit(&uid, tx, ty);
-            self.database.set_off_map(&uid, false);
-            self.action_mode = crate::command_menu::ActionMode::Browse;
+            // 分離経路 (carrier なし): 構成ユニットを盤上へ配置し、キューの次へ進む
+            // (残りが無ければ Browse へ戻し host メニューを再表示)。
+            self.place_separated_unit_at(&uid, tx, ty);
+            self.advance_landing_queue();
         }
         true
     }
@@ -7666,6 +7692,76 @@ impl App {
             .into_keys()
             .filter(|&(x, y)| self.database.uid_at(x, y).is_none())
             .collect()
+    }
+
+    /// 分離の構成ユニット `uid` を `(tx, ty)` へ盤上配置する (off_map 解除 + 状態リセット)。
+    fn place_separated_unit_at(&mut self, uid: &str, tx: u32, ty: u32) {
+        self.database.move_unit(uid, tx, ty);
+        self.database.set_off_map(uid, false);
+        if let Some(u) = self.database.unit_by_uid_mut(uid) {
+            u.life_state = String::new();
+            u.has_acted = false;
+            u.has_moved = false;
+        }
+    }
+
+    /// 分離の構成ユニット列 `units` を `source` (host 位置) 起点で順次着地選択させる。
+    /// 最初に着地候補のあるユニットで `LandingSelect` へ移行し残りを `landing_queue` へ積む。
+    /// 候補の無いユニットは隣接自動配置でスキップ。全機 auto-place / 候補皆無なら `false`
+    /// (対話に入らない＝呼出側が従来どおりメニュー再表示する)。
+    fn begin_landing_queue(&mut self, units: Vec<String>, source: (u32, u32)) -> bool {
+        self.landing_source = Some(source);
+        let mut remaining: std::collections::VecDeque<String> = units.into();
+        while let Some(uid) = remaining.pop_front() {
+            let candidates = self.landing_candidates(&uid, source);
+            if candidates.is_empty() {
+                if let Some((tx, ty)) = self.find_empty_adjacent_tile(source) {
+                    self.place_separated_unit_at(&uid, tx, ty);
+                }
+                continue;
+            }
+            self.landing_queue = remaining.into_iter().collect();
+            self.action_mode = crate::command_menu::ActionMode::LandingSelect {
+                uid,
+                candidates,
+                carrier: None,
+            };
+            return true;
+        }
+        self.landing_source = None;
+        false
+    }
+
+    /// 分離キューの次のユニットへ進む。候補があれば `LandingSelect`、無ければ隣接自動で
+    /// スキップ。キューが尽きたら `finish_landing_queue` で Browse へ戻し host メニューを再表示。
+    fn advance_landing_queue(&mut self) {
+        let source = self.landing_source.unwrap_or((0, 0));
+        while !self.landing_queue.is_empty() {
+            let uid = self.landing_queue.remove(0);
+            let candidates = self.landing_candidates(&uid, source);
+            if candidates.is_empty() {
+                if let Some((tx, ty)) = self.find_empty_adjacent_tile(source) {
+                    self.place_separated_unit_at(&uid, tx, ty);
+                }
+                continue;
+            }
+            self.action_mode = crate::command_menu::ActionMode::LandingSelect {
+                uid,
+                candidates,
+                carrier: None,
+            };
+            return;
+        }
+        self.finish_landing_queue();
+    }
+
+    /// 分離キュー完了: Browse へ戻し、host のユニットメニューを再表示する。
+    fn finish_landing_queue(&mut self) {
+        self.action_mode = crate::command_menu::ActionMode::Browse;
+        self.landing_source = None;
+        if let Some(host) = self.landing_menu_uid.take() {
+            self.reopen_unit_menu_for(&host);
+        }
     }
 
     /// `pos` の 8 近傍からユニットの居ない盤内マスを 1 つ返す。発進の着地点用。
@@ -7862,13 +7958,13 @@ impl App {
             })
             .unwrap_or_default();
 
-        if !components.is_empty() {
-            self.separate_preserved_components(host_uid, &components);
+        let staged = if !components.is_empty() {
+            self.separate_preserved_components(host_uid, &components)
         } else if !split_forms.is_empty() {
-            self.separate_into_forms(host_uid, &split_forms);
+            self.separate_into_forms(host_uid, &split_forms)
         } else {
             return; // 分離できない
-        }
+        };
 
         self.push_message("分離！".to_string());
         if let Some(i) = self.database.idx_by_uid(host_uid) {
@@ -7884,29 +7980,31 @@ impl App {
                 party,
             );
         }
+        // 構成ユニットの着地点を移動範囲から対話選択させる (host 位置を起点)。
+        // 候補があればキュー化し、完了後に host メニューを再表示。候補が無い (狭所/map 無し)
+        // ときは begin_landing_queue 内で隣接自動配置し false を返すので従来どおりメニュー再表示。
+        if let Some(hpos) = self.database.unit_by_uid(host_uid).map(|u| (u.x, u.y)) {
+            self.landing_menu_uid = Some(host_uid.to_string());
+            if self.begin_landing_queue(staged, hpos) {
+                return; // 対話配置中 (完了で finish_landing_queue がメニュー再表示)。
+            }
+        }
+        self.landing_menu_uid = None;
         // 分離は行動を消費しないのでメニューを再表示。
         self.reopen_unit_menu_for(host_uid);
     }
 
-    /// 実行時合体の分離: 温存していた構成ユニットを host の隣接空きマスへ復帰させ、
-    /// host を合体前形態・合体前の搭乗構成へ戻す。
-    fn separate_preserved_components(&mut self, host_uid: &str, components: &[String]) {
-        let Some(hpos) = self.database.unit_by_uid(host_uid).map(|u| (u.x, u.y)) else {
-            return;
-        };
-        for c in components {
-            // 既に他の構成ユニットを置いた分も考慮し、毎回空きマスを取り直す。
-            if let Some((tx, ty)) = self.find_empty_adjacent_tile(hpos) {
-                self.database.move_unit(c, tx, ty);
-                self.database.set_off_map(c, false);
-                if let Some(u) = self.database.unit_by_uid_mut(c) {
-                    u.life_state = String::new();
-                    u.has_acted = false;
-                    u.has_moved = false;
-                }
-            }
-            // 空きマスが無ければその構成ユニットは復帰できない (off_map のまま、稀)。
-        }
+    /// 実行時合体の分離: 温存していた構成ユニット (off_map) の着地点を呼出側が選択させる。
+    /// host を合体前形態・合体前の搭乗構成へ戻し、構成 uid 列を返す (placement は
+    /// `apply_separate` が移動範囲から対話選択させる。候補無し時は隣接自動)。
+    fn separate_preserved_components(
+        &mut self,
+        host_uid: &str,
+        components: &[String],
+    ) -> Vec<String> {
+        // 構成ユニットは合体中ずっと off_map で温存されているため、ここでは盤上配置せず
+        // uid 列だけ返す (着地は landing queue が担う)。
+        let staged: Vec<String> = components.to_vec();
         // host を合体前形態へ戻す。
         let pre = self
             .database
@@ -7927,6 +8025,7 @@ impl App {
             u.pre_combine_form = None;
             u.pre_combine_pilots.clear();
         }
+        staged
     }
 
     /// 最初から合体形態で配置されたユニットの分離: `分離` 特殊能力
@@ -7935,36 +8034,37 @@ impl App {
     /// パイロットは形態の順に乗り移り、サポートパイロット (形態数を超える分) は全て
     /// 1 号機 (形態 1) に乗せられる。MVP: 形態順の主パイロット割当のみ、複数形態への
     /// 主/副の細かい配分は形態 1 へ集約する単純化。
-    fn separate_into_forms(&mut self, host_uid: &str, forms: &[String]) {
+    fn separate_into_forms(&mut self, host_uid: &str, forms: &[String]) -> Vec<String> {
         let Some((hpos, party, pilots)) = self
             .database
             .unit_by_uid(host_uid)
             .map(|u| ((u.x, u.y), u.party, u.pilot_ids.clone()))
         else {
-            return;
+            return Vec::new();
         };
-        // 形態 1 = host。形態 2 以降を隣接空きマスへ生成。
+        // 形態 1 = host。形態 2 以降を host 位置に off_map で生成し (staging)、着地点は
+        // 呼出側 (`apply_separate`) が移動範囲から対話選択させる (候補無し時は隣接自動)。
         // 形態 i (0 基点) の主パイロット = pilots[i] (あれば)。形態数を超えるパイロットは
         // サポートとして形態 1 (host) に集約する。
+        let mut staged = Vec::new();
         for (i, form) in forms.iter().enumerate().skip(1) {
             // 生成先の形態が DB に無ければスキップ。
             if self.database.unit_by_name(form).is_none() {
                 continue;
             }
-            let Some((tx, ty)) = self.find_empty_adjacent_tile(hpos) else {
-                continue; // 空きマスが無ければ生成できない
-            };
             let pilot_id = pilots.get(i).cloned();
             let pilot_name = pilot_id
                 .as_deref()
                 .map(|id| self.pilot_name_for_id(id))
                 .unwrap_or_default();
-            let mut inst = crate::UnitInstance::new(form, pilot_name, party, tx, ty);
+            let mut inst = crate::UnitInstance::new(form, pilot_name, party, hpos.0, hpos.1);
             if let Some(pid) = pilot_id {
                 inst.pilot_ids = vec![pid];
             }
+            inst.off_map = true; // staging (pos_index に載せない)
             let uid = self.database.register_unit(inst);
             self.set_unit_form(&uid, form);
+            staged.push(uid);
         }
         // host を形態 1 へ変身させ、形態 1 のパイロット (主 pilots[0] + サポート余り) を残す。
         self.set_unit_form(host_uid, &forms[0]);
@@ -7980,6 +8080,7 @@ impl App {
                 u.pilot_ids = host_pilots;
             }
         }
+        staged
     }
 
     /// パイロット ID (PilotInstance.id または pilot_data_name) から表示用のパイロット
@@ -12378,19 +12479,76 @@ mod tests {
         assert!(app.database().unit_by_uid(&partner).unwrap().off_map);
 
         app.apply_separate(&host);
+        // host 形態/構成リストは分離時点で確定 (着地点選択とは独立)。
         let h = app.database().unit_by_uid(&host).unwrap();
         assert_eq!(h.unit_data_name, "GetterEagle", "host が合体前形態へ戻る");
         assert!(h.combined_from.is_empty(), "構成リストがクリアされる");
         assert!(h.pre_combine_form.is_none());
 
+        // 構成ユニットは着地点選択 (LandingSelect) へ移行する (移動範囲から対話選択)。
+        let cand = match app.action_mode() {
+            crate::command_menu::ActionMode::LandingSelect {
+                uid, candidates, ..
+            } => {
+                assert_eq!(uid, partner, "構成ユニットの着地を選択");
+                assert!(!candidates.is_empty());
+                candidates[0]
+            }
+            other => panic!("着地点選択へ遷移すべき: {other:?}"),
+        };
+        assert!(
+            app.database().unit_by_uid(&partner).unwrap().off_map,
+            "選択中はまだ off_map"
+        );
+        assert!(app.confirm_landing(cand.0, cand.1), "候補マスで配置確定");
+
         let p = app.database().unit_by_uid(&partner).unwrap();
         assert!(!p.off_map, "構成ユニットが盤上へ復帰");
+        assert_eq!((p.x, p.y), cand, "選択した候補マスに配置される");
+    }
+
+    /// 分離 (3 体合体) の着地点選択キュー: 構成ユニットを 1 機ずつ順次配置し、最後に Browse へ。
+    #[test]
+    fn separate_landing_queue_places_components_sequentially() {
+        use crate::command_menu::ActionMode;
+        let mut app = App::new();
+        let (host, partner1) = setup_combine(&mut app);
+        let partner2 = extend_combine_to_triple(&mut app, &host, (4, 4));
+        app.apply_combine(&host);
+        assert!(app.database().unit_by_uid(&partner1).unwrap().off_map);
+        assert!(app.database().unit_by_uid(&partner2).unwrap().off_map);
+
+        app.apply_separate(&host);
+        // 1 機目の着地点選択。
+        let (uid1, cand1) = match app.action_mode() {
+            ActionMode::LandingSelect {
+                uid, candidates, ..
+            } => (uid, candidates[0]),
+            other => panic!("1 機目の着地点選択へ: {other:?}"),
+        };
+        assert!(app.confirm_landing(cand1.0, cand1.1));
+        // キューが進み 2 機目の着地点選択へ。
+        let (uid2, cand2) = match app.action_mode() {
+            ActionMode::LandingSelect {
+                uid, candidates, ..
+            } => {
+                assert_ne!(uid, uid1, "2 機目へ進む");
+                assert!(!candidates.contains(&cand1), "配置済みマスは候補から除外");
+                (uid, candidates[0])
+            }
+            other => panic!("2 機目の着地点選択へ: {other:?}"),
+        };
+        let _ = uid2;
+        assert!(app.confirm_landing(cand2.0, cand2.1));
+        // 全機配置完了 → Browse。
         assert!(
-            (p.x as i32 - 3).abs() <= 1 && (p.y as i32 - 3).abs() <= 1,
-            "host (3,3) 隣接に復帰: ({},{})",
-            p.x,
-            p.y
+            matches!(app.action_mode(), ActionMode::Browse),
+            "完了で Browse"
         );
+        let p1 = app.database().unit_by_uid(&partner1).unwrap();
+        let p2 = app.database().unit_by_uid(&partner2).unwrap();
+        assert!(!p1.off_map && !p2.off_map, "両構成ユニットが盤上へ");
+        assert_ne!((p1.x, p1.y), (p2.x, p2.y), "別マスに配置される");
     }
 
     /// 合体時のパイロット統合: 構成ユニットのパイロットが合体形態へ搭乗 (全員搭乗)、
