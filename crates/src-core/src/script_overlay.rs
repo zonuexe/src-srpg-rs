@@ -137,12 +137,29 @@ pub struct ScriptOverlay {
     /// フレームループが正しく各フレームを表示するための要。
     #[serde(default)]
     pub pending_clear: bool,
+    /// 現在の塗りスタイル（`FillStyle`）。`true`=塗りつぶし。SRC `Event.ObjFillStyle`。
+    /// `ClearPicture`(defer) を跨いで保持され、`clear()`(シーン遷移) で既定へ戻る。
+    #[serde(default)]
+    pub current_fill_solid: bool,
+    /// 現在の塗り色（`FillColor`）。SRC `Event.ObjFillColor`。
+    #[serde(default)]
+    pub current_fill_color: String,
+    /// 現在の線幅（`DrawWidth`）。0 は未設定（=既定 1px）。SRC `Event.ObjDrawWidth`。
+    #[serde(default)]
+    pub current_line_width: f64,
 }
 
 impl ScriptOverlay {
     pub fn clear(&mut self) {
         self.cmds.clear();
         self.pending_clear = false;
+        // シーン遷移等の本クリアでは描画ペン状態 (色/フォント/塗り/線幅) も既定へ戻す。
+        // (ClearPicture=defer_clear はこれらを保持＝SRC の ObjColor 等の永続性に対応)。
+        self.current_font = None;
+        self.current_color = String::new();
+        self.current_fill_solid = false;
+        self.current_fill_color = String::new();
+        self.current_line_width = 0.0;
     }
 
     /// `ClearPicture` 用の遅延クリア。cmds は消さず、次の描画 push / `present` で消す。
@@ -189,6 +206,16 @@ impl ScriptOverlay {
             }
             DrawCmd::SetColor { color } => {
                 self.current_color = color.clone();
+            }
+            // 塗り/線幅も永続ペン状態として保持 (ClearPicture を跨いで有効=SRC Obj* 準拠)。
+            DrawCmd::SetFillSolid(solid) => {
+                self.current_fill_solid = *solid;
+            }
+            DrawCmd::SetFillColor { color } => {
+                self.current_fill_color = color.clone();
+            }
+            DrawCmd::SetLineWidth(n) => {
+                self.current_line_width = *n;
             }
             // 描画カーソルを終端座標で更新する (SRC.NET picMain.CurrentX/Y 同等)
             DrawCmd::PSet { x, y } => {

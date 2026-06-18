@@ -15462,6 +15462,48 @@ Next
     }
 
     #[test]
+    fn pen_state_persists_across_clearpicture() {
+        // SRC の ObjColor/ObjFillStyle/ObjFillColor/ObjDrawWidth は ClearPicture を
+        // 跨いで保持される。戦闘アニメは Color/FillStyle をループ外で 1 度だけ設定し、
+        // 毎フレーム ClearPicture するため、保持されないと図形が既定色/無塗りになる。
+        let src = "\
+Color RGB(255,0,0)
+FillStyle 塗りつぶし
+FillColor RGB(0,0,255)
+DrawWidth 3
+PaintPicture a.bmp 0 0
+Refresh
+ClearPicture
+";
+        let stmts = event::parse(src).unwrap();
+        let mut app = App::new();
+        execute(&mut app, &stmts).unwrap();
+        let ov = app.script_overlay();
+        assert_eq!(
+            ov.current_color, "#ff0000",
+            "Color は ClearPicture 後も保持"
+        );
+        assert!(ov.current_fill_solid, "FillStyle 塗りつぶしは保持");
+        assert_eq!(ov.current_fill_color, "#0000ff", "FillColor は保持");
+        assert_eq!(ov.current_line_width, 3.0, "DrawWidth は保持");
+        // 次フレームの描画 push で cmds はクリアされるが、ペン状態は残る。
+        execute(&mut app, &event::parse("Circle 10 10 5\n").unwrap()).unwrap();
+        let ov = app.script_overlay();
+        assert_eq!(ov.current_color, "#ff0000", "新フレームでもペン状態は維持");
+        assert!(
+            ov.cmds
+                .iter()
+                .any(|c| matches!(c, crate::DrawCmd::Circle { .. })),
+            "新フレームの Circle が積まれる"
+        );
+        // シーン遷移相当の clear() はペン状態を既定へ戻す。
+        app.script_overlay_mut().clear();
+        let ov = app.script_overlay();
+        assert_eq!(ov.current_color, "", "clear() でペン色リセット");
+        assert!(!ov.current_fill_solid, "clear() で塗りリセット");
+    }
+
+    #[test]
     fn indexed_var_set_and_read() {
         let src = "\
 Set items[1] alpha

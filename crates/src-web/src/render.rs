@@ -395,13 +395,38 @@ fn draw_script_overlay(
     assets: &Assets,
 ) {
     use src_core::DrawCmd as D;
-    let mut font_str = format!("14px {JP_SANS}");
-    let mut text_color = "#ffffff".to_string();
-    let mut stroke_color = "#ffffff".to_string();
+    // ペン状態は overlay の永続フィールドから seed する。SRC の ObjColor/ObjFillStyle/
+    // ObjFillColor/ObjDrawWidth は ClearPicture を跨いで保持されるため、毎フレーム
+    // ClearPicture される戦闘アニメで cmds から SetColor 等が消えても色/塗りが残る
+    // (seed しないと既定の白/無塗りに戻ってしまう)。cmds 内の SetXxx は順次上書きする。
+    let (mut font_str, mut text_color) = match &overlay.current_font {
+        Some((family, size_pt, color)) => {
+            let family = if family.is_empty() {
+                JP_SANS.to_string()
+            } else {
+                format!("'{family}', {JP_SANS}")
+            };
+            (format!("{size_pt}px {family}"), color.clone())
+        }
+        None => (format!("14px {JP_SANS}"), "#ffffff".to_string()),
+    };
+    let mut stroke_color = if overlay.current_color.is_empty() {
+        "#ffffff".to_string()
+    } else {
+        overlay.current_color.clone()
+    };
     // 図形 (Circle/Oval/Polygon/Arc) の塗り状態。FillStyle / FillColor で更新。
-    let mut line_width = 1.0f64;
-    let mut fill_solid = false;
-    let mut fill_color = "#000000".to_string();
+    let mut line_width = if overlay.current_line_width > 0.0 {
+        overlay.current_line_width
+    } else {
+        1.0
+    };
+    let mut fill_solid = overlay.current_fill_solid;
+    let mut fill_color = if overlay.current_fill_color.is_empty() {
+        "#000000".to_string()
+    } else {
+        overlay.current_fill_color.clone()
+    };
     for cmd in &overlay.cmds {
         match cmd {
             D::SetFont {
