@@ -128,11 +128,35 @@ pub struct ScriptOverlay {
     /// 描画カーソル Y 座標 (`BaseY` / `PointY` 関数が返す)。
     #[serde(default)]
     pub cursor_y: f64,
+    /// 遅延クリア フラグ（SRC immediate-mode のバックバッファ消去意味論）。
+    /// `ClearPicture` はバックバッファのみを消し、画面 (= 直前 `Refresh` が
+    /// 表示したフレーム) は次の present まで保持される。本実装の retained-overlay
+    /// では「`ClearPicture` で即 cmds を空にすると Wait 中のフレームが消える」ため、
+    /// `ClearPicture` はこのフラグだけ立て、次の描画 push か `Refresh`(present) で
+    /// 実際に cmds を消す。汎用戦闘アニメの `Paint; Refresh; ClearPicture; Wait`
+    /// フレームループが正しく各フレームを表示するための要。
+    #[serde(default)]
+    pub pending_clear: bool,
 }
 
 impl ScriptOverlay {
     pub fn clear(&mut self) {
         self.cmds.clear();
+        self.pending_clear = false;
+    }
+
+    /// `ClearPicture` 用の遅延クリア。cmds は消さず、次の描画 push / `present` で消す。
+    pub fn defer_clear(&mut self) {
+        self.pending_clear = true;
+    }
+
+    /// `Refresh`(present) 相当。保留中のクリアがあればここで適用する
+    /// （`ClearPicture; Refresh` でバックバッファの空を表示するケース）。
+    pub fn present(&mut self) {
+        if self.pending_clear {
+            self.cmds.clear();
+            self.pending_clear = false;
+        }
     }
 
     /// 全画面 Fade のうち、色が `color_matches` に一致するものを全て除去する。
@@ -148,6 +172,12 @@ impl ScriptOverlay {
     }
 
     pub fn push(&mut self, c: DrawCmd) {
+        // 保留中の ClearPicture を、新フレーム最初の描画でここで適用する
+        // (immediate-mode のバックバッファ消去 → 新規描画開始)。
+        if self.pending_clear {
+            self.cmds.clear();
+            self.pending_clear = false;
+        }
         // SetFont / SetColor は state も更新
         match &c {
             DrawCmd::SetFont {

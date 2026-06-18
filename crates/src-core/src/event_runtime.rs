@@ -4169,6 +4169,12 @@ fn exec_command_pc(
             // フレームアニメ、`HotpointString ... / Refresh / Wait Click` 等) は
             // Refresh の後も描画が残ることを前提にしており、クリアすると
             // 「画面が一瞬見えてすぐ消える」状態になっていた。
+            //
+            // present(): 保留中の ClearPicture があればここで適用する
+            // (`ClearPicture; Refresh` でバックバッファの空を表示するケース)。
+            // 通常パターン `Paint; Refresh; ClearPicture` では Refresh 時点で
+            // 保留は無いので従来どおり no-op。
+            app.script_overlay_mut().present();
             return Ok(pc + 1);
         }
         "hotpointstring" => {
@@ -4229,8 +4235,13 @@ fn exec_command_pc(
         }
         "clearpicture" => {
             // `ClearPicture` — Paint / PaintPicture で積んだ表示を消去。
+            // ただし SRC immediate-mode ではバックバッファのみを消し、画面は直前
+            // Refresh が表示したフレームを次の present まで保持する。本実装は
+            // 遅延クリア (defer_clear) で、次の描画 push か Refresh まで cmds を残す。
+            // → 汎用戦闘アニメの `Paint; Refresh; ClearPicture; Wait` 各フレームが
+            //   Wait 中も正しく表示される (即 clear すると毎フレーム空になっていた)。
             // Hotpoint は別管理なのでそのまま。
-            app.script_overlay_mut().clear();
+            app.script_overlay_mut().defer_clear();
             return Ok(pc + 1);
         }
         "clearobj" => {
@@ -15406,6 +15417,48 @@ Color 赤
             cmds[1]
         );
         assert!(matches!(&cmds[2], crate::DrawCmd::SetFillSolid(false)));
+    }
+
+    #[test]
+    fn battle_anim_frame_visible_during_wait() {
+        // SRC 汎用戦闘アニメのフレームループ `PaintPicture; Refresh; ClearPicture; Wait`。
+        // 原典の immediate-mode では ClearPicture はバックバッファのみを消し、
+        // 画面は直前 Refresh が表示したフレームを Wait 中も保持する。
+        // → Wait で中断した時点の overlay には当該フレームの描画が残っていること。
+        let src = "\
+For i = 1 To 2
+  PaintPicture test.bmp 10 20 透過
+  Refresh
+  ClearPicture
+  Wait 1
+Next
+";
+        let stmts = event::parse(src).unwrap();
+        let mut app = App::new();
+        execute(&mut app, &stmts).unwrap();
+        // 1 フレーム目の Wait で中断している。
+        assert!(app.pending_timer().is_some(), "Wait で中断しているはず");
+        let cmds = &app.script_overlay().cmds;
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, crate::DrawCmd::Picture { path, .. } if path == "test.bmp")),
+            "Wait 中はフレームの PaintPicture が表示に残るべき (ClearPicture は次フレーム用): {cmds:?}"
+        );
+        // タイマ満了で再開 → 2 フレーム目を描き、また Wait で中断。フレームは 1 枚分のみ。
+        app.tick(0.2);
+        assert!(
+            app.pending_timer().is_some(),
+            "2 フレーム目の Wait で再度中断"
+        );
+        let cmds = &app.script_overlay().cmds;
+        let pics = cmds
+            .iter()
+            .filter(|c| matches!(c, crate::DrawCmd::Picture { .. }))
+            .count();
+        assert_eq!(
+            pics, 1,
+            "毎フレーム ClearPicture されるので累積せず 1 枚: {cmds:?}"
+        );
     }
 
     #[test]
