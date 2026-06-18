@@ -8274,11 +8274,20 @@ impl App {
                 } else {
                     "-".to_string()
                 };
+                // 必要技能 / 必要条件のゲートのみで使用可否を判定する (has_acted / EN / 残弾
+                // 等の一時的状態は閲覧画面では除外し、技能による恒久的な解禁状況のみ示す)。
+                let ns = wd.necessary_skill();
+                let nc = wd.necessary_condition();
+                let usable = (ns.is_empty()
+                    || crate::necessary_skill::is_satisfied(ns, u, &self.database))
+                    && (nc.is_empty()
+                        || crate::necessary_skill::is_satisfied(nc, u, &self.database));
                 Some(WeaponRow {
                     name: wd.name.clone(),
                     power: wd.power,
                     range,
                     ammo,
+                    usable,
                 })
             })
             .collect();
@@ -13088,6 +13097,97 @@ mod tests {
         assert_eq!(d.weapons[1].range, "1-4");
         assert_eq!(d.weapons[1].ammo, "残4/6");
         assert_eq!(d.weapons[2].ammo, "EN15");
+        assert!(
+            d.weapons.iter().all(|w| w.usable),
+            "必要技能の無い武器は全て使用可"
+        );
+    }
+
+    /// 単機ステータス詳細は、必要技能を満たさない武器を `usable=false` で示す
+    /// (機能ゲートと同じ `necessary_skill::is_satisfied` を閲覧表示にも反映)。
+    #[test]
+    fn status_detail_marks_necessary_skill_gated_weapons() {
+        use crate::data::pilot::{Adaption, PilotData, Sex};
+        use crate::data::unit::{Size, UnitData, WeaponData};
+        use crate::unit_weapon::UnitWeapon;
+        use crate::{Party, UnitInstance};
+
+        let mk_weapon = |name: &str, necessary: &str| WeaponData {
+            name: name.into(),
+            power: 1000,
+            min_range: 1,
+            max_range: 1,
+            precision: 0,
+            bullet: -1,
+            en_consumption: 0,
+            necessary_morale: 0,
+            adaption: "AAAA".into(),
+            critical: 0,
+            class: "格".into(),
+            extras: if necessary.is_empty() {
+                Vec::new()
+            } else {
+                vec![necessary.into()]
+            },
+        };
+        let mut app = App::new();
+        // 念力 技能を持たないパイロット。
+        app.database_mut().pilots.push(PilotData {
+            spirit_commands: Vec::new(),
+            name: "P".into(),
+            nickname: "P".into(),
+            kana_name: "P".into(),
+            sex: Sex::Unspecified,
+            class: String::new(),
+            adaption: Adaption::parse("AAAA").unwrap(),
+            exp_value: 0,
+            infight: 100,
+            shooting: 100,
+            hit: 0,
+            dodge: 0,
+            intuition: 0,
+            technique: 0,
+            personality: None,
+            sp: None,
+            bgm: None,
+            bitmap: None,
+            features: Vec::new(),
+        });
+        app.database_mut().units.push(UnitData {
+            abilities: Vec::new(),
+            name: "機".into(),
+            kana_name: String::new(),
+            nickname: "機".into(),
+            class: String::new(),
+            pilot_num: 1,
+            item_num: 0,
+            transportation: "陸".into(),
+            speed: 5,
+            size: Size::M,
+            value: 0,
+            exp_value: 0,
+            hp: 3000,
+            en: 100,
+            armor: 500,
+            mobility: 100,
+            adaption: Adaption::parse("AAAA").unwrap(),
+            bitmap: String::new(),
+            weapons: vec![mk_weapon("通常技", ""), mk_weapon("封印技", "念力Lv3")],
+            features: Vec::new(),
+        });
+        let mut inst = UnitInstance::new("機", "P", Party::Player, 0, 0);
+        inst.weapons = vec![
+            UnitWeapon::from_data("通常技", 0, -1),
+            UnitWeapon::from_data("封印技", 1, -1),
+        ];
+        app.database_mut().register_unit(inst);
+
+        let d = app.build_status_detail(0).expect("詳細");
+        assert!(d.weapons[0].usable, "必要技能なしの武器は使用可");
+        assert!(
+            !d.weapons[1].usable,
+            "念力Lv3 を満たさないパイロットの武器は使用不可"
+        );
     }
 
     /// 通常の部隊表 (戻り先指定なし) は従来どおり UnitList → Title で抜ける。

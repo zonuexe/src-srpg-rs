@@ -73,6 +73,8 @@ pub struct WeaponRow {
     pub range: String,
     /// 弾数 / EN 表記 (`"残3/5"` / `"EN10"` / `"-"`)。
     pub ammo: String,
+    /// 必要技能 / 必要条件を満たし使用可能か。`false` なら技能不足でグレー表示する。
+    pub usable: bool,
 }
 
 /// 単機詳細画面の表示用ビューモデル。表示文字列と数値のみを持つ純データで、

@@ -2646,8 +2646,14 @@ fn draw_unit_detail(
     let max_wrows = 5usize;
     for (i, wrow) in d.weapons.iter().take(max_wrows).enumerate() {
         let y = hy + 20 + i as i64 * 20;
-        ctx.set_fill_style_str("#102030");
-        let _ = ctx.fill_text(&wrow.name, col_name as f64, y as f64);
+        // 必要技能未達の武器はグレー表示し、名称に「技能不足」を併記する。
+        ctx.set_fill_style_str(if wrow.usable { "#102030" } else { "#9aa0a8" });
+        let name = if wrow.usable {
+            wrow.name.clone()
+        } else {
+            format!("{} (技能不足)", wrow.name)
+        };
+        let _ = ctx.fill_text(&name, col_name as f64, y as f64);
         let _ = ctx.fill_text(&wrow.power.to_string(), col_pow as f64, y as f64);
         let _ = ctx.fill_text(&wrow.range, col_rng as f64, y as f64);
         let _ = ctx.fill_text(&wrow.ammo, col_ammo as f64, y as f64);
