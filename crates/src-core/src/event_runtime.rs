@@ -5062,8 +5062,18 @@ fn exec_command_pc(
             app.set_script_var(vname.to_string(), colorref.to_string());
             return Ok(pc + 1);
         }
-        "fillstyle" | "background" | "drawoption" | "renametitle" | "renamebgm" | "freememory"
-        | "exec" | "make" | "playmovie" | "redraw" | "setbackground" => {
+        "fillstyle" => {
+            // `FillStyle <style>` — 図形 (Circle/Oval/Polygon/Arc) の塗り方式。
+            // `透明`=塗りなし、それ以外 (`塗りつぶし`/`横線`/`縦線`/`斜線`/`クロス`/
+            // `網かけ` 等) は本実装では solid 塗りで近似 (C# は != Transparent で塗る)。
+            let style = xargs.first().map(|s| s.trim()).unwrap_or("");
+            let solid = !style.is_empty() && style != "透明";
+            app.script_overlay_mut()
+                .push(crate::script_overlay::DrawCmd::SetFillSolid(solid));
+            return Ok(pc + 1);
+        }
+        "background" | "drawoption" | "renametitle" | "renamebgm" | "freememory" | "exec"
+        | "make" | "playmovie" | "redraw" | "setbackground" => {
             // 表示 / システム / 拡張系: 現段階では no-op (将来拡張)
             return Ok(pc + 1);
         }
@@ -5198,17 +5208,92 @@ fn exec_command_pc(
             }
             return Ok(pc + 1);
         }
-        "polygon" | "circle" | "arc" => {
-            // グラフィック描画命令。本実装はスクリプト実行用なので no-op。
+        "circle" => {
+            // `Circle x y r [color]` — 中心 (x,y)・半径 r の真円 (SRC `Circleコマンド`)。
+            // 色省略時は現在の線色。座標は変数入り算術式でありうるため app-aware に評価。
+            if xargs.len() >= 3 {
+                let cx = eval_int_expr_app(app, &xargs[0]) as f64;
+                let cy = eval_int_expr_app(app, &xargs[1]) as f64;
+                let r = eval_int_expr_app(app, &xargs[2]) as f64;
+                if let Some(c) = optional_draw_color(app, &xargs[3..]) {
+                    app.script_overlay_mut()
+                        .push(crate::script_overlay::DrawCmd::SetColor { color: c });
+                }
+                app.script_overlay_mut()
+                    .push(crate::script_overlay::DrawCmd::Circle { cx, cy, r });
+            }
+            return Ok(pc + 1);
+        }
+        "oval" => {
+            // `Oval x y r ratio [color]` — 中心 (x,y)・横半径 r・縦横比 ratio の楕円。
+            if xargs.len() >= 4 {
+                let cx = eval_int_expr_app(app, &xargs[0]) as f64;
+                let cy = eval_int_expr_app(app, &xargs[1]) as f64;
+                let r = eval_int_expr_app(app, &xargs[2]) as f64;
+                let ratio = numeric_arg(app, &xargs[3]).unwrap_or(1.0);
+                if let Some(c) = optional_draw_color(app, &xargs[4..]) {
+                    app.script_overlay_mut()
+                        .push(crate::script_overlay::DrawCmd::SetColor { color: c });
+                }
+                app.script_overlay_mut()
+                    .push(crate::script_overlay::DrawCmd::Oval { cx, cy, r, ratio });
+            }
+            return Ok(pc + 1);
+        }
+        "arc" => {
+            // `Arc x y r start end [color]` — 中心 (x,y)・半径 r の円弧。
+            // 角度は度数法・右向き=0・反時計回り増加 (SRC `Arcコマンド`)。
+            if xargs.len() >= 5 {
+                let cx = eval_int_expr_app(app, &xargs[0]) as f64;
+                let cy = eval_int_expr_app(app, &xargs[1]) as f64;
+                let r = eval_int_expr_app(app, &xargs[2]) as f64;
+                let start_deg = numeric_arg(app, &xargs[3]).unwrap_or(0.0) % 360.0;
+                let end_deg = numeric_arg(app, &xargs[4]).unwrap_or(0.0) % 360.0;
+                if let Some(c) = optional_draw_color(app, &xargs[5..]) {
+                    app.script_overlay_mut()
+                        .push(crate::script_overlay::DrawCmd::SetColor { color: c });
+                }
+                app.script_overlay_mut()
+                    .push(crate::script_overlay::DrawCmd::Arc {
+                        cx,
+                        cy,
+                        r,
+                        start_deg,
+                        end_deg,
+                    });
+            }
+            return Ok(pc + 1);
+        }
+        "polygon" => {
+            // `Polygon x1 y1 x2 y2 …` — 頂点列を結ぶ多角形 (SRC `Polygonコマンド`)。
+            // 色オプションは無く、現在の線色のみ。頂点は座標ペアで任意個数。
+            let mut points = Vec::new();
+            for pair in xargs.chunks(2) {
+                if pair.len() < 2 {
+                    break; // 余った単独座標は無視 (C# `2*pnum < ArgNum` と同等)
+                }
+                let px = eval_int_expr_app(app, &pair[0]) as f64;
+                let py = eval_int_expr_app(app, &pair[1]) as f64;
+                points.push((px, py));
+            }
+            if points.len() >= 2 {
+                app.script_overlay_mut()
+                    .push(crate::script_overlay::DrawCmd::Polygon { points });
+            }
             return Ok(pc + 1);
         }
         "fillcolor" => {
-            let color = xargs
-                .first()
-                .cloned()
-                .unwrap_or_else(|| "#000000".to_string());
+            // `FillColor <color>` — 図形の内部塗り色。線色 (Color) とは独立。
+            // 旧実装は SetColor (線色) に潰していたが、塗り色は SetFillColor で別管理。
+            let raw = xargs.join(" ");
+            let raw = raw.trim();
+            let color = if raw.is_empty() {
+                "#000000".to_string()
+            } else {
+                resolve_color(app, raw)
+            };
             app.script_overlay_mut()
-                .push(crate::script_overlay::DrawCmd::SetColor { color });
+                .push(crate::script_overlay::DrawCmd::SetFillColor { color });
             return Ok(pc + 1);
         }
         "fadeout" => {
@@ -10655,6 +10740,25 @@ fn info_map(app: &App, info: &str, sub: &[&str]) -> String {
 /// 色トークンを解決する。`FrameColor1` のように色がスクリプト変数で
 /// 与えられる場合 (Alpha2ndStatus.ini 由来のテーマ色) はその値を引いてから
 /// `canonical_color` を適用する。定義済み変数でなければそのまま色名として扱う。
+/// 図形描画命令 (Circle/Oval/Arc) の末尾 color オプションを解決する。
+/// 残余トークンが空でなければ結合して `resolve_color` で CSS カラーへ。
+/// 空（色省略）なら `None` を返し、呼び出し側は現在の線色を据え置く。
+/// SRC は color を `#rrggbb` 形式で受けるが、本移植では `RGB(...)` が
+/// `expand_vars` で `#rrggbb` に評価済み・`resolve_color` が日本語色名/変数色も解決する。
+fn optional_draw_color(app: &App, rest: &[String]) -> Option<String> {
+    let joined = rest
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if joined.is_empty() {
+        None
+    } else {
+        Some(resolve_color(app, &joined))
+    }
+}
+
 fn resolve_color(app: &App, s: &str) -> String {
     let t = s.trim().trim_matches('"').trim();
     let v = app.script_var(t);
@@ -15200,6 +15304,108 @@ Color 赤
         execute(&mut app, &stmts).unwrap();
         let cmds = &app.script_overlay().cmds;
         assert!(matches!(&cmds[0], crate::DrawCmd::SetLineWidth(n) if *n == 3.0));
+    }
+
+    #[test]
+    fn circle_command_pushes_draw_cmd() {
+        // `Circle x y r [color]` — 色省略時は SetColor を積まず、円のみ。
+        let mut app = App::new();
+        execute(&mut app, &event::parse("Circle 100 150 50\n").unwrap()).unwrap();
+        let cmds = &app.script_overlay().cmds;
+        assert_eq!(cmds.len(), 1, "色省略時は SetColor を積まない");
+        assert!(
+            matches!(&cmds[0], crate::DrawCmd::Circle { cx, cy, r } if *cx == 100.0 && *cy == 150.0 && *r == 50.0)
+        );
+
+        // 色指定あり: RGB(...) は #rrggbb に評価され SetColor → Circle の順で積む。
+        let mut app2 = App::new();
+        execute(
+            &mut app2,
+            &event::parse("Circle 200 250 100 RGB(255,0,0)\n").unwrap(),
+        )
+        .unwrap();
+        let cmds = &app2.script_overlay().cmds;
+        assert!(
+            matches!(&cmds[0], crate::DrawCmd::SetColor { color } if color == "#ff0000"),
+            "色指定は SetColor を先に積む: {:?}",
+            cmds[0]
+        );
+        assert!(matches!(&cmds[1], crate::DrawCmd::Circle { r, .. } if *r == 100.0));
+    }
+
+    #[test]
+    fn circle_radius_evaluates_arithmetic() {
+        // 半径が変数入り算術式 `(i * 30)` でも app-aware に評価される (Line と同等)。
+        let mut app = App::new();
+        app.set_script_var("i".to_string(), "3".to_string());
+        execute(
+            &mut app,
+            &event::parse("Circle 240 240 (i * 30)\n").unwrap(),
+        )
+        .unwrap();
+        assert!(
+            matches!(&app.script_overlay().cmds[0], crate::DrawCmd::Circle { r, .. } if *r == 90.0)
+        );
+    }
+
+    #[test]
+    fn oval_command_with_ratio() {
+        let mut app = App::new();
+        execute(&mut app, &event::parse("Oval 100 150 50 0.5\n").unwrap()).unwrap();
+        assert!(matches!(
+            &app.script_overlay().cmds[0],
+            crate::DrawCmd::Oval { cx, cy, r, ratio }
+                if *cx == 100.0 && *cy == 150.0 && *r == 50.0 && (*ratio - 0.5).abs() < 1e-9
+        ));
+    }
+
+    #[test]
+    fn arc_command_angles() {
+        let mut app = App::new();
+        execute(&mut app, &event::parse("Arc 100 150 50 0 180\n").unwrap()).unwrap();
+        assert!(matches!(
+            &app.script_overlay().cmds[0],
+            crate::DrawCmd::Arc { cx, cy, r, start_deg, end_deg }
+                if *cx == 100.0 && *cy == 150.0 && *r == 50.0 && *start_deg == 0.0 && *end_deg == 180.0
+        ));
+    }
+
+    #[test]
+    fn polygon_command_collects_vertices() {
+        // `Polygon x1 y1 x2 y2 x3 y3` → 3 頂点。色オプションは無い。
+        let mut app = App::new();
+        execute(
+            &mut app,
+            &event::parse("Polygon 0 100 20 20 100 50\n").unwrap(),
+        )
+        .unwrap();
+        match &app.script_overlay().cmds[0] {
+            crate::DrawCmd::Polygon { points } => {
+                assert_eq!(points, &vec![(0.0, 100.0), (20.0, 20.0), (100.0, 50.0)]);
+            }
+            other => panic!("expected Polygon, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fillstyle_and_fillcolor_state() {
+        // `FillStyle 塗りつぶし` → solid(true)、`透明` → solid(false)。
+        // `FillColor` は線色 (SetColor) ではなく SetFillColor を積む。
+        let mut app = App::new();
+        execute(
+            &mut app,
+            &event::parse("FillStyle 塗りつぶし\nFillColor RGB(0,0,255)\nFillStyle 透明\n")
+                .unwrap(),
+        )
+        .unwrap();
+        let cmds = &app.script_overlay().cmds;
+        assert!(matches!(&cmds[0], crate::DrawCmd::SetFillSolid(true)));
+        assert!(
+            matches!(&cmds[1], crate::DrawCmd::SetFillColor { color } if color == "#0000ff"),
+            "FillColor は SetFillColor を積む (線色と独立): {:?}",
+            cmds[1]
+        );
+        assert!(matches!(&cmds[2], crate::DrawCmd::SetFillSolid(false)));
     }
 
     #[test]

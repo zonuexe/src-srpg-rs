@@ -82,6 +82,34 @@ pub enum DrawCmd {
     },
     /// `DrawWidth n` の状態反映用 (Line / 矩形枠の線幅)。
     SetLineWidth(f64),
+    /// `FillStyle` の状態反映用。`true`=塗りつぶし (VbFSSolid 等の非透明)、
+    /// `false`=透明 (VbFSTransparent)。後続の Circle/Oval/Polygon/Arc に適用。
+    /// SRC の網かけ/斜線等のハッチスタイルは本実装では solid 塗りで近似する。
+    SetFillSolid(bool),
+    /// `FillColor` の状態反映用。後続の塗り図形 (Circle/Oval/Polygon/Arc) の
+    /// 内部塗り色。線色 (SetColor) とは独立。
+    SetFillColor { color: String },
+    /// `Circle x y r [color]` — 中心 (cx,cy)・半径 r の真円。
+    /// 輪郭は現在の線色 (color 省略時)、塗りは FillStyle=solid のとき FillColor。
+    Circle { cx: f64, cy: f64, r: f64 },
+    /// `Oval x y r ratio [color]` — 中心 (cx,cy)・横半径 r・縦横比 ratio の楕円。
+    Oval {
+        cx: f64,
+        cy: f64,
+        r: f64,
+        ratio: f64,
+    },
+    /// `Polygon x1 y1 x2 y2 …` — 頂点列を結ぶ多角形 (閉path)。色は現在の線色のみ。
+    Polygon { points: Vec<(f64, f64)> },
+    /// `Arc x y r start end [color]` — 中心 (cx,cy)・半径 r の円弧。
+    /// 角度は度数法・右向き=0・反時計回りに増加 (上向き=90)。
+    Arc {
+        cx: f64,
+        cy: f64,
+        r: f64,
+        start_deg: f64,
+        end_deg: f64,
+    },
 }
 
 /// 1 フレーム分の描画コマンドリスト。

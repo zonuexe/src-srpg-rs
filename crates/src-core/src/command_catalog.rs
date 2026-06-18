@@ -598,7 +598,7 @@ pub const COMMAND_CATALOG: &[CommandSpec] = &[
     ),
     sp("AIf", &[], CommandKind::Stub, "自動分岐 (auto-prefix If)"),
     sp("ATalk", &[], CommandKind::Stub, "自動 Talk (auto-prefix)"),
-    sp("Arc", &[], CommandKind::Stub, "弧描画 (Graphics)"),
+    sp("Arc", &[], CommandKind::Implemented, "弧描画 (Graphics)"),
     sp("Array", &[], CommandKind::Implemented, "配列宣言"),
     sp("Attack", &[], CommandKind::Implemented, "ユニット攻撃指示"),
     sp(
@@ -629,7 +629,7 @@ pub const COMMAND_CATALOG: &[CommandSpec] = &[
         CommandKind::Implemented,
         "チャージフラグ設定",
     ),
-    sp("Circle", &[], CommandKind::Stub, "円描画 (Graphics)"),
+    sp("Circle", &[], CommandKind::Implemented, "円描画 (Graphics)"),
     sp(
         "ClearEvent",
         &[],
@@ -671,8 +671,13 @@ pub const COMMAND_CATALOG: &[CommandSpec] = &[
         CommandKind::Stub,
         "SRC.Sharp 非対応マーカ",
     ),
-    sp("Oval", &[], CommandKind::Stub, "楕円描画 (Graphics)"),
-    sp("Polygon", &[], CommandKind::Stub, "多角形描画 (Graphics)"),
+    sp("Oval", &[], CommandKind::Implemented, "楕円描画 (Graphics)"),
+    sp(
+        "Polygon",
+        &[],
+        CommandKind::Implemented,
+        "多角形描画 (Graphics)",
+    ),
     sp(
         "Question",
         &[],
@@ -957,11 +962,25 @@ mod tests {
 
     #[test]
     fn known_stubs_are_marked_stub() {
-        // Arc / Nop はグラフィクス系・未対応系の典型的な真の Stub。
+        // Nop / SpecialPowerAnime は未対応系の典型的な真の Stub。
         // FillStyle / PlayMovie は no-op arm あり → Implemented に昇格済み。
-        for stub in ["Arc", "Nop", "Oval", "SpecialPowerAnime"] {
+        // グラフィクス系 Circle/Oval/Polygon/Arc は描画 primitive 実装済み (下記参照)。
+        for stub in ["Nop", "SpecialPowerAnime"] {
             let spec = lookup(stub).unwrap_or_else(|| panic!("{} missing", stub));
             assert_eq!(spec.kind, CommandKind::Stub, "{stub} は Stub のはず");
+        }
+    }
+
+    #[test]
+    fn graphics_primitives_are_implemented() {
+        // 汎用戦闘アニメ Lib (GBA クローズアップ) が使う図形描画命令は実装済み。
+        for must in ["Circle", "Oval", "Polygon", "Arc", "Line", "PSet"] {
+            let spec = lookup(must).unwrap_or_else(|| panic!("{must} missing from catalog"));
+            assert_eq!(
+                spec.kind,
+                CommandKind::Implemented,
+                "{must} は Implemented のはず"
+            );
         }
     }
 }

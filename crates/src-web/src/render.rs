@@ -398,6 +398,10 @@ fn draw_script_overlay(
     let mut font_str = format!("14px {JP_SANS}");
     let mut text_color = "#ffffff".to_string();
     let mut stroke_color = "#ffffff".to_string();
+    // 図形 (Circle/Oval/Polygon/Arc) の塗り状態。FillStyle / FillColor で更新。
+    let mut line_width = 1.0f64;
+    let mut fill_solid = false;
+    let mut fill_color = "#000000".to_string();
     for cmd in &overlay.cmds {
         match cmd {
             D::SetFont {
@@ -447,7 +451,84 @@ fn draw_script_overlay(
                 ctx.set_global_alpha(prev_alpha);
             }
             D::SetLineWidth(n) => {
+                line_width = *n;
                 ctx.set_line_width(*n);
+            }
+            D::SetFillSolid(solid) => {
+                fill_solid = *solid;
+            }
+            D::SetFillColor { color } => {
+                fill_color = color.clone();
+            }
+            D::Circle { cx, cy, r } => {
+                draw_ellipse_overlay(
+                    ctx,
+                    *cx,
+                    *cy,
+                    *r,
+                    *r,
+                    &stroke_color,
+                    line_width,
+                    fill_solid,
+                    &fill_color,
+                );
+            }
+            D::Oval { cx, cy, r, ratio } => {
+                draw_ellipse_overlay(
+                    ctx,
+                    *cx,
+                    *cy,
+                    *r,
+                    *r * *ratio,
+                    &stroke_color,
+                    line_width,
+                    fill_solid,
+                    &fill_color,
+                );
+            }
+            D::Arc {
+                cx,
+                cy,
+                r,
+                start_deg,
+                end_deg,
+            } => {
+                // SRC: 右向き=0・反時計回り増加 (数学座標系、上向き=90)。
+                // Canvas は y 軸が下向きなので、SRC 角 θ の点は canvas 角 -θ に来る。
+                // SRC は start→end を CCW(数学) 方向に描くため、canvas 上では角度が
+                // 減少する向き = anticlockwise=true で描く (C# DrawArc の負 sweep と同等)。
+                let start = -*start_deg * core::f64::consts::PI / 180.0;
+                let end = -*end_deg * core::f64::consts::PI / 180.0;
+                if fill_solid {
+                    ctx.begin_path();
+                    ctx.move_to(*cx, *cy);
+                    let _ = ctx.arc_with_anticlockwise(*cx, *cy, *r, start, end, true);
+                    ctx.close_path();
+                    ctx.set_fill_style_str(&fill_color);
+                    ctx.fill();
+                }
+                ctx.begin_path();
+                let _ = ctx.arc_with_anticlockwise(*cx, *cy, *r, start, end, true);
+                ctx.set_stroke_style_str(&stroke_color);
+                ctx.set_line_width(line_width);
+                ctx.stroke();
+            }
+            D::Polygon { points } => {
+                if points.len() >= 2 {
+                    ctx.begin_path();
+                    ctx.move_to(points[0].0, points[0].1);
+                    for p in &points[1..] {
+                        ctx.line_to(p.0, p.1);
+                    }
+                    ctx.close_path();
+                    if fill_solid {
+                        ctx.set_fill_style_str(&fill_color);
+                        ctx.fill();
+                    }
+                    ctx.set_stroke_style_str(&stroke_color);
+                    ctx.set_line_width(line_width);
+                    ctx.stroke();
+                }
             }
             D::Picture {
                 path,
@@ -550,6 +631,35 @@ fn draw_script_overlay(
             }
         }
     }
+}
+
+/// `Circle` / `Oval` の楕円描画。中心 (cx,cy)・横半径 rx・縦半径 ry。
+/// 塗り (`fill_solid`) のときは内部を `fill_color` で塗ってから輪郭を `stroke_color` で描く。
+#[allow(clippy::too_many_arguments)]
+fn draw_ellipse_overlay(
+    ctx: &CanvasRenderingContext2d,
+    cx: f64,
+    cy: f64,
+    rx: f64,
+    ry: f64,
+    stroke_color: &str,
+    line_width: f64,
+    fill_solid: bool,
+    fill_color: &str,
+) {
+    // 半径が 0 以下 (縦横比 0 の Oval 等) は描画しない (Canvas が例外を投げる)。
+    if rx <= 0.0 || ry <= 0.0 {
+        return;
+    }
+    ctx.begin_path();
+    let _ = ctx.ellipse(cx, cy, rx, ry, 0.0, 0.0, core::f64::consts::TAU);
+    if fill_solid {
+        ctx.set_fill_style_str(fill_color);
+        ctx.fill();
+    }
+    ctx.set_stroke_style_str(stroke_color);
+    ctx.set_line_width(line_width);
+    ctx.stroke();
 }
 
 /// `PaintPicture` の 1 枚を描く。
