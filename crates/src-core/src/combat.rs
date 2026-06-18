@@ -409,6 +409,19 @@ pub fn predict_with_status_terrain(
     {
         raw_dmg = (raw_dmg as f64 * 1.25) as i64;
     }
+    // ブースト (ユニット特殊能力): 高気力 (130 以上) のとき与ダメージ ×1.25
+    // (`UnitWeapon.cs` `Unit.IsFeatureAvailable("ブースト")`)。潜在力開放 とは独立した別係数で、
+    // C# も別 if で双方を適用する (両方持てば ×1.5625)。攻撃側ユニットの静的 features を参照。
+    // 注: ブースト 等のユニット特殊能力は terrain.txt の `全ユニット共通` 配下に各ユニットへ
+    // 明示列挙されており (継承テンプレートではない)、パーサが features へ取り込む。
+    if atk_morale >= 130
+        && atk_unit
+            .features
+            .iter()
+            .any(|(f, _)| f.contains("ブースト"))
+    {
+        raw_dmg = (raw_dmg as f64 * 1.25) as i64;
+    }
     // 得意技 / 不得手 (パイロット技能): 技能データ (`得意技=格射` 等の武器 class 文字列) の
     // いずれかの文字が使用武器の class に含まれれば、与ダメージ ×1.2 / ×0.8 (`Unit.cs::Damage`)。
     let class_matches = |data: &str| {
@@ -1503,6 +1516,82 @@ mod tests {
         assert_eq!(
             below.damage, below_plain.damage,
             "気力 130 未満では潜在力開放は非発動"
+        );
+    }
+
+    /// ブースト (攻撃側ユニット特殊能力): 気力 130 以上で与ダメージ ×1.25 (潜在力開放 と独立)。
+    #[test]
+    fn boost_feature_boosts_damage_at_high_morale() {
+        let ap = p(0, 0, 100);
+        let dp = p(0, 0, 0);
+        let w = weapon(500, 1, 1, 0);
+        let mut boosted = u(0, vec![]);
+        boosted
+            .features
+            .push(("ブースト".into(), "マジンパワー".into()));
+        let plain = u(0, vec![]);
+        // 気力 130 + ブースト → plain の ×1.25。
+        let with_boost = predict_with_status(
+            &ap,
+            &boosted,
+            &w,
+            &dp,
+            &u(0, vec![]),
+            0,
+            0,
+            130,
+            100,
+            &[],
+            &[],
+        );
+        let without = predict_with_status(
+            &ap,
+            &plain,
+            &w,
+            &dp,
+            &u(0, vec![]),
+            0,
+            0,
+            130,
+            100,
+            &[],
+            &[],
+        );
+        assert_eq!(
+            with_boost.damage,
+            (without.damage as f64 * 1.25) as i64,
+            "ブースト: 気力 130 で与ダメージ ×1.25"
+        );
+        // 気力 129 では非発動。
+        let below = predict_with_status(
+            &ap,
+            &boosted,
+            &w,
+            &dp,
+            &u(0, vec![]),
+            0,
+            0,
+            129,
+            100,
+            &[],
+            &[],
+        );
+        let below_plain = predict_with_status(
+            &ap,
+            &plain,
+            &w,
+            &dp,
+            &u(0, vec![]),
+            0,
+            0,
+            129,
+            100,
+            &[],
+            &[],
+        );
+        assert_eq!(
+            below.damage, below_plain.damage,
+            "気力 130 未満ではブースト非発動"
         );
     }
 
