@@ -53,6 +53,30 @@ pub enum DefenseMode {
     Shield { chance: i32 },
 }
 
+/// 精神名スライスから `ダメージ増加` 効果レベルの **最大値** を既定テーブルで解決する。
+///
+/// sp.txt を読み込まない経路 (`predict` / `predict_with_status` の薄いラッパや、
+/// [`crate::db::GameDatabase::sp_damage_increase_level`] の DB 未定義フォールバック) 用。
+/// 既定値は実 SRC 標準データ準拠: 熱血=10 (×2.0)、魂=20 (×3.0)、気合=0 (気力増加であり
+/// ダメージ増加効果なし → ×1.0)。C# `Unit.SpecialPowerEffectLevel` と同じく加算ではなく
+/// 最大値勝ち。該当なしは 0.0。シナリオ sp.txt が読み込まれている実プレイ経路では
+/// DB 値が優先される (このテーブルは合成テスト経路の互換維持用)。
+pub fn default_damage_boost_level(statuses: &[String]) -> f64 {
+    statuses
+        .iter()
+        .map(|s| {
+            if s.contains("熱血") {
+                10.0
+            } else if s.contains("魂") {
+                20.0
+            } else {
+                // 気合 は気力増加効果でありダメージ増加なし → 0.0。
+                0.0
+            }
+        })
+        .fold(0.0f64, f64::max)
+}
+
 /// 4 隣接マスのマンハッタン距離。
 pub const fn manhattan(a: (u32, u32), b: (u32, u32)) -> u32 {
     a.0.abs_diff(b.0) + a.1.abs_diff(b.1)
@@ -168,12 +192,10 @@ fn terrain_adaptation_mults(
 /// | --- | --- |
 /// | `必中` (attacker) | 命中 100 固定 |
 /// | `集中` (attacker) | 命中 +30 |
-/// | `熱血` (attacker) | ダメージ 2 倍 |
-/// | `魂` (attacker) | ダメージ 3 倍 |
+/// | `ダメージ増加` (attacker) | ダメージ ×(1 + 0.1×Lv)。Lv は sp.txt 由来 (熱血/魂/気合 等)。`atk_damage_boost_level` で受領 |
 /// | `捨て身` (attacker) | ダメージ 3 倍 |
 /// | `捨て身` (defender) | 無防備 = 命中 100 |
 /// | `直撃` (attacker) | 防御側 `分身`/`バリア` を無効化 |
-/// | `気合` (attacker) | ダメージ +20% |
 /// | `集中` (defender) | 回避 +30 (= 攻撃側命中 -30) |
 /// | `ひらめき` (defender) | 命中 0 |
 /// | `不屈` (defender) | ダメージ 1 |
@@ -199,6 +221,8 @@ pub fn predict_with_status(
     def_statuses: &[String],
 ) -> CombatPreview {
     // 地形情報なし版 (地形適応 ×1.0)。地形適応込みは predict_with_status_terrain。
+    // DB を持たないラッパ経路では既定テーブルでダメージ増加レベルを解決する。
+    let atk_damage_boost_level = default_damage_boost_level(atk_statuses);
     predict_with_status_terrain(
         atk_pilot,
         atk_unit,
@@ -213,11 +237,18 @@ pub fn predict_with_status(
         def_statuses,
         -1,
         -1,
+        atk_damage_boost_level,
     )
 }
 
 /// [`predict_with_status`] の地形適応対応版。`atk_env`/`def_env` は地形適応の
 /// 環境インデックス (0=空/1=陸/2=海/3=宇、[`terrain_env`] で算出)。負なら適応 ×1.0。
+///
+/// `atk_damage_boost_level` は攻撃側 `ダメージ増加` 精神効果レベルの最大値
+/// (C# `Unit.SpecialPowerEffectLevel("ダメージ増加")`)。与ダメージに
+/// `1 + 0.1 * level` を乗じる (`UnitWeapon.cs` の `MaxDbl` 形)。caller は
+/// シナリオ sp.txt から ([`crate::db::GameDatabase::sp_damage_increase_level`])、
+/// または既定テーブル ([`default_damage_boost_level`]) で解決して渡す。
 #[allow(clippy::too_many_arguments)]
 pub fn predict_with_status_terrain(
     atk_pilot: &PilotData,
@@ -233,6 +264,7 @@ pub fn predict_with_status_terrain(
     def_statuses: &[String],
     atk_env: i32,
     def_env: i32,
+    atk_damage_boost_level: f64,
 ) -> CombatPreview {
     let has = |s: &[String], name: &str| s.iter().any(|t| t.contains(name));
 
@@ -369,27 +401,18 @@ pub fn predict_with_status_terrain(
 
     let mut raw_dmg = ((atk_power - def_power) as f64 * terrain_dmg_mult) as i64;
 
-    // 状態異常補正 (乗算)
-    if has(atk_statuses, "気合") {
-        raw_dmg = (raw_dmg as f64 * 1.2) as i64;
-    }
-    if has(atk_statuses, "熱血") {
-        raw_dmg *= 2;
-    }
-    if has(atk_statuses, "魂") {
-        raw_dmg *= 3;
+    // 攻撃側ダメージ増加 (精神コマンド): SRC `UnitWeapon.cs` MaxDbl(dmg_mod, 1 + 0.1*SpecialPowerEffectLevel("ダメージ増加"))。
+    // 倍率は sp.txt データ駆動 (熱血/魂/気合 のレベルは caller が DB から解決して渡す)。非加算 (最大値勝ち)。
+    if atk_damage_boost_level > 0.0 {
+        raw_dmg = (raw_dmg as f64 * (1.0 + 0.1 * atk_damage_boost_level)) as i64;
     }
     // 捨て身: 与ダメージ 3 倍 (代償として防御時 無防備 = 上の命中 100)。
     if has(atk_statuses, "捨て身") {
         raw_dmg *= 3;
     }
     // 攻撃力ＵＰ / ＤＯＷＮ (SetStatus / 特殊効果攻撃属性 低攻): 与ダメージ ×1.25 / ×0.75。
-    // ダメージ増加系スペシャルパワー (熱血/魂/気合) がかかっている場合はそちらが優先 (重複させない)。
-    if has(atk_statuses, "攻撃力ＵＰ")
-        && !has(atk_statuses, "熱血")
-        && !has(atk_statuses, "魂")
-        && !has(atk_statuses, "気合")
-    {
+    // ダメージ増加系スペシャルパワー (熱血/魂 等) がかかっている場合はそちらが優先 (重複させない)。
+    if has(atk_statuses, "攻撃力ＵＰ") && atk_damage_boost_level <= 0.0 {
         raw_dmg = (raw_dmg as f64 * 1.25) as i64;
     }
     if has(atk_statuses, "攻撃力ＤＯＷＮ") {
@@ -1933,6 +1956,7 @@ mod tests {
             &[],
             1,
             1,
+            0.0,
         );
         assert_eq!(base.damage, 1250, "適応なし: 2000 - 750");
         assert_eq!(adapted.damage, 1500, "適応A: 2000×1.2 - 750×1.2");
@@ -2134,6 +2158,88 @@ mod tests {
             &[],
         );
         assert_eq!(with_nekketsu.damage, base.damage * 2);
+    }
+
+    #[test]
+    fn default_damage_boost_table_uses_max_not_stack() {
+        // 既定テーブル (sp.txt 未読込経路): 熱血=Lv10 / 魂=Lv20 / 気合=Lv0。
+        // C# `Unit.SpecialPowerEffectLevel` と同じく加算ではなく最大値勝ち。
+        let s = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<String>>();
+        // 熱血 のみ → Lv10 (×2.0)。
+        assert_eq!(default_damage_boost_level(&s(&["熱血"])), 10.0);
+        // 魂 のみ → Lv20 (×3.0)。
+        assert_eq!(default_damage_boost_level(&s(&["魂"])), 20.0);
+        // 気合 のみ → Lv0 (ダメージ増加なし → ×1.0)。
+        assert_eq!(default_damage_boost_level(&s(&["気合"])), 0.0);
+        // 熱血 + 魂 → max(10, 20) = 20 (×3.0)。加算 (×6) ではない。
+        assert_eq!(default_damage_boost_level(&s(&["熱血", "魂"])), 20.0);
+        // 該当なし → 0.0。
+        assert_eq!(default_damage_boost_level(&s(&["必中"])), 0.0);
+    }
+
+    #[test]
+    fn status_kiai_does_not_increase_damage() {
+        // 気合 は気力 (morale) 増加効果でありダメージ増加効果を持たない。
+        // 旧実装は ×1.2 していたが C# 原典準拠では与ダメージ不変 (×1.0)。
+        let base = predict_with_status(
+            &p(0, 0, 100),
+            &u(0, vec![]),
+            &weapon(500, 1, 1, 0),
+            &p(0, 0, 0),
+            &u(0, vec![]),
+            0,
+            0,
+            100,
+            100,
+            &[],
+            &[],
+        );
+        let with_kiai = predict_with_status(
+            &p(0, 0, 100),
+            &u(0, vec![]),
+            &weapon(500, 1, 1, 0),
+            &p(0, 0, 0),
+            &u(0, vec![]),
+            0,
+            0,
+            100,
+            100,
+            &["気合".to_string()],
+            &[],
+        );
+        assert_eq!(with_kiai.damage, base.damage, "気合 は与ダメージを変えない");
+    }
+
+    #[test]
+    fn status_nekketsu_and_tamashii_use_max_not_stack() {
+        // 熱血 (Lv10) + 魂 (Lv20) → max=Lv20 → ×3.0 (×6 ではない)。
+        let base = predict_with_status(
+            &p(0, 0, 100),
+            &u(0, vec![]),
+            &weapon(500, 1, 1, 0),
+            &p(0, 0, 0),
+            &u(0, vec![]),
+            0,
+            0,
+            100,
+            100,
+            &[],
+            &[],
+        );
+        let both = predict_with_status(
+            &p(0, 0, 100),
+            &u(0, vec![]),
+            &weapon(500, 1, 1, 0),
+            &p(0, 0, 0),
+            &u(0, vec![]),
+            0,
+            0,
+            100,
+            100,
+            &["熱血".to_string(), "魂".to_string()],
+            &[],
+        );
+        assert_eq!(both.damage, base.damage * 3, "熱血+魂: max(×2,×3)=×3");
     }
 
     #[test]

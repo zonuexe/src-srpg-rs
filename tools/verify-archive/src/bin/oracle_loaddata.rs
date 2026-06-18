@@ -79,8 +79,9 @@ fn main() {
         if let Some(rest) = line.strip_prefix("@spirit ") {
             // `@spirit <unitName> <spiritName>` → 以降の `@predict` でそのユニットに精神コマンドを
             // アクティブにする (status slice へ名前を追加)。1 ユニットに複数指定可。同名は冪等。
-            // Rust の combat::predict は精神倍率を **名前ベース** で適用する (SPDList 非参照) ため、
-            // 名前文字列を渡すだけで効く (熱血→×2 / 魂→×3 / 気合→×1.2 / 鉄壁→÷4 等)。
+            // 攻撃側 ダメージ増加 倍率は `eval_predict` が sp.txt から `sp_damage_increase_level`
+            // で解決する (C# `SpecialPowerEffectLevel("ダメージ増加")` 準拠: 最大値勝ち)。
+            // その他 (鉄壁/不屈/集中 等) は combat 側が名前ベースで解釈する。
             let f: Vec<&str> = rest.split_whitespace().collect();
             if f.len() >= 2 {
                 let lst = spirit_map.entry(f[0].to_string()).or_default();
@@ -235,6 +236,9 @@ fn eval_predict(
     let empty: Vec<String> = Vec::new();
     let atk_statuses = spirits.get(aname).unwrap_or(&empty).as_slice();
     let def_statuses = spirits.get(dname).unwrap_or(&empty).as_slice();
+    // 攻撃側 ダメージ増加 精神効果レベルをシナリオ sp.txt から解決
+    // (C# `Unit.SpecialPowerEffectLevel("ダメージ増加")` 相当)。
+    let atk_dmg_boost = db.sp_damage_increase_level(atk_statuses);
     let preview = src_core::combat::predict_with_status_terrain(
         &atk_pilot,
         &atk_unit,
@@ -249,6 +253,7 @@ fn eval_predict(
         def_statuses,
         1,
         def_env,
+        atk_dmg_boost,
     );
     match field {
         "命中率" => preview.hit_chance.to_string(),
@@ -261,8 +266,16 @@ fn eval_predict(
 /// C# `SRC.LoadDataDirectory` と同じファイル群を同順でロードする。
 /// 物理ファイルは Shift-JIS なので `loader::decode_text` で UTF-8 化する。
 fn load_data_directory(app: &mut App, dir: &Path) {
-    // sp.txt / mind.txt (C# は mind.txt 優先)
-    if let Some(txt) = read_data(dir, "mind.txt").or_else(|| read_data(dir, "sp.txt")) {
+    // sp.txt / mind.txt (C# は mind.txt 優先)。terrain.txt 同様、本フィクスチャでは
+    // `<dir>/../system/sp.txt` に置かれるため (C# oracle `Program.cs` も同経路を明示ロード)、
+    // シナリオ dir に無ければ system dir を見る。これを populate しないと `@spirit` 付与の
+    // ダメージ増加効果レベルが解決できず既定テーブルへフォールバックしてしまう。
+    let system_dir = dir.join("..").join("system");
+    if let Some(txt) = read_data(dir, "mind.txt")
+        .or_else(|| read_data(dir, "sp.txt"))
+        .or_else(|| read_data(&system_dir, "mind.txt"))
+        .or_else(|| read_data(&system_dir, "sp.txt"))
+    {
         let (sps, _) = special_power::parse_lenient(&txt);
         app.database_mut().extend_special_powers(sps);
     }

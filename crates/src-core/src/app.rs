@@ -3274,6 +3274,8 @@ impl App {
             self.database.unit_instances[atk_idx].y,
         );
         let def_env = self.terrain_env_at(def_inst.x, def_inst.y);
+        // 攻撃側 ダメージ増加 精神効果レベルを sp.txt から解決 (シナリオ固有値を反映)。
+        let atk_dmg_boost = self.database.sp_damage_increase_level(&atk_statuses);
         let preview = combat::predict_with_status_terrain(
             &atk_pilot,
             &atk_unit,
@@ -3288,6 +3290,7 @@ impl App {
             &def_statuses,
             atk_env,
             def_env,
+            atk_dmg_boost,
         );
 
         // 命中判定。回避を選んだ防御側は命中率が半減する (SRC 反撃モード)。
@@ -3809,6 +3812,8 @@ impl App {
             self.database.unit_instances[sup_idx].y,
         );
         let def_env = self.terrain_env_at(def_inst.x, def_inst.y);
+        // 援護攻撃側 ダメージ増加 精神効果レベルを sp.txt から解決。
+        let sup_dmg_boost = self.database.sp_damage_increase_level(&sup_statuses);
         let preview = combat::predict_with_status_terrain(
             &sup_pilot,
             &sup_unit,
@@ -3823,6 +3828,7 @@ impl App {
             &def_statuses,
             sup_env,
             def_env,
+            sup_dmg_boost,
         );
         let roll = (self.next_u32() % 100) as i32;
         let hit = roll < preview.hit_chance;
@@ -4081,6 +4087,10 @@ impl App {
         // 反撃側 = defender (位置 dx,dy)、被弾側 = attacker (位置 target)。
         let counter_atk_env = self.terrain_env_at(dx, dy);
         let counter_def_env = self.terrain_env_at(target.0, target.1);
+        // 反撃側 ダメージ増加 精神効果レベルを sp.txt から解決。
+        let counter_atk_dmg_boost = self
+            .database
+            .sp_damage_increase_level(&counter_atk_statuses);
         let preview = combat::predict_with_status_terrain(
             &def_pilot,
             &def_unit,
@@ -4095,6 +4105,7 @@ impl App {
             &counter_def_statuses,
             counter_atk_env,
             counter_def_env,
+            counter_atk_dmg_boost,
         );
         // 反撃武器の 1-based インデックスを取得
         let weapon_num = def_unit
@@ -16218,6 +16229,8 @@ Return
                 &[],
                 atk_env,
                 def_env,
+                // 必中 はダメージ増加効果を持たない → 0.0。
+                0.0,
             )
             .damage
         };
@@ -16317,6 +16330,8 @@ Return
                 &[],
                 atk_env,
                 def_env,
+                // 必中 はダメージ増加効果を持たない → 0.0。
+                0.0,
             )
             .damage
         };

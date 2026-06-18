@@ -370,6 +370,37 @@ impl GameDatabase {
         }
     }
 
+    /// 攻撃側にかかっている精神コマンド (`active` = 精神名スナップショット) の
+    /// `ダメージ増加` 効果レベルの **最大値** を返す。元: C# `Unit.SpecialPowerEffectLevel`
+    /// (`Unit.sp.cs`) ＝ 影響下の各スペシャルパワーの効果レベルの最大値
+    /// (加算ではなく最大値勝ち)。caller はこの値を `combat::predict_with_status_terrain`
+    /// の `atk_damage_boost_level` へ渡す。
+    ///
+    /// 各精神名は `self.special_powers` から引き、その `effects` 内の
+    /// `ダメージ増加` レベルを参照する。ロード済み DB に存在しない精神名 (sp.txt 未読込の
+    /// 合成テスト経路等) は既定テーブル ([`combat::default_damage_boost_level`] と同一値:
+    /// 熱血=10 / 魂=20 / 気合=0) でフォールバックし、標準挙動を維持する。
+    /// 該当効果が一つも無ければ 0.0。
+    pub fn sp_damage_increase_level(&self, active: &[String]) -> f64 {
+        let mut max_lv = 0.0f64;
+        for name in active {
+            let lv = match self.special_powers.iter().find(|s| &s.name == name) {
+                Some(spd) => spd
+                    .effects
+                    .iter()
+                    .filter(|(etype, _)| etype == "ダメージ増加")
+                    .map(|(_, lv)| *lv)
+                    .fold(0.0f64, f64::max),
+                // DB 未定義: 既定テーブルへフォールバック (単一名分)。
+                None => crate::combat::default_damage_boost_level(std::slice::from_ref(name)),
+            };
+            if lv > max_lv {
+                max_lv = lv;
+            }
+        }
+        max_lv
+    }
+
     /// パイロット定義を加法的に取り込む。元 `PDList.Load` 相当。複数の
     /// pilot.txt (`data/pilot.txt` + `data/<シナリオ>/pilot.txt` 等) を
     /// マージできる。同名は後勝ち。

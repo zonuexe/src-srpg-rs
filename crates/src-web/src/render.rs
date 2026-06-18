@@ -2181,6 +2181,8 @@ fn build_combat_preview_line(
         &[],
         env_of(cx, cy),
         env_of(dx, dy),
+        // 状態異常スナップショットなしのプレビュー行 → ダメージ増加精神なし (0.0)。
+        0.0,
     );
     Some(format!(
         "→ vs [{}] {} ({},{})  [{}] dist={}  命中:{}%  ダメージ:{}",
