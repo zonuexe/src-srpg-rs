@@ -3214,15 +3214,8 @@ impl App {
         else {
             return false;
         };
-        // 防御特性による装甲調整 (VB6 `Unit.cls:6949-6951`、`is_true_value` 経路)。
-        // 弱点 → 装甲半減 (被ダメージ増)、吸収 (かつ非有効) → 装甲無視 (arm=0)。
-        // 予測前に `def_unit.armor` を調整し、吸収は `defense_attribute_damage` が ÷2 で
-        // 回復へ反転 (装甲無視ダメージ基準)。弱点 > 吸収 の優先 (VB6 If/ElseIf)。
-        if self.weapon_hits_weakness(def_idx, &weapon.class) {
-            def_unit.armor /= 2;
-        } else if self.weapon_hits_absorb(def_idx, &weapon.class) {
-            def_unit.armor = 0;
-        }
+        // 防御特性による装甲調整 (弱点→半減 / 吸収→無視)。VB6 `Unit.cls:6949-6951`。
+        self.apply_defense_armor_mod(def_idx, &weapon.class, &mut def_unit);
         let def_hit_mod = self.database.terrain_hit_mod(terrain_id);
         let def_damage_mod = self.database.terrain_damage_mod(terrain_id);
         // Ｃ 属性武器を使った場合、charged フラグを消費 (次回攻撃前に再 Charge 必要)。
@@ -3830,7 +3823,9 @@ impl App {
             self.consume_weapon_resources(sup_idx, wi);
         }
         let def_inst = self.database.unit_instances[def_idx].clone();
-        let (def_pilot, def_unit) = self.database.effective_combat_data(def_idx)?;
+        let (def_pilot, mut def_unit) = self.database.effective_combat_data(def_idx)?;
+        // 防御特性 (弱点→装甲半減 / 吸収→無視) を援護攻撃でも一貫適用。
+        self.apply_defense_armor_mod(def_idx, &weapon.class, &mut def_unit);
         let terrain_id = self
             .database
             .map
@@ -3890,7 +3885,9 @@ impl App {
         // SP コスト消費 (= サポートアタック回数を 1 減らす)
         self.database.unit_instances[sup_idx].support_attack_remaining -= 1;
         if hit {
-            let dmg = (preview.damage as f64 * 0.75) as i64;
+            let base = (preview.damage as f64 * 0.75) as i64;
+            // 防御特性 (耐性÷2 / 無効化0 / 吸収=回復)。弱点の装甲半減は予測前に適用済み。
+            let dmg = self.defense_attribute_damage(def_idx, &weapon.class, base);
             self.database.unit_instances[def_idx].damage += dmg;
             self.push_message(format!(
                 "{} のサポートアタック [{}] → {}: {} ダメージ",
@@ -4112,9 +4109,11 @@ impl App {
         }
         // 反撃側 = defender、被弾側 = attacker。双方とも実効値込みのデータを使う。
         let (def_pilot, def_unit) = self.database.effective_combat_data(def_idx)?;
-        let (atk_pilot, atk_unit) = self.database.effective_combat_data(atk_idx)?;
+        let (atk_pilot, mut atk_unit) = self.database.effective_combat_data(atk_idx)?;
         let dist = combat::manhattan((dx, dy), target);
         let weapon = self.best_firable_weapon_in_range(def_idx, &def_unit, dist)?;
+        // 反撃の被弾側 (= 元攻撃者 atk_idx) の防御特性 (弱点→装甲半減 / 吸収→無視) を適用。
+        self.apply_defense_armor_mod(atk_idx, &weapon.class, &mut atk_unit);
         let t_id = self
             .database
             .map
@@ -4178,7 +4177,9 @@ impl App {
         let roll = (self.next_u32() % 100) as i32;
         let hit = roll < preview.hit_chance;
         let msg = if hit {
-            self.database.unit_instances[atk_idx].damage += preview.damage;
+            // 防御特性 (耐性÷2 / 無効化0 / 吸収=回復)。弱点の装甲半減は予測前に適用済み。
+            let counter_dmg = self.defense_attribute_damage(atk_idx, &weapon.class, preview.damage);
+            self.database.unit_instances[atk_idx].damage += counter_dmg;
             let remaining = atk_unit.hp - self.database.unit_instances[atk_idx].damage;
             if remaining <= 0 && self.revive_if_possible(atk_idx) {
                 format!(
@@ -4224,7 +4225,7 @@ impl App {
                 );
                 let mut m = format!(
                     "  ↩ 反撃: {} → {} [{}]: 命中 {} ダメージ (残HP {})",
-                    def_pilot.nickname, atk_pilot.nickname, weapon.name, preview.damage, remaining
+                    def_pilot.nickname, atk_pilot.nickname, weapon.name, counter_dmg, remaining
                 );
                 if !inflicted.is_empty() {
                     m.push_str(&format!(" → {}", inflicted.join("・")));
@@ -5803,6 +5804,22 @@ impl App {
         let effective = crate::feature::feature_value(&inst.active_features, "有効").unwrap_or("");
         Self::defense_attr_matches(weapon_class, absorb)
             && !Self::defense_attr_matches(weapon_class, effective)
+    }
+
+    /// 防御特性による装甲調整を予測前に `def_unit.armor` へ適用する (VB6 `Unit.cls:6949-6951`)。
+    /// 弱点 → 装甲半減 (被ダメージ増) / 吸収 (かつ非有効) → 装甲無視 (arm=0)。弱点 > 吸収 の優先。
+    /// 通常攻撃 / 援護 / 反撃の全経路で一貫適用するための共有ヘルパ。
+    fn apply_defense_armor_mod(
+        &self,
+        def_idx: usize,
+        weapon_class: &str,
+        def_unit: &mut crate::data::unit::UnitData,
+    ) {
+        if self.weapon_hits_weakness(def_idx, weapon_class) {
+            def_unit.armor /= 2;
+        } else if self.weapon_hits_absorb(def_idx, weapon_class) {
+            def_unit.armor = 0;
+        }
     }
 
     /// 特殊効果の発動確率を、対象の `耐性` / `弱点` 特殊能力で調整する
