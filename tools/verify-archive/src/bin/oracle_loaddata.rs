@@ -41,11 +41,18 @@ fn main() {
     let stdin = io::stdin();
     let mut probes: Vec<String> = Vec::new();
     let mut creates: Vec<String> = Vec::new();
-    // predicts は (predict 引数, その行が読まれた時点の地形 id) の組で保持する。
+    // predicts は (predict 引数, 地形 id, 気力スナップショット, 精神名スナップショット) の組で保持する。
     // `@terrain <id>` 以降の `@predict` に id が付き、評価時に防御側地形として用いる
     // (id<0 は中立: hit_mod=0/damage_mod=0/env=1)。C# `placeattack` の地形紐づけと対応。
-    let mut predicts: Vec<(String, i64)> = Vec::new();
+    // 気力/精神も corpus 順に累積し、各 `@predict` を読んだ時点でスナップショットして紐づける
+    // (C# 側が予測をまとめて末尾評価するため state を凍結する遅延適用方式と一致させる)。
+    type MoraleMap = std::collections::BTreeMap<String, i32>;
+    type SpiritMap = std::collections::BTreeMap<String, Vec<String>>;
+    let mut predicts: Vec<(String, i64, MoraleMap, SpiritMap)> = Vec::new();
     let mut cur_terrain: i64 = -1; // -1 = 中立
+                                   // ユニットデータ名 → 気力 (既定 100) / アクティブ精神名リスト。corpus 順に更新する。
+    let mut morale_map: MoraleMap = MoraleMap::new();
+    let mut spirit_map: SpiritMap = SpiritMap::new();
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
         if line.is_empty() || line.starts_with('#') {
@@ -57,10 +64,42 @@ fn main() {
             cur_terrain = rest.trim().parse::<i64>().unwrap_or(-1);
             continue;
         }
+        if let Some(rest) = line.strip_prefix("@morale ") {
+            // `@morale <unitName> <value>` → 以降の `@predict` でそのユニットの気力を value にする
+            // (corpus 順に累積)。C# は SetMorale で [50,150] にクランプするが、Rust 側はクランプ
+            // しない (combat::predict は受け取った気力をそのまま乗じる) — 50..150 の範囲で使えば一致。
+            let f: Vec<&str> = rest.split_whitespace().collect();
+            if f.len() >= 2 {
+                if let Ok(mv) = f[1].parse::<i32>() {
+                    morale_map.insert(f[0].to_string(), mv);
+                }
+            }
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("@spirit ") {
+            // `@spirit <unitName> <spiritName>` → 以降の `@predict` でそのユニットに精神コマンドを
+            // アクティブにする (status slice へ名前を追加)。1 ユニットに複数指定可。同名は冪等。
+            // Rust の combat::predict は精神倍率を **名前ベース** で適用する (SPDList 非参照) ため、
+            // 名前文字列を渡すだけで効く (熱血→×2 / 魂→×3 / 気合→×1.2 / 鉄壁→÷4 等)。
+            let f: Vec<&str> = rest.split_whitespace().collect();
+            if f.len() >= 2 {
+                let lst = spirit_map.entry(f[0].to_string()).or_default();
+                if !lst.iter().any(|s| s == f[1]) {
+                    lst.push(f[1].to_string());
+                }
+            }
+            continue;
+        }
         if let Some(rest) = line.strip_prefix("@predict ") {
             // `@predict <attacker> <defender> <weapon_index(1-based)> <field>`
-            // C# `placeattack` と対応。生成後にまとめて評価する。
-            predicts.push((rest.to_string(), cur_terrain));
+            // C# `placeattack` と対応。生成後にまとめて評価する。地形 id と、その時点の
+            // 気力/精神スナップショットを紐づける (後続の @morale/@spirit に影響されないよう複製)。
+            predicts.push((
+                rest.to_string(),
+                cur_terrain,
+                morale_map.clone(),
+                spirit_map.clone(),
+            ));
             continue;
         }
         if line.starts_with("@option ") {
@@ -119,9 +158,9 @@ fn main() {
         let _ = writeln!(out, "{}", app.script_var(&format!("__probe_{i}")));
     }
     // 戦闘予測 `@predict` を入力順に評価して 1 行ずつ出力する
-    // (C# `placeattack` モードと対応)。各 predict に紐づく地形 id を渡す。
-    for (pr, terrain) in &predicts {
-        let _ = writeln!(out, "{}", eval_predict(&app, pr, *terrain));
+    // (C# `placeattack` モードと対応)。各 predict に紐づく地形 id・気力・精神を渡す。
+    for (pr, terrain, morale, spirits) in &predicts {
+        let _ = writeln!(out, "{}", eval_predict(&app, pr, *terrain, morale, spirits));
     }
 }
 
@@ -132,7 +171,13 @@ fn main() {
 /// (C# 側で防御側セルに敷く地形と対応)。terrain_id < 0 は中立 (hit_mod=0/damage_mod=0/env=1)。
 /// field: 命中率 → hit_chance / ダメージ → damage / クリティカル率 → critical_chance。
 /// 引き当て失敗時は `<ERR:lookup>` (武器インデックス不正は `<ERR:weapon>`)。
-fn eval_predict(app: &App, pr: &str, terrain_id: i64) -> String {
+fn eval_predict(
+    app: &App,
+    pr: &str,
+    terrain_id: i64,
+    morale: &std::collections::BTreeMap<String, i32>,
+    spirits: &std::collections::BTreeMap<String, Vec<String>>,
+) -> String {
     let f: Vec<&str> = pr.split_whitespace().collect();
     if f.len() < 4 {
         return "<ERR:args>".to_string();
@@ -183,6 +228,13 @@ fn eval_predict(app: &App, pr: &str, terrain_id: i64) -> String {
     } else {
         (0, 0, 1)
     };
+    // 気力 (未指定は 100) と精神名スナップショットを攻撃側/防御側それぞれに渡す。
+    // C# は SetMorale で [50,150] にクランプするため corpus 側で範囲を守る。
+    let atk_morale = morale.get(aname).copied().unwrap_or(100);
+    let def_morale = morale.get(dname).copied().unwrap_or(100);
+    let empty: Vec<String> = Vec::new();
+    let atk_statuses = spirits.get(aname).unwrap_or(&empty).as_slice();
+    let def_statuses = spirits.get(dname).unwrap_or(&empty).as_slice();
     let preview = src_core::combat::predict_with_status_terrain(
         &atk_pilot,
         &atk_unit,
@@ -191,10 +243,10 @@ fn eval_predict(app: &App, pr: &str, terrain_id: i64) -> String {
         &def_unit,
         def_hit_mod,
         def_damage_mod,
-        100,
-        100,
-        &[],
-        &[],
+        atk_morale,
+        def_morale,
+        atk_statuses,
+        def_statuses,
         1,
         def_env,
     );

@@ -267,6 +267,29 @@ namespace OracleDiff
                 Console.Error.WriteLine("terrain.txt not found: " + System.IO.Path.GetFullPath(terrainPath));
             }
 
+            // sp.txt (スペシャルパワーデータ) は LoadDataDirectory が `<dir>/sp.txt` のみ見るが、本
+            // フィクスチャでは `<dir>/../system/sp.txt` に置かれるため、`@spirit` を解決するには明示
+            // ロードが要る (terrain.txt と同経路)。`MakeSpecialPowerInEffect` が付与する Condition は
+            // `IsUnderSpecialPowerEffect`/`SpecialPowerEffectLevel` で `SRC.SPDList.Item(name)` を引く
+            // ため、ここで SPDList を populate しないと付与しても効果レベル 0 (= 倍率 1.0) の no-op になる。
+            var spPath = System.IO.Path.Combine(dir, "..", "system", "sp.txt");
+            if (System.IO.File.Exists(spPath))
+            {
+                try
+                {
+                    src.SPDList.Load(spPath);
+                    Console.Error.WriteLine("sp loaded: " + System.IO.Path.GetFullPath(spPath) + " (SPDList=" + src.SPDList.Count() + ")");
+                }
+                catch (Exception e)
+                {
+                    Console.Error.WriteLine("SPDList.Load failed: " + e.Message);
+                }
+            }
+            else
+            {
+                Console.Error.WriteLine("sp.txt not found: " + System.IO.Path.GetFullPath(spPath));
+            }
+
             // map を初期化し、全セルを中立地形 (EmptyTerrain: HitMod=0/DamageMod=0) で埋める。
             // SetMapSize は末尾で GUIMap.SetMapSize を呼ぶため headless 用 no-op を渡す。
             src.Map.SetMapSize(20, 20);
@@ -279,11 +302,16 @@ namespace OracleDiff
             }
 
             var units = new Dictionary<string, Unit>();
-            // predicts は (predict 行, その行が読まれた時点の地形 id) の組で保持する。
-            // `@terrain <id>` 以降の `@predict` に id が付き、予測実行時に防御側セルへ適用する
-            // (id<0 は中立 EmptyTerrain)。これにより 1 つの corpus 内で地形を切り替えられる。
-            var predicts = new List<(string Line, int Terrain)>();
+            // predicts は (predict 行, 地形 id, ユニット別気力スナップショット, ユニット別精神名スナップ
+            // ショット) の組で保持する。気力/精神は corpus 上で `@morale`/`@spirit` により累積的に変化
+            // するが、C# は predict をまとめて末尾で評価するため、各 `@predict` を読んだ時点の状態を
+            // **スナップショット**して紐づける (terrain と同じ遅延適用方式)。
+            var predicts = new List<(string Line, int Terrain,
+                Dictionary<string, int> Morale, Dictionary<string, List<string>> Spirits)>();
             var curTerrain = -1; // -1 = 中立 (EmptyTerrain)
+            // ユニットデータ名 → 気力 (既定 100) / アクティブ精神名リスト。corpus 順に更新する。
+            var moraleMap = new Dictionary<string, int>();
+            var spiritMap = new Dictionary<string, List<string>>();
             var created = 0;
             string line;
             while ((line = Console.In.ReadLine()) != null)
@@ -344,10 +372,51 @@ namespace OracleDiff
                     }
                     continue;
                 }
+                if (line.StartsWith("@morale "))
+                {
+                    // `@morale <unitName> <value>` → 以降の `@predict` でそのユニットのメインパイロット
+                    // 気力に value を設定する (corpus 順に累積)。値は SetMorale で [MinMorale,MaxMorale]
+                    // (既定 50..150) にクランプされる点に注意。
+                    var parts = line.Substring(8)
+                        .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length >= 2 && int.TryParse(parts[1], out var mv))
+                    {
+                        moraleMap[parts[0]] = mv;
+                    }
+                    continue;
+                }
+                if (line.StartsWith("@spirit "))
+                {
+                    // `@spirit <unitName> <spiritName>` → 以降の `@predict` でそのユニットに精神コマンド
+                    // <spiritName> をアクティブにする (Unit.MakeSpecialPowerInEffect、SP消費/GUI なし)。
+                    // 1 ユニットに複数指定可。同名は冪等。
+                    var parts = line.Substring(8)
+                        .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length >= 2)
+                    {
+                        if (!spiritMap.TryGetValue(parts[0], out var lst))
+                        {
+                            lst = new List<string>();
+                            spiritMap[parts[0]] = lst;
+                        }
+                        if (!lst.Contains(parts[1]))
+                        {
+                            lst.Add(parts[1]);
+                        }
+                    }
+                    continue;
+                }
                 if (line.StartsWith("@predict "))
                 {
-                    // 現在アクティブな地形 id (@terrain で設定) を予測行に紐づける。
-                    predicts.Add((line, curTerrain));
+                    // 現在アクティブな地形 id (@terrain で設定) と、気力/精神の現在スナップショットを
+                    // 予測行に紐づける (深いコピー: 後続の @morale/@spirit に影響されないよう複製)。
+                    var moraleSnap = new Dictionary<string, int>(moraleMap);
+                    var spiritSnap = new Dictionary<string, List<string>>();
+                    foreach (var kv in spiritMap)
+                    {
+                        spiritSnap[kv.Key] = new List<string>(kv.Value);
+                    }
+                    predicts.Add((line, curTerrain, moraleSnap, spiritSnap));
                     continue;
                 }
                 if (line.StartsWith("@option "))
@@ -373,7 +442,7 @@ namespace OracleDiff
             }
             Console.Error.WriteLine("created=" + created + " UList=" + src.UList.Count());
 
-            foreach (var (pr, terrainId) in predicts)
+            foreach (var (pr, terrainId, moraleSnap, spiritSnap) in predicts)
             {
                 // `@predict <attacker> <defender> <weapon_index> <field>`
                 var parts = pr.Substring(9)
@@ -392,6 +461,34 @@ namespace OracleDiff
                 {
                     Console.WriteLine("<ERR:lookup>");
                     continue;
+                }
+                // この予測のスナップショットへ攻撃側/防御側の状態を確定させる。各 predict を独立に
+                // 扱うため、関与する全ユニットの気力を snapshot 値 (未指定は 100) へ、精神を snapshot
+                // のリストへ「リセット → 再付与」する (後続 predict の累積が前の predict に漏れない)。
+                // MoraleMod は除外して気力をそのまま倍率に乗せるため 0 に固定する
+                // (Damage は (Morale + MoraleMod)/100 を用いる: UnitWeapon.cs:259-267 / 2953-2961)。
+                foreach (var kv in units)
+                {
+                    // 辞書キー (= @unit/@morale/@spirit が使うユニットデータ名) で snapshot を引く。
+                    var uname = kv.Key;
+                    var u = kv.Value;
+                    var p = u.MainPilot();
+                    if (p == null)
+                    {
+                        continue;
+                    }
+                    p.MoraleMod = 0;
+                    p.Morale = moraleSnap.TryGetValue(uname, out var mv) ? mv : 100;
+                    u.RemoveAllSpecialPowerInEffect();
+                    if (spiritSnap.TryGetValue(uname, out var spirits))
+                    {
+                        foreach (var sp in spirits)
+                        {
+                            // Unit へ精神を付与 (SP消費/GUI なし、データ駆動)。SPDList 未定義名は
+                            // 効果レベル 0 → 倍率 1.0 の no-op になる (上の SPDList ロードで回避)。
+                            u.MakeSpecialPowerInEffect(sp);
+                        }
+                    }
                 }
                 // 防御側が立つセルの地形を @terrain で指定された id に設定する。
                 // HitProbability/Damage は `Map.Terrain(defender.x, defender.y)` を毎回 live に

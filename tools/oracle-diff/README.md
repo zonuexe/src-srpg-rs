@@ -203,6 +203,20 @@ diff <(sort /tmp/cs.txt) <(sort /tmp/rs.txt)
 > (Rust は ceil・C# は 2倍スケールで半コスト保持。`CLAUDE.md`「移動範囲計算は整数に統一」)。
 > 飛行/水中/宇宙移動の**特殊コストのスケール移植バグ**は別途是正対象 (下記)。
 
+## 気力/精神モード (placeattack + @morale/@spirit) — 気力スケーリングと精神倍率の差分
+
+`@morale <unit> <value>` でパイロット気力を、`@spirit <unit> <name>` で精神/状態 (熱血/魂/鉄壁 等) を
+設定してダメージを突合する。C# は `pilot.Morale=`/`unit.MakeSpecialPowerInEffect(name)`＋`SPDList.Load(system/sp.txt)`、
+Rust は `predict_with_status_terrain` の morale 引数と status スライスへ配線。コーパス [`combat_morale.txt`](combat_morale.txt)。
+
+> **判明した乖離（設計判断待ち・アーキテクチャ級）**:
+> 1. **気力スケーリング自体は一致** (×気力/100 を両エンジン整数で適用、120/50 等で一致)。
+> 2. **`全ユニット共通` 能力継承が Rust 未実装** → 共通定義の `ブースト=マジンパワー` (高気力 130↑ でダメージ ×1.25) を
+>    全ユニットが C# では継承するが Rust では無効。気力 150 でダメージが ×1.25 乖離 (旧「継承は機能影響無」は誤りと判明)。
+> 3. **精神の与ダメージ倍率が Rust ハードコード / SRC は sp.txt データ駆動**。本 fixture の sp.txt: 熱血=`ダメージ増加Lv10`(×2.0,一致)・
+>    魂=`ダメージ増加Lv15`(C#×2.5 / Rust ハードコード×3)・気合=`気力増加Lv1`(C# 与ダメ非増 / Rust ×1.2)。さらに C# は複数
+>    `ダメージ増加` を **MaxDbl で非加算** (大きい方)・Rust は積で**加算**。⇒ 精神倍率の data 駆動化＋ MaxDbl 化は要設計判断。
+
 ## 拡張
 
 同じ machinery を**ゲーム状態**の diff へ拡張できる: 実シナリオを両エンジンで駆動し、
