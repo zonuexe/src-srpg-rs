@@ -3274,8 +3274,11 @@ impl App {
             self.database.unit_instances[atk_idx].y,
         );
         let def_env = self.terrain_env_at(def_inst.x, def_inst.y);
-        // 攻撃側 ダメージ増加 精神効果レベルを sp.txt から解決 (シナリオ固有値を反映)。
-        let atk_dmg_boost = self.database.sp_damage_increase_level(&atk_statuses);
+        // 与/被ダメージ修正 (ダメージ増加/被ダメージ増加/ダメージ低下/被ダメージ低下) を
+        // 攻撃側/防御側それぞれの精神効果から sp.txt 経由で解決 (シナリオ固有値を反映)。
+        let dmg_levels = self
+            .database
+            .damage_spirit_levels(&atk_statuses, &def_statuses);
         let preview = combat::predict_with_status_terrain(
             &atk_pilot,
             &atk_unit,
@@ -3290,7 +3293,7 @@ impl App {
             &def_statuses,
             atk_env,
             def_env,
-            atk_dmg_boost,
+            dmg_levels,
         );
 
         // 命中判定。回避を選んだ防御側は命中率が半減する (SRC 反撃モード)。
@@ -3812,8 +3815,10 @@ impl App {
             self.database.unit_instances[sup_idx].y,
         );
         let def_env = self.terrain_env_at(def_inst.x, def_inst.y);
-        // 援護攻撃側 ダメージ増加 精神効果レベルを sp.txt から解決。
-        let sup_dmg_boost = self.database.sp_damage_increase_level(&sup_statuses);
+        // 援護攻撃側/防御側の与・被ダメージ修正を sp.txt から解決。
+        let dmg_levels = self
+            .database
+            .damage_spirit_levels(&sup_statuses, &def_statuses);
         let preview = combat::predict_with_status_terrain(
             &sup_pilot,
             &sup_unit,
@@ -3828,7 +3833,7 @@ impl App {
             &def_statuses,
             sup_env,
             def_env,
-            sup_dmg_boost,
+            dmg_levels,
         );
         let roll = (self.next_u32() % 100) as i32;
         let hit = roll < preview.hit_chance;
@@ -4087,10 +4092,10 @@ impl App {
         // 反撃側 = defender (位置 dx,dy)、被弾側 = attacker (位置 target)。
         let counter_atk_env = self.terrain_env_at(dx, dy);
         let counter_def_env = self.terrain_env_at(target.0, target.1);
-        // 反撃側 ダメージ増加 精神効果レベルを sp.txt から解決。
-        let counter_atk_dmg_boost = self
+        // 反撃側 (= 攻撃側) / 被弾側 (= 防御側) の与・被ダメージ修正を sp.txt から解決。
+        let dmg_levels = self
             .database
-            .sp_damage_increase_level(&counter_atk_statuses);
+            .damage_spirit_levels(&counter_atk_statuses, &counter_def_statuses);
         let preview = combat::predict_with_status_terrain(
             &def_pilot,
             &def_unit,
@@ -4105,7 +4110,7 @@ impl App {
             &counter_def_statuses,
             counter_atk_env,
             counter_def_env,
-            counter_atk_dmg_boost,
+            dmg_levels,
         );
         // 反撃武器の 1-based インデックスを取得
         let weapon_num = def_unit
@@ -16229,8 +16234,8 @@ Return
                 &[],
                 atk_env,
                 def_env,
-                // 必中 はダメージ増加効果を持たない → 0.0。
-                0.0,
+                // 必中 / 防御側無印 ＝ 与・被ダメージ修正なし。
+                crate::combat::DamageSpiritLevels::default(),
             )
             .damage
         };
@@ -16330,8 +16335,8 @@ Return
                 &[],
                 atk_env,
                 def_env,
-                // 必中 はダメージ増加効果を持たない → 0.0。
-                0.0,
+                // 必中 / 防御側無印 ＝ 与・被ダメージ修正なし。
+                crate::combat::DamageSpiritLevels::default(),
             )
             .damage
         };

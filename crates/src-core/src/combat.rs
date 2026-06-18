@@ -53,28 +53,84 @@ pub enum DefenseMode {
     Shield { chance: i32 },
 }
 
-/// 精神名スライスから `ダメージ増加` 効果レベルの **最大値** を既定テーブルで解決する。
+/// 精神コマンドによる与/被ダメージ修正のレベル束 (C# `UnitWeapon.cs` の up/down-mod 用)。
+///
+/// 各フィールドは対応する効果タイプの **最大値** レベル (C# `Unit.SpecialPowerEffectLevel`
+/// ＝影響下スペシャルパワーの効果レベルの最大値。異なる精神間で加算はしない)。
+/// `atk_increase` / `atk_decrease_dealt` は **攻撃側**、`def_increase_taken` /
+/// `def_decrease_taken` は **防御側** の active 効果から解決する。
+/// [`predict_with_status_terrain`] は C# 準拠で次を適用する:
+/// up = `max(1, 1 + 0.1*atk_increase) + 0.1*def_increase_taken`、
+/// down = `1 - 0.1*atk_decrease_dealt - 0.1*def_decrease_taken`。
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct DamageSpiritLevels {
+    /// 攻撃側 `ダメージ増加` (熱血/魂/気合 等)。MaxDbl 非加算で与ダメージ ×(1+0.1×Lv)。
+    pub atk_increase: f64,
+    /// 防御側 `被ダメージ増加` (分析/偵察 等)。up-mod へ +0.1×Lv で加算。
+    pub def_increase_taken: f64,
+    /// 攻撃側 `ダメージ低下`。down-mod へ -0.1×Lv で減算。
+    pub atk_decrease_dealt: f64,
+    /// 防御側 `被ダメージ低下` (鉄壁=7.5/不屈=9/無敵=10 等)。down-mod へ -0.1×Lv。
+    pub def_decrease_taken: f64,
+}
+
+/// 単一精神名から効果タイプ `effect_type` の既定レベルを返す。sp.txt 未読込経路用。
+///
+/// 実 SRC 標準データ (スパロボ戦記 system/sp.txt) 準拠の既定テーブル:
+/// - `ダメージ増加`: 熱血=10 / 魂=20 / 気合=0 (気合 は気力増加でダメージ増加なし)。
+/// - `被ダメージ低下`: 鉄壁=7.5 (1-0.75=×0.25=÷4) / 不屈=9 (1-0.9=×0.1) / 無敵=10 (×0)。
+/// - `被ダメージ増加`: 分析/偵察=1。
+/// - `ダメージ低下`: 分析/偵察=1。
+///
+/// 該当しなければ 0.0。シナリオ sp.txt 読込済みの実プレイ経路では DB 値
+/// ([`crate::db::GameDatabase::sp_effect_level`]) が優先される (本テーブルは合成
+/// テスト経路の互換維持用)。
+pub fn default_sp_effect_level_single(name: &str, effect_type: &str) -> f64 {
+    let has = |needle: &str| name.contains(needle);
+    match effect_type {
+        // ダメージ増加: 熱血=10 / 魂=20 / 気合=0 (気合 は気力増加でありダメージ増加なし)。
+        "ダメージ増加" if has("熱血") => 10.0,
+        "ダメージ増加" if has("魂") => 20.0,
+        // 被ダメージ低下: 鉄壁=7.5 (÷4) / 不屈=9 (×0.1) / 無敵=10 (×0)。
+        "被ダメージ低下" if has("鉄壁") => 7.5,
+        "被ダメージ低下" if has("不屈") => 9.0,
+        "被ダメージ低下" if has("無敵") => 10.0,
+        // 被ダメージ増加 (防御側) / ダメージ低下 (攻撃側): 分析/偵察=1。
+        "被ダメージ増加" | "ダメージ低下" if has("分析") || has("偵察") => 1.0,
+        _ => 0.0,
+    }
+}
+
+/// 精神名スライスから効果タイプ `effect_type` の **最大値** レベルを既定テーブルで解決する。
 ///
 /// sp.txt を読み込まない経路 (`predict` / `predict_with_status` の薄いラッパや、
-/// [`crate::db::GameDatabase::sp_damage_increase_level`] の DB 未定義フォールバック) 用。
-/// 既定値は実 SRC 標準データ準拠: 熱血=10 (×2.0)、魂=20 (×3.0)、気合=0 (気力増加であり
-/// ダメージ増加効果なし → ×1.0)。C# `Unit.SpecialPowerEffectLevel` と同じく加算ではなく
-/// 最大値勝ち。該当なしは 0.0。シナリオ sp.txt が読み込まれている実プレイ経路では
-/// DB 値が優先される (このテーブルは合成テスト経路の互換維持用)。
-pub fn default_damage_boost_level(statuses: &[String]) -> f64 {
+/// [`crate::db::GameDatabase::sp_effect_level`] の DB 未定義フォールバック) 用。
+/// C# `Unit.SpecialPowerEffectLevel` と同じく加算ではなく最大値勝ち。該当なしは 0.0。
+pub fn default_sp_effect_level(statuses: &[String], effect_type: &str) -> f64 {
     statuses
         .iter()
-        .map(|s| {
-            if s.contains("熱血") {
-                10.0
-            } else if s.contains("魂") {
-                20.0
-            } else {
-                // 気合 は気力増加効果でありダメージ増加なし → 0.0。
-                0.0
-            }
-        })
+        .map(|s| default_sp_effect_level_single(s, effect_type))
         .fold(0.0f64, f64::max)
+}
+
+/// 精神名スライスから `ダメージ増加` 効果レベルの最大値を既定テーブルで解決する
+/// (後方互換ラッパ)。[`default_sp_effect_level`] に `"ダメージ増加"` を渡すのと同じ。
+pub fn default_damage_boost_level(statuses: &[String]) -> f64 {
+    default_sp_effect_level(statuses, "ダメージ増加")
+}
+
+/// 攻撃側 `atk_statuses` / 防御側 `def_statuses` の精神名スライスから既定テーブルで
+/// 4 種のダメージ修正レベル束を解決する (sp.txt 未読込経路用)。
+pub fn default_damage_spirit_levels(
+    atk_statuses: &[String],
+    def_statuses: &[String],
+) -> DamageSpiritLevels {
+    DamageSpiritLevels {
+        atk_increase: default_sp_effect_level(atk_statuses, "ダメージ増加"),
+        def_increase_taken: default_sp_effect_level(def_statuses, "被ダメージ増加"),
+        atk_decrease_dealt: default_sp_effect_level(atk_statuses, "ダメージ低下"),
+        def_decrease_taken: default_sp_effect_level(def_statuses, "被ダメージ低下"),
+    }
 }
 
 /// 4 隣接マスのマンハッタン距離。
@@ -192,14 +248,15 @@ fn terrain_adaptation_mults(
 /// | --- | --- |
 /// | `必中` (attacker) | 命中 100 固定 |
 /// | `集中` (attacker) | 命中 +30 |
-/// | `ダメージ増加` (attacker) | ダメージ ×(1 + 0.1×Lv)。Lv は sp.txt 由来 (熱血/魂/気合 等)。`atk_damage_boost_level` で受領 |
+/// | `ダメージ増加` (attacker) | ダメージ ×(1 + 0.1×Lv)。Lv は sp.txt 由来 (熱血/魂/気合 等)。`dmg_levels.atk_increase` で受領 |
+/// | `被ダメージ増加` (defender) | up-mod へ +0.1×Lv (加算、分析/偵察 等)。`dmg_levels.def_increase_taken` |
+/// | `ダメージ低下` (attacker) | down-mod へ -0.1×Lv (分析/偵察 等)。`dmg_levels.atk_decrease_dealt` |
+/// | `被ダメージ低下` (defender) | down-mod へ -0.1×Lv。鉄壁=7.5(÷4)/不屈=9(×0.1)/無敵=10(×0)。`dmg_levels.def_decrease_taken` |
 /// | `捨て身` (attacker) | ダメージ 3 倍 |
 /// | `捨て身` (defender) | 無防備 = 命中 100 |
 /// | `直撃` (attacker) | 防御側 `分身`/`バリア` を無効化 |
 /// | `集中` (defender) | 回避 +30 (= 攻撃側命中 -30) |
 /// | `ひらめき` (defender) | 命中 0 |
-/// | `不屈` (defender) | ダメージ 1 |
-/// | `鉄壁` (defender) | ダメージ 1/4 |
 /// | `毒` (defender) | 命中 +10 |
 /// | `麻痺` / `睡眠` / `凍結` (defender) | 命中 100、ダメージ 1.5 倍 |
 /// | `石化` / `行動不能` (defender) | 命中 100 |
@@ -221,8 +278,8 @@ pub fn predict_with_status(
     def_statuses: &[String],
 ) -> CombatPreview {
     // 地形情報なし版 (地形適応 ×1.0)。地形適応込みは predict_with_status_terrain。
-    // DB を持たないラッパ経路では既定テーブルでダメージ増加レベルを解決する。
-    let atk_damage_boost_level = default_damage_boost_level(atk_statuses);
+    // DB を持たないラッパ経路では既定テーブルで 4 種のダメージ修正レベルを解決する。
+    let dmg_levels = default_damage_spirit_levels(atk_statuses, def_statuses);
     predict_with_status_terrain(
         atk_pilot,
         atk_unit,
@@ -237,18 +294,20 @@ pub fn predict_with_status(
         def_statuses,
         -1,
         -1,
-        atk_damage_boost_level,
+        dmg_levels,
     )
 }
 
 /// [`predict_with_status`] の地形適応対応版。`atk_env`/`def_env` は地形適応の
 /// 環境インデックス (0=空/1=陸/2=海/3=宇、[`terrain_env`] で算出)。負なら適応 ×1.0。
 ///
-/// `atk_damage_boost_level` は攻撃側 `ダメージ増加` 精神効果レベルの最大値
-/// (C# `Unit.SpecialPowerEffectLevel("ダメージ増加")`)。与ダメージに
-/// `1 + 0.1 * level` を乗じる (`UnitWeapon.cs` の `MaxDbl` 形)。caller は
-/// シナリオ sp.txt から ([`crate::db::GameDatabase::sp_damage_increase_level`])、
-/// または既定テーブル ([`default_damage_boost_level`]) で解決して渡す。
+/// `dmg_levels` は精神コマンドによる 4 種のダメージ修正レベル束 ([`DamageSpiritLevels`])。
+/// C# `UnitWeapon.cs` 準拠で与ダメージへ次を適用する:
+/// up = `max(1, 1 + 0.1*atk_increase) + 0.1*def_increase_taken`、
+/// down = `1 - 0.1*atk_decrease_dealt - 0.1*def_decrease_taken`。各レベルは
+/// シナリオ sp.txt から ([`crate::db::GameDatabase::sp_effect_level`])、または既定テーブル
+/// ([`default_damage_spirit_levels`]) で解決して渡す。鉄壁 (被ダメージ低下Lv7.5→÷4) /
+/// 不屈 (被ダメージ低下Lv9→×0.1) もこの down-mod 経由で処理する (旧来のハードコードを置換)。
 #[allow(clippy::too_many_arguments)]
 pub fn predict_with_status_terrain(
     atk_pilot: &PilotData,
@@ -264,7 +323,7 @@ pub fn predict_with_status_terrain(
     def_statuses: &[String],
     atk_env: i32,
     def_env: i32,
-    atk_damage_boost_level: f64,
+    dmg_levels: DamageSpiritLevels,
 ) -> CombatPreview {
     let has = |s: &[String], name: &str| s.iter().any(|t| t.contains(name));
 
@@ -401,10 +460,15 @@ pub fn predict_with_status_terrain(
 
     let mut raw_dmg = ((atk_power - def_power) as f64 * terrain_dmg_mult) as i64;
 
-    // 攻撃側ダメージ増加 (精神コマンド): SRC `UnitWeapon.cs` MaxDbl(dmg_mod, 1 + 0.1*SpecialPowerEffectLevel("ダメージ増加"))。
-    // 倍率は sp.txt データ駆動 (熱血/魂/気合 のレベルは caller が DB から解決して渡す)。非加算 (最大値勝ち)。
-    if atk_damage_boost_level > 0.0 {
-        raw_dmg = (raw_dmg as f64 * (1.0 + 0.1 * atk_damage_boost_level)) as i64;
+    // 精神コマンドによるダメージ増加 (up-mod): SRC `UnitWeapon.cs`。
+    //   dmg_mod = MaxDbl(1, 1 + 0.1*atk.SpecialPowerEffectLevel("ダメージ増加"))   ← 攻撃側 (非加算)
+    //           + 0.1*def.SpecialPowerEffectLevel("被ダメージ増加")                ← 防御側 (加算)
+    // 倍率は sp.txt データ駆動 (caller が DB から解決して渡す)。常に乗算する
+    // (1.0 倍でも構わない) ことで C# のキャスト切り捨て挙動と一致させる。
+    {
+        let up_mod =
+            (1.0 + 0.1 * dmg_levels.atk_increase).max(1.0) + 0.1 * dmg_levels.def_increase_taken;
+        raw_dmg = (raw_dmg as f64 * up_mod) as i64;
     }
     // 捨て身: 与ダメージ 3 倍 (代償として防御時 無防備 = 上の命中 100)。
     if has(atk_statuses, "捨て身") {
@@ -412,7 +476,7 @@ pub fn predict_with_status_terrain(
     }
     // 攻撃力ＵＰ / ＤＯＷＮ (SetStatus / 特殊効果攻撃属性 低攻): 与ダメージ ×1.25 / ×0.75。
     // ダメージ増加系スペシャルパワー (熱血/魂 等) がかかっている場合はそちらが優先 (重複させない)。
-    if has(atk_statuses, "攻撃力ＵＰ") && atk_damage_boost_level <= 0.0 {
+    if has(atk_statuses, "攻撃力ＵＰ") && dmg_levels.atk_increase <= 0.0 {
         raw_dmg = (raw_dmg as f64 * 1.25) as i64;
     }
     if has(atk_statuses, "攻撃力ＤＯＷＮ") {
@@ -514,25 +578,33 @@ pub fn predict_with_status_terrain(
     if has(def_statuses, "麻痺") || has(def_statuses, "凍結") || has(def_statuses, "睡眠") {
         raw_dmg = (raw_dmg as f64 * 1.5) as i64;
     }
-    if has(def_statuses, "鉄壁") {
-        raw_dmg /= 4;
+    // 精神コマンドによるダメージ低下 (down-mod): SRC `UnitWeapon.cs`。
+    //   dmg_mod = 1 - 0.1*atk.SpecialPowerEffectLevel("ダメージ低下")        ← 攻撃側
+    //               - 0.1*def.SpecialPowerEffectLevel("被ダメージ低下")      ← 防御側
+    // 鉄壁 (被ダメージ低下Lv7.5→×0.25=÷4) / 不屈 (被ダメージ低下Lv9→×0.1) /
+    // 無敵 (Lv10→×0) はこの経路で処理する (旧来の `鉄壁→/4`・`不屈→min(1)` ハードコードを置換)。
+    // 倍率は最低ダメージ (max(10)) の **前** に適用する (C# も同順)。倍率が負なら 0 へクランプ。
+    {
+        let down_mod =
+            (1.0 - 0.1 * dmg_levels.atk_decrease_dealt - 0.1 * dmg_levels.def_decrease_taken)
+                .max(0.0);
+        raw_dmg = (raw_dmg as f64 * down_mod) as i64;
     }
     // バリア: 攻撃側 `直撃` で無効化 (シールド防御の無効化)。`バリア中和` 状態
     // (特殊効果攻撃属性 中) の防御側はバリア / フィールドが無効化される。
+    // 注: バリア は強度吸収型のシールド防御 (DefenseMode::Barrier) であり sp.txt の
+    // 被ダメージ低下 効果ではないため、down-mod とは別経路 (÷2 近似) で扱う。
     if has(def_statuses, "バリア") && !has(atk_statuses, "直撃") && !has(def_statuses, "バリア中和")
     {
         raw_dmg /= 2;
     }
 
     // 最低ダメージは 10 (SRC `Unit.cls:7460-7474` / C# `UnitWeapon.cs:3567`)。
-    // 全ての減算・減衰 (バリア/鉄壁) の後に適用する。原典はオプション
+    // 全ての減算・減衰 (バリア/被ダメージ低下) の後に適用する。原典はオプション
     // 「ダメージ下限解除」で 0・「ダメージ下限１」で 1 へ下げられるが既定は 10
     // (両オプションは未モデル＝既定 10)。完全耐性 (防御特性で 100% カット) の場合は
     // 下限を適用しない (dmg_mod >= 100) が、その分岐は app.rs 側の無効化処理が担う。
-    let mut damage = raw_dmg.max(10);
-    if has(def_statuses, "不屈") {
-        damage = damage.min(1);
-    }
+    let damage = raw_dmg.max(10);
 
     let critical_chance = critical_probability(atk_pilot, def_pilot, weapon, def_statuses);
 
@@ -1956,7 +2028,7 @@ mod tests {
             &[],
             1,
             1,
-            0.0,
+            DamageSpiritLevels::default(),
         );
         assert_eq!(base.damage, 1250, "適応なし: 2000 - 750");
         assert_eq!(adapted.damage, 1500, "適応A: 2000×1.2 - 750×1.2");
@@ -2270,7 +2342,144 @@ mod tests {
             &[],
             &["鉄壁".to_string()],
         );
+        // 鉄壁 = 被ダメージ低下Lv7.5 → down-mod 1-0.75 = ×0.25 = ÷4 (データ駆動 down-mod 経由)。
         assert_eq!(with_teppeki.damage, base.damage / 4);
+    }
+
+    #[test]
+    fn status_fukutsu_tenths_damage_then_floor() {
+        // 不屈 = 被ダメージ低下Lv9 → down-mod 1-0.9 = ×0.1。旧実装は damage.min(1) で
+        // 「→1」だったが、C# 準拠では ×0.1 後に最低ダメージ 10 の床が効く。
+        // base=800 → ×0.1。down_mod = 1.0 - 0.1*9.0 = 0.09999999999999998 (倍精度浮動小数)。
+        // 800 × 0.0999... = 79.99... → (i64 へ切り捨て) = 79。C# も同じ double 演算・(int) キャストで
+        // 79 を返す (床 10 は無関係)。旧来は 1 になっていた → 真の挙動は 79。
+        let base = predict_with_status(
+            &p(0, 0, 100),
+            &u(0, vec![]),
+            &weapon(800, 1, 1, 0),
+            &p(0, 0, 0),
+            &u(0, vec![]),
+            0,
+            0,
+            100,
+            100,
+            &[],
+            &[],
+        );
+        let with_fukutsu = predict_with_status(
+            &p(0, 0, 100),
+            &u(0, vec![]),
+            &weapon(800, 1, 1, 0),
+            &p(0, 0, 0),
+            &u(0, vec![]),
+            0,
+            0,
+            100,
+            100,
+            &[],
+            &["不屈".to_string()],
+        );
+        assert_eq!(base.damage, 800);
+        // ×0.1 (倍精度) → 79 (旧実装の 1 ではない)。
+        assert_eq!(
+            with_fukutsu.damage, 79,
+            "不屈 = 被ダメージ低下Lv9 → ×0.1 (倍精度 79)"
+        );
+    }
+
+    #[test]
+    fn status_fukutsu_small_damage_hits_floor() {
+        // 小ダメージで 不屈 (×0.1) が床 10 を下回る場合: base=50 → ×0.1 = 5 → floor 10。
+        let with_fukutsu = predict_with_status(
+            &p(0, 0, 100),
+            &u(0, vec![]),
+            &weapon(50, 1, 1, 0),
+            &p(0, 0, 0),
+            &u(0, vec![]),
+            0,
+            0,
+            100,
+            100,
+            &[],
+            &["不屈".to_string()],
+        );
+        assert_eq!(with_fukutsu.damage, 10, "5 → 最低ダメージ床 10");
+    }
+
+    #[test]
+    fn status_def_higaidamage_increase_adds_to_up_mod() {
+        // 防御側 被ダメージ増加Lv1 (分析/偵察) → up-mod へ +0.1 = ×1.1。
+        let base = predict_with_status(
+            &p(0, 0, 100),
+            &u(0, vec![]),
+            &weapon(1000, 1, 1, 0),
+            &p(0, 0, 0),
+            &u(0, vec![]),
+            0,
+            0,
+            100,
+            100,
+            &[],
+            &[],
+        );
+        let with_analysis = predict_with_status(
+            &p(0, 0, 100),
+            &u(0, vec![]),
+            &weapon(1000, 1, 1, 0),
+            &p(0, 0, 0),
+            &u(0, vec![]),
+            0,
+            0,
+            100,
+            100,
+            &[],
+            &["分析".to_string()],
+        );
+        assert_eq!(base.damage, 1000);
+        // 分析 = ダメージ低下Lv1 (攻撃側効果 → 防御側付与なので適用なし) +
+        //        被ダメージ増加Lv1 (防御側効果 → up-mod +0.1 = ×1.1)。1000 × 1.1 = 1100。
+        assert_eq!(
+            with_analysis.damage, 1100,
+            "防御側 被ダメージ増加Lv1 → ×1.1"
+        );
+    }
+
+    #[test]
+    fn status_atk_damage_decrease_subtracts_from_down_mod() {
+        // 攻撃側 ダメージ低下Lv1 (分析/偵察) → down-mod へ -0.1 = ×0.9。
+        let with_decrease = predict_with_status(
+            &p(0, 0, 100),
+            &u(0, vec![]),
+            &weapon(1000, 1, 1, 0),
+            &p(0, 0, 0),
+            &u(0, vec![]),
+            0,
+            0,
+            100,
+            100,
+            &["分析".to_string()],
+            &[],
+        );
+        // 攻撃側 分析: ダメージ低下Lv1 → down-mod ×0.9 (被ダメージ増加 は防御側効果なので攻撃側付与では効かない)。
+        assert_eq!(with_decrease.damage, 900, "攻撃側 ダメージ低下Lv1 → ×0.9");
+    }
+
+    #[test]
+    fn damage_spirit_levels_default_table() {
+        let s = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<String>>();
+        // 攻撃側 熱血 + 防御側 鉄壁。
+        let lv = default_damage_spirit_levels(&s(&["熱血"]), &s(&["鉄壁"]));
+        assert_eq!(lv.atk_increase, 10.0);
+        assert_eq!(lv.def_decrease_taken, 7.5);
+        assert_eq!(lv.def_increase_taken, 0.0);
+        assert_eq!(lv.atk_decrease_dealt, 0.0);
+        // 防御側 不屈 → 被ダメージ低下Lv9。
+        let lv = default_damage_spirit_levels(&[], &s(&["不屈"]));
+        assert_eq!(lv.def_decrease_taken, 9.0);
+        // 分析 は攻撃側 ダメージ低下Lv1 / 防御側 被ダメージ増加Lv1 の両効果を持つ。
+        let lv = default_damage_spirit_levels(&s(&["分析"]), &s(&["分析"]));
+        assert_eq!(lv.atk_decrease_dealt, 1.0);
+        assert_eq!(lv.def_increase_taken, 1.0);
     }
 
     #[test]

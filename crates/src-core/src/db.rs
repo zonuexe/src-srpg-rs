@@ -370,35 +370,53 @@ impl GameDatabase {
         }
     }
 
-    /// 攻撃側にかかっている精神コマンド (`active` = 精神名スナップショット) の
-    /// `ダメージ増加` 効果レベルの **最大値** を返す。元: C# `Unit.SpecialPowerEffectLevel`
+    /// かかっている精神コマンド (`active` = 精神名スナップショット) の効果タイプ
+    /// `effect_type` のレベルの **最大値** を返す。元: C# `Unit.SpecialPowerEffectLevel`
     /// (`Unit.sp.cs`) ＝ 影響下の各スペシャルパワーの効果レベルの最大値
-    /// (加算ではなく最大値勝ち)。caller はこの値を `combat::predict_with_status_terrain`
-    /// の `atk_damage_boost_level` へ渡す。
+    /// (異なる精神間で加算はせず最大値勝ち)。
     ///
-    /// 各精神名は `self.special_powers` から引き、その `effects` 内の
-    /// `ダメージ増加` レベルを参照する。ロード済み DB に存在しない精神名 (sp.txt 未読込の
-    /// 合成テスト経路等) は既定テーブル ([`combat::default_damage_boost_level`] と同一値:
-    /// 熱血=10 / 魂=20 / 気合=0) でフォールバックし、標準挙動を維持する。
-    /// 該当効果が一つも無ければ 0.0。
-    pub fn sp_damage_increase_level(&self, active: &[String]) -> f64 {
+    /// 各精神名は `self.special_powers` から引き、その `effects` 内の `effect_type`
+    /// レベルを参照する。ロード済み DB に存在しない精神名 (sp.txt 未読込の合成テスト
+    /// 経路等) は既定テーブル ([`combat::default_sp_effect_level_single`]) でフォールバック
+    /// する。該当効果が一つも無ければ 0.0。
+    ///
+    /// caller は `ダメージ増加` (攻撃側) / `被ダメージ増加` (防御側) / `ダメージ低下`
+    /// (攻撃側) / `被ダメージ低下` (防御側) を解決して
+    /// [`combat::DamageSpiritLevels`] を組み立て、`predict_with_status_terrain` へ渡す。
+    pub fn sp_effect_level(&self, active: &[String], effect_type: &str) -> f64 {
         let mut max_lv = 0.0f64;
         for name in active {
             let lv = match self.special_powers.iter().find(|s| &s.name == name) {
                 Some(spd) => spd
                     .effects
                     .iter()
-                    .filter(|(etype, _)| etype == "ダメージ増加")
+                    .filter(|(etype, _)| etype == effect_type)
                     .map(|(_, lv)| *lv)
                     .fold(0.0f64, f64::max),
                 // DB 未定義: 既定テーブルへフォールバック (単一名分)。
-                None => crate::combat::default_damage_boost_level(std::slice::from_ref(name)),
+                None => crate::combat::default_sp_effect_level_single(name, effect_type),
             };
             if lv > max_lv {
                 max_lv = lv;
             }
         }
         max_lv
+    }
+
+    /// 攻撃側 `atk` / 防御側 `def` の精神名スナップショットから、与/被ダメージ修正の
+    /// 4 種レベル束 ([`combat::DamageSpiritLevels`]) を解決する。caller は結果を
+    /// `combat::predict_with_status_terrain` へ渡す。
+    pub fn damage_spirit_levels(
+        &self,
+        atk: &[String],
+        def: &[String],
+    ) -> crate::combat::DamageSpiritLevels {
+        crate::combat::DamageSpiritLevels {
+            atk_increase: self.sp_effect_level(atk, "ダメージ増加"),
+            def_increase_taken: self.sp_effect_level(def, "被ダメージ増加"),
+            atk_decrease_dealt: self.sp_effect_level(atk, "ダメージ低下"),
+            def_decrease_taken: self.sp_effect_level(def, "被ダメージ低下"),
+        }
     }
 
     /// パイロット定義を加法的に取り込む。元 `PDList.Load` 相当。複数の

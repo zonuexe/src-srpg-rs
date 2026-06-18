@@ -79,9 +79,11 @@ fn main() {
         if let Some(rest) = line.strip_prefix("@spirit ") {
             // `@spirit <unitName> <spiritName>` → 以降の `@predict` でそのユニットに精神コマンドを
             // アクティブにする (status slice へ名前を追加)。1 ユニットに複数指定可。同名は冪等。
-            // 攻撃側 ダメージ増加 倍率は `eval_predict` が sp.txt から `sp_damage_increase_level`
-            // で解決する (C# `SpecialPowerEffectLevel("ダメージ増加")` 準拠: 最大値勝ち)。
-            // その他 (鉄壁/不屈/集中 等) は combat 側が名前ベースで解釈する。
+            // 与・被ダメージ修正 (ダメージ増加/被ダメージ増加/ダメージ低下/被ダメージ低下) は
+            // `eval_predict` が sp.txt から `db::damage_spirit_levels` (= `sp_effect_level` ×4) で
+            // 解決する (C# `SpecialPowerEffectLevel(...)` 準拠: 最大値勝ち)。鉄壁/不屈 もこの
+            // データ駆動 down-mod 経由 (鉄壁=被ダメージ低下Lv7.5→÷4 / 不屈=Lv9→×0.1)。
+            // その他 (集中/ひらめき 等) は combat 側が名前ベースで解釈する。
             let f: Vec<&str> = rest.split_whitespace().collect();
             if f.len() >= 2 {
                 let lst = spirit_map.entry(f[0].to_string()).or_default();
@@ -236,9 +238,10 @@ fn eval_predict(
     let empty: Vec<String> = Vec::new();
     let atk_statuses = spirits.get(aname).unwrap_or(&empty).as_slice();
     let def_statuses = spirits.get(dname).unwrap_or(&empty).as_slice();
-    // 攻撃側 ダメージ増加 精神効果レベルをシナリオ sp.txt から解決
-    // (C# `Unit.SpecialPowerEffectLevel("ダメージ増加")` 相当)。
-    let atk_dmg_boost = db.sp_damage_increase_level(atk_statuses);
+    // 与・被ダメージ修正 (ダメージ増加/被ダメージ増加/ダメージ低下/被ダメージ低下) を
+    // シナリオ sp.txt から解決 (C# `Unit.SpecialPowerEffectLevel(...)` 相当)。攻撃側 4 種・
+    // 防御側 4 種のうち該当タイプを攻撃側/防御側それぞれから引く。
+    let dmg_levels = db.damage_spirit_levels(atk_statuses, def_statuses);
     let preview = src_core::combat::predict_with_status_terrain(
         &atk_pilot,
         &atk_unit,
@@ -253,7 +256,7 @@ fn eval_predict(
         def_statuses,
         1,
         def_env,
-        atk_dmg_boost,
+        dmg_levels,
     );
     match field {
         "命中率" => preview.hit_chance.to_string(),
