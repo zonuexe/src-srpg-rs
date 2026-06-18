@@ -126,7 +126,10 @@ fn main() {
                 } else {
                     ("-", "0")
                 };
-                let x = creates.len() + 1;
+                // C# placeattack は `StandBy(1 + 2*created, 5)` で 2 マス間隔に配置する
+                // (Program.cs)。距離依存の 散 属性補正を cross-engine で一致させるため、
+                // Rust も同じ x 間隔 (1,3,5,…) で生成し eval_predict が manhattan 距離を読む。
+                let x = 1 + 2 * creates.len();
                 creates.push(format!(
                     "Create {party} {name} {rank} {pilot} {level} {x} 1"
                 ));
@@ -258,6 +261,13 @@ fn eval_predict(
         def_env,
         dmg_levels,
     );
+    // 散 (散布) 属性武器の距離補正。攻撃側↔防御側の manhattan 距離 (C# placeattack の
+    // StandBy 2 マス間隔と一致) で命中アップ・ダメージダウンを適用する。
+    let dist = src_core::combat::manhattan(
+        (db.unit_instances[atk_idx].x, db.unit_instances[atk_idx].y),
+        (db.unit_instances[def_idx].x, db.unit_instances[def_idx].y),
+    );
+    let preview = preview.apply_scatter(&weapon.class, dist);
     match field {
         "命中率" => preview.hit_chance.to_string(),
         "ダメージ" => preview.damage.to_string(),

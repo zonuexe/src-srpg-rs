@@ -37,6 +37,38 @@ pub struct CombatPreview {
     pub critical_chance: i32,
 }
 
+impl CombatPreview {
+    /// 散 (散布/scatter) 属性武器の距離補正を適用した予測を返す。`predict_*` は
+    /// 距離非依存のため、攻撃側↔防御側の manhattan 距離が判る呼び出し側でこれを通す。
+    /// 命中アップ・ダメージダウン (`scatter_hit_bonus`/`scatter_damage_mult`)。
+    pub fn apply_scatter(mut self, weapon_class: &str, distance: u32) -> Self {
+        self.hit_chance += scatter_hit_bonus(weapon_class, distance);
+        self.damage = (self.damage as f64 * scatter_damage_mult(weapon_class, distance)) as i64;
+        self
+    }
+}
+
+/// 散 (散布/scatter) 属性武器の命中補正。SRC.NET `Unit.cs` HitProbability:
+/// 「散属性武器は指定したレベル以上離れるほど命中がアップ」。manhattan 距離が
+/// 1/2/3/4/5+ で +0/+5/+10/+15/+20。武器 class に `散` が無ければ 0。
+pub fn scatter_hit_bonus(weapon_class: &str, distance: u32) -> i32 {
+    if !weapon_class.contains('散') {
+        return 0;
+    }
+    ((distance.max(1) - 1) * 5).min(20) as i32
+}
+
+/// 散 属性武器のダメージ補正倍率。SRC.NET `Unit.cs` Damage:
+/// 「散属性武器は離れるほどダメージダウン」。manhattan 距離が
+/// 1/2/3/4/5+ で ×1.0/0.95/0.90/0.85/0.80。武器 class に `散` が無ければ 1.0。
+pub fn scatter_damage_mult(weapon_class: &str, distance: u32) -> f64 {
+    if !weapon_class.contains('散') {
+        return 1.0;
+    }
+    let steps = (distance.max(1) - 1).min(4);
+    1.0 - 0.05 * steps as f64
+}
+
 /// 防御側の選択した防御モード / Defender's chosen defense mode for this attack.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DefenseMode {
@@ -3112,5 +3144,46 @@ mod tests {
         // 技量差 0、武器CT=25 → 25。
         let prob = critical_probability(&p_tech(40), &p_tech(40), &weapon_ct(25), &[]);
         assert_eq!(prob, 25);
+    }
+
+    #[test]
+    fn scatter_attribute_distance_modifiers_match_src() {
+        // SRC.NET Unit.cs: 散 属性武器は距離 1/2/3/4/5+ で命中 +0/+5/+10/+15/+20、
+        // ダメージ ×1.0/0.95/0.90/0.85/0.80。武器 class に 散 が無ければ無補正。
+        for d in 0..=6u32 {
+            // 非 散 武器は常に無補正。
+            assert_eq!(scatter_hit_bonus("格魔", d), 0);
+            assert!((scatter_damage_mult("格魔", d) - 1.0).abs() < 1e-9);
+        }
+        // 散 武器の命中ボーナス (距離 0/1 は同値=+0)。
+        assert_eq!(scatter_hit_bonus("格魔散", 1), 0);
+        assert_eq!(scatter_hit_bonus("格魔散", 2), 5);
+        assert_eq!(scatter_hit_bonus("格魔散", 3), 10);
+        assert_eq!(scatter_hit_bonus("格魔散", 4), 15);
+        assert_eq!(scatter_hit_bonus("格魔散", 5), 20);
+        assert_eq!(
+            scatter_hit_bonus("格魔散", 9),
+            20,
+            "5 マス以上は +20 で頭打ち"
+        );
+        // 散 武器のダメージ倍率。
+        assert!((scatter_damage_mult("散", 1) - 1.00).abs() < 1e-9);
+        assert!((scatter_damage_mult("散", 2) - 0.95).abs() < 1e-9);
+        assert!((scatter_damage_mult("散", 3) - 0.90).abs() < 1e-9);
+        assert!((scatter_damage_mult("散", 4) - 0.85).abs() < 1e-9);
+        assert!((scatter_damage_mult("散", 5) - 0.80).abs() < 1e-9);
+        assert!(
+            (scatter_damage_mult("散", 9) - 0.80).abs() < 1e-9,
+            "5 マス以上は ×0.8 で頭打ち"
+        );
+        // apply_scatter: 距離 2 で命中 +5・ダメージ ×0.95。
+        let p = CombatPreview {
+            hit_chance: 90,
+            damage: 1000,
+            critical_chance: 5,
+        }
+        .apply_scatter("格魔散", 2);
+        assert_eq!(p.hit_chance, 95);
+        assert_eq!(p.damage, 950);
     }
 }

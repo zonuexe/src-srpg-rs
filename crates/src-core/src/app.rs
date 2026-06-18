@@ -3311,6 +3311,18 @@ impl App {
             def_env,
             dmg_levels,
         );
+        // 散 (散布) 属性武器の距離補正 (命中アップ・ダメージダウン)。
+        let atk_def_dist = combat::manhattan(
+            (
+                self.database.unit_instances[atk_idx].x,
+                self.database.unit_instances[atk_idx].y,
+            ),
+            (
+                self.database.unit_instances[def_idx].x,
+                self.database.unit_instances[def_idx].y,
+            ),
+        );
+        let preview = preview.apply_scatter(&weapon.class, atk_def_dist);
 
         // 命中判定。回避を選んだ防御側は命中率が半減する (SRC 反撃モード)。
         let effective_hit = if def_mode == "回避" {
@@ -3851,6 +3863,18 @@ impl App {
             def_env,
             dmg_levels,
         );
+        // 散 属性武器の距離補正 (援護攻撃側 → 防御側)。
+        let sup_def_dist = combat::manhattan(
+            (
+                self.database.unit_instances[sup_idx].x,
+                self.database.unit_instances[sup_idx].y,
+            ),
+            (
+                self.database.unit_instances[def_idx].x,
+                self.database.unit_instances[def_idx].y,
+            ),
+        );
+        let preview = preview.apply_scatter(&weapon.class, sup_def_dist);
         let roll = (self.next_u32() % 100) as i32;
         let hit = roll < preview.hit_chance;
         // SP コスト消費 (= サポートアタック回数を 1 減らす)
@@ -4128,6 +4152,9 @@ impl App {
             counter_def_env,
             dmg_levels,
         );
+        // 散 属性武器の距離補正 (反撃側 dx,dy → 被弾側 target)。
+        let counter_dist = combat::manhattan((dx, dy), target);
+        let preview = preview.apply_scatter(&weapon.class, counter_dist);
         // 反撃武器の 1-based インデックスを取得
         let weapon_num = def_unit
             .weapons

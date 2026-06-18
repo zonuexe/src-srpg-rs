@@ -2188,7 +2188,9 @@ fn build_combat_preview_line(
         env_of(dx, dy),
         // 状態異常スナップショットなしのプレビュー行 → 与・被ダメージ修正なし。
         combat::DamageSpiritLevels::default(),
-    );
+    )
+    // 散 (散布) 属性武器の距離補正 (命中アップ・ダメージダウン) をプレビューにも反映。
+    .apply_scatter(&weapon.class, combat::manhattan((cx, cy), (dx, dy)));
     Some(format!(
         "→ vs [{}] {} ({},{})  [{}] dist={}  命中:{}%  ダメージ:{}",
         def.party.short_label(),
