@@ -1,0 +1,17 @@
+# 移動範囲ハーネス検証コーパス (SKY PASSABILITY)。
+# 空 (sky) 地形への進入可否を検証する。地上ユニット (空適応 '-') は空マスに入れないため、
+# 隣接する空マスが到達集合から除外されるはず (両エンジン一致＝passability の cross-engine 実証)。
+#
+# 採用地形 id (スパロボ戦記 system/terrain.txt 実値):
+#   0  = 平地 plain  陸  move_cost 1
+#   81 = 空 sky      空  move_cost 1  (地上ユニットは進入不可)
+# 採用ユニット: マジンガーＺ adaption=-ACB → 空適応 '-' (飛べない)。speed 5。
+#
+# EXPECT: 空マス (3,2)/(2,3) は両エンジンとも到達集合に含まれない。残りの平地は完全一致。
+# (移動 corpus フロンティア「水中/宇宙専用 passability」のうち、空 blocking を地上ユニットで実証。
+#  水適応 '-'・宇適応 '-' のユニットは in-repo fixture に不在のため海/宇 blocking は未カバー。)
+@map 7 7
+@cell 3 2 81
+@cell 2 3 81
+@unit マジンガーＺ 0 味方 人工知能 10 3 3
+@move マジンガーＺ
