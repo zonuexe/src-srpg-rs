@@ -3214,11 +3214,14 @@ impl App {
         else {
             return false;
         };
-        // 弱点 (防御特性): 武器属性が防御側の弱点に一致するとき装甲を半減する
-        // (VB6 `Unit.cls:6949` `If .Weakness(wclass) Then arm = arm \ 2`＝被ダメージ増)。
-        // 予測前に `def_unit.armor` を ÷2 することで防御力が半減し被ダメージが増える。
+        // 防御特性による装甲調整 (VB6 `Unit.cls:6949-6951`、`is_true_value` 経路)。
+        // 弱点 → 装甲半減 (被ダメージ増)、吸収 (かつ非有効) → 装甲無視 (arm=0)。
+        // 予測前に `def_unit.armor` を調整し、吸収は `defense_attribute_damage` が ÷2 で
+        // 回復へ反転 (装甲無視ダメージ基準)。弱点 > 吸収 の優先 (VB6 If/ElseIf)。
         if self.weapon_hits_weakness(def_idx, &weapon.class) {
             def_unit.armor /= 2;
+        } else if self.weapon_hits_absorb(def_idx, &weapon.class) {
+            def_unit.armor = 0;
         }
         let def_hit_mod = self.database.terrain_hit_mod(terrain_id);
         let def_damage_mod = self.database.terrain_damage_mod(terrain_id);
@@ -5753,6 +5756,17 @@ impl App {
                         return true;
                     }
                 }
+                '魔' => {
+                    // 魔武/魔突/魔接/魔銃/魔実 武器には「魔」属性への防御特性が効かない
+                    // (spec `防御特性に関する特殊能力.md`「魔法武器には魔法への防御能力が効かない」)。
+                    // 逆順 (武魔 等) は対象 = `魔X` 並びのときだけ免除する。
+                    const MAGIC_COMBAT: [&str; 5] = ["魔武", "魔突", "魔接", "魔銃", "魔実"];
+                    if weapon_class.contains('魔')
+                        && !MAGIC_COMBAT.iter().any(|m| weapon_class.contains(m))
+                    {
+                        return true;
+                    }
+                }
                 _ => {
                     if weapon_class.contains(c) {
                         return true;
@@ -5776,6 +5790,19 @@ impl App {
             .iter()
             .filter_map(|c| c.name.strip_prefix("弱点:"))
             .any(|el| weapon_class.contains(el))
+    }
+
+    /// 武器属性が防御側の `吸収` に一致し、かつ `有効` で打ち消されていないか。
+    /// 一致時は VB6 `Unit.cls:6951` 準拠で被ダメージ計算の装甲を無視 (arm=0) する
+    /// (`attack_resolve_and_run` が予測前に `def_unit.armor=0` にする)。これにより吸収量が
+    /// spec「装甲値を無視して計算されたダメージを半減させた値」基準になり、
+    /// `defense_attribute_damage` の吸収分岐 `-(damage/2)` が正しい回復量へ反転する。
+    fn weapon_hits_absorb(&self, def_idx: usize, weapon_class: &str) -> bool {
+        let inst = &self.database.unit_instances[def_idx];
+        let absorb = crate::feature::feature_value(&inst.active_features, "吸収").unwrap_or("");
+        let effective = crate::feature::feature_value(&inst.active_features, "有効").unwrap_or("");
+        Self::defense_attr_matches(weapon_class, absorb)
+            && !Self::defense_attr_matches(weapon_class, effective)
     }
 
     /// 特殊効果の発動確率を、対象の `耐性` / `弱点` 特殊能力で調整する
@@ -17447,6 +17474,19 @@ End
             "物 は 魔 武器に不一致"
         );
         assert!(!App::defense_attr_matches("射", ""), "空リストは不一致");
+        // 魔 属性例外: 魔武/魔突/魔接/魔銃/魔実 武器には「魔」防御特性が効かない。
+        assert!(
+            !App::defense_attr_matches("魔武", "魔"),
+            "魔武 武器は 魔 防御特性に不一致 (免除)"
+        );
+        assert!(
+            App::defense_attr_matches("魔術火", "魔"),
+            "魔術 (非 魔X) は 魔 防御特性に一致"
+        );
+        assert!(
+            App::defense_attr_matches("武魔", "魔"),
+            "逆順 武魔 は免除されず一致"
+        );
 
         let mut app = App::new();
         enter_mapview_with_demo_map(&mut app);
@@ -17472,6 +17512,26 @@ End
         assert!(
             app.weapon_hits_weakness(idx, "格実火"),
             "一時付加 弱点:火 も該当"
+        );
+        // 吸収検出 (装甲無視のトリガ): 吸収=水 は 水武器に該当、有効=水 で打ち消される。
+        app.database_mut().unit_instances[idx].conditions.clear();
+        app.database_mut().unit_instances[idx].active_features =
+            vec![ActiveFeature::new("吸収", "水")];
+        assert!(
+            app.weapon_hits_absorb(idx, "魔術水"),
+            "吸収 水 が 水武器に該当"
+        );
+        assert!(
+            !app.weapon_hits_absorb(idx, "魔術火"),
+            "非一致 (火) は不該当"
+        );
+        app.database_mut().unit_instances[idx].active_features = vec![
+            ActiveFeature::new("吸収", "水"),
+            ActiveFeature::new("有効", "水"),
+        ];
+        assert!(
+            !app.weapon_hits_absorb(idx, "魔術水"),
+            "有効=水 が吸収を打ち消す"
         );
     }
 
