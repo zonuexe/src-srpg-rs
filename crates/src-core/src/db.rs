@@ -460,6 +460,20 @@ impl GameDatabase {
     /// と描画 (move range overlay) で同一ロジックを使う**ことで「表示と実際の
     /// 移動可能範囲が食い違う / 形状が変」問題を防ぐ。
     pub fn unit_move_range(&self, uid: &str) -> std::collections::HashMap<(u32, u32), i32> {
+        let Some(u) = self.unit_by_uid(uid) else {
+            return std::collections::HashMap::new();
+        };
+        self.unit_move_range_from(uid, (u.x, u.y))
+    }
+
+    /// `unit_move_range` の始点指定版。`start` を起点に移動範囲を計算する。
+    /// 発進/分離ユニットの着地候補 (母艦/合体元の位置を起点とする移動範囲) に使う
+    /// (`off_map` ユニットは座標が古いため、起点を明示する必要がある)。
+    pub fn unit_move_range_from(
+        &self,
+        uid: &str,
+        start: (u32, u32),
+    ) -> std::collections::HashMap<(u32, u32), i32> {
         let (Some(map), Some(u)) = (self.map.as_ref(), self.unit_by_uid(uid)) else {
             return std::collections::HashMap::new();
         };
@@ -494,7 +508,7 @@ impl GameDatabase {
             active_feature_names,
             terrain_adapt_names,
         );
-        crate::movement::compute_range_with(map, (u.x, u.y), mp, cost_fn)
+        crate::movement::compute_range_with(map, start, mp, cost_fn)
     }
 
     /// 同じマスにいるユニットを返す（重複配置の検出にも使う）。

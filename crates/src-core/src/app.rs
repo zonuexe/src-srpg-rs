@@ -2942,6 +2942,14 @@ impl App {
                 self.action_mode = ActionMode::Browse;
                 true
             }
+            ActionMode::LandingSelect { carrier, .. } => {
+                // 着地点選択キャンセル: 配置せず stored のまま。母艦経路なら母艦メニューへ戻す。
+                self.action_mode = ActionMode::Browse;
+                if let Some(carrier) = carrier {
+                    self.reopen_unit_menu_for(&carrier);
+                }
+                true
+            }
         }
     }
 
@@ -7555,6 +7563,20 @@ impl App {
             return true;
         }
         let stored = pl.stored[i - 1].clone();
+        // 着地点選択 (原典): 母艦位置を起点とする移動範囲の空きマスから対話選択する。
+        // 候補があればクリック選択へ移行し、無ければ従来の隣接自動配置にフォールバック。
+        if let Some(cpos) = self.database.unit_by_uid(&pl.carrier).map(|u| (u.x, u.y)) {
+            let candidates = self.landing_candidates(&stored, cpos);
+            if !candidates.is_empty() {
+                self.map_cursor = Some(cpos);
+                self.action_mode = crate::command_menu::ActionMode::LandingSelect {
+                    uid: stored,
+                    candidates,
+                    carrier: Some(pl.carrier.clone()),
+                };
+                return true;
+            }
+        }
         if self.launch_unit_from_carrier(&pl.carrier, &stored) {
             let nick = self
                 .database
@@ -7568,8 +7590,43 @@ impl App {
         true
     }
 
+    /// 着地点選択 (`LandingSelect`) で候補マス `(tx, ty)` を確定する。ユニットを配置し、
+    /// 母艦経路なら母艦メニューを再表示する。候補外なら何もしない (`false`)。
+    fn confirm_landing(&mut self, tx: u32, ty: u32) -> bool {
+        let crate::command_menu::ActionMode::LandingSelect {
+            uid,
+            candidates,
+            carrier,
+        } = self.action_mode.clone()
+        else {
+            return false;
+        };
+        if !candidates.contains(&(tx, ty)) {
+            return false; // 候補外クリックは無反応 (キャンセルは右クリック)。
+        }
+        if let Some(carrier) = carrier {
+            self.place_launched_unit_at(&carrier, &uid, tx, ty);
+            let nick = self
+                .database
+                .unit_by_uid(&uid)
+                .map(|u| u.pilot_name.clone())
+                .unwrap_or_default();
+            self.push_message(format!("{nick} 発進！"));
+            self.action_mode = crate::command_menu::ActionMode::Browse;
+            self.reopen_unit_menu_for(&carrier);
+        } else {
+            // 分離経路 (carrier なし): off_map の構成ユニットを盤上へ戻す。
+            self.database.move_unit(&uid, tx, ty);
+            self.database.set_off_map(&uid, false);
+            self.action_mode = crate::command_menu::ActionMode::Browse;
+        }
+        true
+    }
+
     /// 母艦 `carrier` から格納ユニット `stored` を出撃させる。母艦の隣接空きマスに
     /// 配置し、格納リンクを解除する。空きマスが無ければ `false`。
+    /// (スクリプト/AI 経路・着地点選択候補が無いときのフォールバック。プレイヤーの
+    /// メニュー経路は `resolve_launch` が移動範囲からの着地点選択 (`LandingSelect`) を挟む。)
     fn launch_unit_from_carrier(&mut self, carrier: &str, stored: &str) -> bool {
         let Some(cpos) = self.database.unit_by_uid(carrier).map(|u| (u.x, u.y)) else {
             return false;
@@ -7578,6 +7635,13 @@ impl App {
             self.push_message("発進できる空きマスがありません".to_string());
             return false;
         };
+        self.place_launched_unit_at(carrier, stored, tx, ty);
+        true
+    }
+
+    /// 格納ユニット `stored` を `(tx, ty)` へ配置し、格納リンクを解除する。
+    /// `launch_unit_from_carrier` (隣接自動) と `LandingSelect` (移動範囲から選択) の共通配置。
+    fn place_launched_unit_at(&mut self, carrier: &str, stored: &str, tx: u32, ty: u32) {
         // off_map ユニットは move_unit で座標だけ更新し、set_off_map(false) で
         // pos_index に載せる (`.eve Launch` と同順)。
         self.database.move_unit(stored, tx, ty);
@@ -7591,7 +7655,17 @@ impl App {
         if let Some(c) = self.database.unit_by_uid_mut(carrier) {
             c.stored_units.retain(|s| s != stored);
         }
-        true
+    }
+
+    /// 発進/分離ユニット `uid` が `source` (母艦/合体元の位置) から着地可能なマス一覧。
+    /// ユニットの移動範囲内 (Dijkstra) かつ空き (他ユニット不在) のマス。`source` が母艦で
+    /// 占有されていても起点としては有効 (そこから移動して空きマスへ着地する)。
+    fn landing_candidates(&self, uid: &str, source: (u32, u32)) -> Vec<(u32, u32)> {
+        self.database
+            .unit_move_range_from(uid, source)
+            .into_keys()
+            .filter(|&(x, y)| self.database.uid_at(x, y).is_none())
+            .collect()
     }
 
     /// `pos` の 8 近傍からユニットの居ない盤内マスを 1 つ返す。発進の着地点用。
@@ -8793,6 +8867,11 @@ impl App {
                     }
                     // 無効な対象 (射程外 / 陣営違い) のクリックは no-op で継続。
                 }
+                true
+            }
+            ActionMode::LandingSelect { .. } => {
+                // 着地候補マスのクリックで配置を確定する。候補外は no-op (継続)。
+                self.confirm_landing(target.0, target.1);
                 true
             }
             ActionMode::Browse => {
@@ -12007,6 +12086,26 @@ mod tests {
         app.execute_menu_action(MenuActionId::Unit(UnitMenuItem::Launch));
         assert!(app.respond_dialog(1)); // 1 番目の格納ユニット
 
+        // 発進は着地点選択 (移動範囲から対話選択) へ移行する。配置はまだ。
+        let cand = match app.action_mode() {
+            crate::command_menu::ActionMode::LandingSelect { candidates, .. } => {
+                assert!(!candidates.is_empty(), "着地候補がある");
+                // 母艦 (5,5) は占有なので候補外、移動範囲内の空きマスが候補。
+                assert!(!candidates.contains(&(5, 5)), "母艦マスは候補に含まない");
+                candidates[0]
+            }
+            other => panic!("着地点選択へ遷移すべき: {other:?}"),
+        };
+        assert!(
+            app.database().unit_by_uid(&fighter).unwrap().off_map,
+            "着地点選択中はまだ off_map"
+        );
+        // 候補外クリックは無反応。
+        assert!(!app.confirm_landing(5, 5), "候補外 (母艦マス) は確定しない");
+        assert!(app.database().unit_by_uid(&fighter).unwrap().off_map);
+        // 候補マスを確定 → 配置。
+        assert!(app.confirm_landing(cand.0, cand.1), "候補マスで配置確定");
+
         let f = app.database().unit_by_uid(&fighter).unwrap();
         assert!(!f.off_map, "発進で盤上へ復帰");
         assert!(f.stored_in.is_none());
@@ -12018,11 +12117,51 @@ mod tests {
                 .is_empty(),
             "格納リストから外れる"
         );
-        // 母艦 (5,5) の隣接マスに配置される。
-        let (fx, fy) = (f.x as i32, f.y as i32);
+        assert_eq!((f.x, f.y), cand, "選択した候補マスに配置される");
+    }
+
+    /// 発進の着地点選択を右クリック/Esc でキャンセルすると、ユニットは格納のまま残る。
+    #[test]
+    fn launch_landing_select_cancel_keeps_stored() {
+        use crate::command_menu::{ActionMode, MenuActionId, UnitMenuItem};
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Carrier", 5, 5);
+        place_player_unit(&mut app, "Fighter", 6, 5);
+        app.set_stage_state(crate::stage::StageState::Battle);
+        let carrier = first_player_uid(&app);
+        let fighter = app
+            .database()
+            .unit_instances
+            .iter()
+            .find(|u| u.unit_data_name == "Fighter")
+            .unwrap()
+            .uid
+            .clone();
+        let ci = app.database().idx_by_uid(&carrier).unwrap();
+        let fi = app.database().idx_by_uid(&fighter).unwrap();
+        app.fire_boarding_event(fi, ci);
+        app.open_unit_menu((5, 5));
+        app.execute_menu_action(MenuActionId::Unit(UnitMenuItem::Launch));
+        assert!(app.respond_dialog(1));
+        assert!(matches!(
+            app.action_mode(),
+            ActionMode::LandingSelect { .. }
+        ));
+
+        // キャンセル (Esc/右クリック相当) → 格納のまま・Browse へ戻る。
+        assert!(app.handle_input(Input::Cancel));
+        assert!(matches!(app.action_mode(), ActionMode::Browse));
+        let f = app.database().unit_by_uid(&fighter).unwrap();
+        assert!(f.off_map, "キャンセルで格納のまま");
+        assert_eq!(f.stored_in.as_deref(), Some(carrier.as_str()));
         assert!(
-            (fx - 5).abs() <= 1 && (fy - 5).abs() <= 1 && (fx, fy) != (5, 5),
-            "母艦隣接に配置: ({fx},{fy})"
+            app.database()
+                .unit_by_uid(&carrier)
+                .unwrap()
+                .stored_units
+                .contains(&fighter),
+            "格納リストに残る"
         );
     }
 

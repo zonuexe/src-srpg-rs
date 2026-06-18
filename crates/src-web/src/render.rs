@@ -327,6 +327,22 @@ fn draw_action_overlays(
                 }
             }
         }
+        ActionMode::LandingSelect { candidates, .. } => {
+            // 発進/分離ユニットの着地候補マスを黄でハイライト (移動範囲内の空きマス)。
+            for (rx, ry) in candidates {
+                if !in_view(rx, ry) {
+                    continue;
+                }
+                let (px, py) = to_screen(rx, ry);
+                ctx.set_fill_style_str("rgba(253,216,53,0.45)");
+                ctx.fill_rect(
+                    px as f64,
+                    py as f64,
+                    f64::from(TILE_SIZE),
+                    f64::from(TILE_SIZE),
+                );
+            }
+        }
     }
 }
 

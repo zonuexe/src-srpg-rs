@@ -215,6 +215,15 @@ pub enum ActionMode {
     /// `UnitData.abilities` のインデックス。射程内の味方ユニットを対象に取り、
     /// 確定すると効果適用 + 消費。キャンセル時は何も起きない。
     AbilityTarget { caster: String, ability_idx: usize },
+    /// 発進/分離ユニットの**着地点選択中** (原典: 移動範囲から対話選択)。
+    /// `uid` が配置するユニット、`candidates` が着地可能なマス (移動範囲内の空きマス)、
+    /// `carrier` は母艦の uid (発進の場合。配置後にメニュー再表示・None なら分離)。
+    /// 候補マスのクリックで配置・確定、キャンセルで配置を取りやめ stored に戻す。
+    LandingSelect {
+        uid: String,
+        candidates: Vec<(u32, u32)>,
+        carrier: Option<String>,
+    },
 }
 
 /// メニュー描画 / クリック判定の共通レイアウト定数。
