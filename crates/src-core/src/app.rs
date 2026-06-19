@@ -3460,10 +3460,13 @@ impl App {
                 let guard_unit = self.database.unit_by_name(&guard_unit_name).cloned();
                 let guard_pilot = self.database.pilot_by_name(&guard_pilot_name).cloned();
                 self.database.unit_instances[g_idx].support_guard_remaining -= 1;
-                self.database.unit_instances[g_idx].damage += guard_dmg;
                 let g_max_hp = self
                     .database
                     .effective_max_hp(&self.database.unit_instances[g_idx]);
+                // 不死身: 援護防御で身代わりになった guard も撃破させない。
+                let guard_dmg = self.cap_damage_for_immortal(g_idx, g_max_hp, guard_dmg);
+                let guard_old_dmg = self.database.unit_instances[g_idx].damage;
+                self.database.unit_instances[g_idx].damage += guard_dmg;
                 let remaining = g_max_hp - self.database.unit_instances[g_idx].damage;
                 if remaining <= 0 && self.revive_if_possible(g_idx) {
                     format!(
@@ -3489,6 +3492,8 @@ impl App {
                     }
                     m
                 } else {
+                    // 損傷率イベント (援護防御で guard が閾値を割った場合)。
+                    self.fire_damage_threshold_for_unit(g_idx, g_max_hp, guard_old_dmg);
                     format!(
                         "援護防御: {} が {} の代わりに {} ダメージ (残HP {})",
                         guard_pilot
@@ -3501,23 +3506,11 @@ impl App {
                     )
                 }
             } else {
-                // 通常ダメージ: defender が受ける (防御選択時は applied_damage で半減済)
-                // SRC `不死身` (SetStatus 不死身): 撃破させない。被ダメージを HP が
-                // 10 未満にならないようキャップする (C# Unit.attack.cs の てかげん/
-                // 不死身 と同一: HP<=10 なら 0、HP-dmg<10 なら HP-10)。サンプル
-                // シナリオの「不死身で耐える→損傷率 50% で回復＆不死身解除」の
-                // 演出を成立させる。
+                // 通常ダメージ: defender が受ける (防御選択時は applied_damage で半減済)。
+                // 不死身: 撃破させないよう被ダメージをキャップ (サンプルの「不死身で
+                // 耐える→損傷率 50% で回復＆不死身解除」演出を成立させる)。
                 let applied_damage =
-                    if self.database.unit_instances[def_idx].has_condition("不死身") {
-                        let cur_hp = def_unit.hp - self.database.unit_instances[def_idx].damage;
-                        if cur_hp <= 10 {
-                            0
-                        } else {
-                            applied_damage.min(cur_hp - 10)
-                        }
-                    } else {
-                        applied_damage
-                    };
+                    self.cap_damage_for_immortal(def_idx, def_unit.hp, applied_damage);
                 let def_old_dmg = self.database.unit_instances[def_idx].damage;
                 self.database.unit_instances[def_idx].damage += applied_damage;
                 let remaining = def_unit.hp - self.database.unit_instances[def_idx].damage;
@@ -3586,16 +3579,7 @@ impl App {
                     // (apply_damage) でしか発火せず、実戦闘では発火していなかった。
                     // サンプルシナリオの「不死身で耐える→損傷率 50% で HP 回復＋不死身
                     // 解除」演出はこの発火に依存する。
-                    let def_new_dmg = self.database.unit_instances[def_idx].damage;
-                    crate::event_runtime::fire_damage_threshold_labels(
-                        self,
-                        &def_pilot.name,
-                        &def_unit.name,
-                        def_inst.party,
-                        def_old_dmg,
-                        def_new_dmg,
-                        def_unit.hp,
-                    );
+                    self.fire_damage_threshold_for_unit(def_idx, def_unit.hp, def_old_dmg);
                     // 攻撃を受けて生存したユニットは気力 +1 (SRC `Unit.cs`: 損傷による気力上昇)。
                     {
                         let dm = &mut self.database.unit_instances[def_idx];
@@ -3838,6 +3822,42 @@ impl App {
         true
     }
 
+    /// `不死身` (撃破阻止): `target_idx` が不死身なら、与ダメージを HP が 10 未満に
+    /// ならないようキャップして返す (C# `Unit.attack.cs` の てかげん/不死身 と同一)。
+    /// 通常攻撃・援護攻撃・援護防御・反撃の全ダメージ経路で共通に使う。
+    fn cap_damage_for_immortal(&self, target_idx: usize, max_hp: i64, dmg: i64) -> i64 {
+        if self.database.unit_instances[target_idx].has_condition("不死身") {
+            let cur_hp = max_hp - self.database.unit_instances[target_idx].damage;
+            if cur_hp <= 10 {
+                0
+            } else {
+                dmg.min(cur_hp - 10)
+            }
+        } else {
+            dmg
+        }
+    }
+
+    /// 被弾して生存した `target_idx` に対し `損傷率 <unit> <pct>:` 閾値イベントを
+    /// 発火する。`old_dmg` はこの被弾前の累積ダメージ。撃破された (除去済み) 場合は
+    /// 呼ばない。通常攻撃・援護攻撃・援護防御・反撃の被弾生存経路で共通に使う。
+    fn fire_damage_threshold_for_unit(&mut self, target_idx: usize, max_hp: i64, old_dmg: i64) {
+        let (pilot_name, unit_data_name, party) = {
+            let u = &self.database.unit_instances[target_idx];
+            (u.pilot_name.clone(), u.unit_data_name.clone(), u.party)
+        };
+        let new_dmg = self.database.unit_instances[target_idx].damage;
+        crate::event_runtime::fire_damage_threshold_labels(
+            self,
+            &pilot_name,
+            &unit_data_name,
+            party,
+            old_dmg,
+            new_dmg,
+            max_hp,
+        );
+    }
+
     /// `atk_idx` のユニットが (def_x, def_y) を攻撃した直後、同陣営の隣接ユニットで
     /// サポートアタック特殊能力を持つものから 1 体追撃。残り回数を 1 消費。
     /// 命中・ダメージは `predict_with_status` のダメージを 75% に減衰させる。
@@ -3954,6 +3974,9 @@ impl App {
             let base = (preview.damage as f64 * 0.75) as i64;
             // 防御特性 (耐性÷2 / 無効化0 / 吸収=回復)。弱点の装甲半減は予測前に適用済み。
             let dmg = self.defense_attribute_damage(def_idx, &weapon.class, base);
+            // 不死身: 撃破させないよう被ダメージをキャップ。
+            let dmg = self.cap_damage_for_immortal(def_idx, def_unit.hp, dmg);
+            let def_old_dmg = self.database.unit_instances[def_idx].damage;
             self.database.unit_instances[def_idx].damage += dmg;
             self.push_message(format!(
                 "{} のサポートアタック [{}] → {}: {} ダメージ",
@@ -3985,6 +4008,8 @@ impl App {
                     }
                 }
             } else if remaining > 0 {
+                // 損傷率イベント (援護攻撃で HP が閾値を割った場合)。
+                self.fire_damage_threshold_for_unit(def_idx, def_unit.hp, def_old_dmg);
                 // 攻撃を受けて生存したユニットは気力 +1 (SRC: 損傷による気力上昇)。
                 {
                     let dm = &mut self.database.unit_instances[def_idx];
@@ -4245,6 +4270,9 @@ impl App {
         let msg = if hit {
             // 防御特性 (耐性÷2 / 無効化0 / 吸収=回復)。弱点の装甲半減は予測前に適用済み。
             let counter_dmg = self.defense_attribute_damage(atk_idx, &weapon.class, preview.damage);
+            // 不死身: 反撃でも撃破させないよう被ダメージをキャップ。
+            let counter_dmg = self.cap_damage_for_immortal(atk_idx, atk_unit.hp, counter_dmg);
+            let atk_old_dmg = self.database.unit_instances[atk_idx].damage;
             self.database.unit_instances[atk_idx].damage += counter_dmg;
             let remaining = atk_unit.hp - self.database.unit_instances[atk_idx].damage;
             if remaining <= 0 && self.revive_if_possible(atk_idx) {
@@ -4277,6 +4305,8 @@ impl App {
                 }
                 m
             } else {
+                // 損傷率イベント (反撃で HP が閾値を割った場合)。
+                self.fire_damage_threshold_for_unit(atk_idx, atk_unit.hp, atk_old_dmg);
                 // 反撃を受けて生存した攻撃側は気力 +1 (SRC: 損傷による気力上昇)。
                 {
                     let am = &mut self.database.unit_instances[atk_idx];
