@@ -573,8 +573,24 @@ fn campaign_chain_chapter1_to_chapter2_carries_party() {
     }
 
     let names = unit_names(&app);
+    // 1話のバルアド (宇宙怪獣) は勝利時の `バルアド撃破` 末尾 `ForEach 敵 Escape` で
+    // 全員 off_map (退避) になる。2話に on_map で残っていないことを確認する
+    // (= シナリオ側クリーンアップ + ForEach 敵 / Escape が機能している)。
+    let balad_on_map = app
+        .database()
+        .unit_instances
+        .iter()
+        .filter(|u| u.unit_data_name.contains("バルアド") && !u.off_map)
+        .count();
+    let alive_enemy = app
+        .database()
+        .unit_instances
+        .iter()
+        .filter(|u| u.party == Party::Enemy && !u.off_map)
+        .map(|u| u.unit_data_name.as_str())
+        .collect::<Vec<_>>();
     eprintln!(
-        "[chain] scene={:?} stage_state={:?} stage={:?} units={names:?}",
+        "[chain] scene={:?} stage_state={:?} stage={:?} balad_on_map={balad_on_map} alive_enemy={alive_enemy:?}",
         app.scene(),
         app.stage_state(),
         app.stage(),
@@ -589,5 +605,16 @@ fn campaign_chain_chapter1_to_chapter2_carries_party() {
     assert!(
         names.iter().any(|n| n.contains("キャリバーン")),
         "キャリバーンが2話に持ち越されていない: {names:?}"
+    );
+    // 遷移時クリーンアップ: 1話のバルアドが 2話に on_map で残っていない
+    // (`ForEach 敵 / Escape` による退避が機能している)。
+    assert_eq!(
+        balad_on_map, 0,
+        "1話のバルアドが 2話に on_map で残存している (ForEach 敵 Escape が未機能?)"
+    );
+    // 2話の本来の敵 (宇宙怪獣ギルガス) が出撃している。
+    assert!(
+        alive_enemy.iter().any(|n| n.contains("ギルガス")),
+        "2話の敵ギルガスが出撃していない: {alive_enemy:?}"
     );
 }
