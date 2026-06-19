@@ -581,8 +581,16 @@ fn default_time_of_day() -> String {
 /// (`predict_with_status_terrain` は条件名のみを見るため)。
 fn push_combat_feature_statuses(unit: &crate::UnitInstance, statuses: &mut Vec<String>) {
     for f in &unit.active_features {
-        if f.is_active && matches!(f.name.as_str(), "分身" | "ステルス") {
+        if !f.is_active {
+            continue;
+        }
+        if matches!(f.name.as_str(), "分身" | "ステルス") {
             statuses.push(f.name.clone());
+        } else if crate::feature::feature_name_matches_base(&f.name, "バリア") {
+            // バリア / バリアLv* 特徴 → 既存の `バリア` status (predict_with_status_terrain
+            // の ÷2 近似) を発動させる。`バリアシールド`/`バリア中和` 等の別能力は base 不一致
+            // で除外される (feature_name_matches_base は `<base>` 完全一致 / `<base>Lv<n>` のみ)。
+            statuses.push("バリア".to_string());
         }
     }
 }
@@ -11860,6 +11868,31 @@ mod tests {
         assert!(
             s.contains(&"集中".to_string()),
             "既存 condition 由来 status は保持される"
+        );
+    }
+
+    /// バリア / バリアLv* 特徴は `バリア` status に合流し、戦闘の ÷2 近似
+    /// (predict_with_status_terrain) を発動させる。`バリアシールド`/`バリア中和` は
+    /// 別能力なので合流しない (base 名一致のみ)。
+    #[test]
+    fn combat_feature_statuses_merges_barrier_feature() {
+        use crate::feature::ActiveFeature;
+        let mut u = crate::UnitInstance::new("X", "P", crate::Party::Enemy, 0, 0);
+        u.active_features = vec![
+            ActiveFeature::new("バリアLv2", ""),         // → "バリア"
+            ActiveFeature::new("バリアシールドLv3", ""), // 別能力 → 除外
+            ActiveFeature::new("バリア中和", ""),        // 別能力 → 除外
+        ];
+        let mut s = Vec::new();
+        push_combat_feature_statuses(&u, &mut s);
+        assert!(
+            s.contains(&"バリア".to_string()),
+            "バリアLv2 は バリア status に合流するはず"
+        );
+        assert_eq!(
+            s.iter().filter(|x| x.as_str() == "バリア").count(),
+            1,
+            "バリアシールド/バリア中和 は除外され バリア は 1 つだけ"
         );
     }
 
