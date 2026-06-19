@@ -9,7 +9,7 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 
 ## 現在地（2026-06-19）
 
-**テスト**: `cargo test -p src-core` 全緑（**1973 件**）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。  
+**テスト**: `cargo test -p src-core` 全緑（**1974 件**）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。  
 **最新セッション（2026-06-19・`master` 直接コミット）= GBA 着手 Phase 1〜3（図形 primitive＋画面意味論＋実データ検証）**:
 ★★ **前提ブロッカーの誤認を是正**: 前セッションは「in-repo に GBA シナリオが無い」と結論したが、これは grep を `_GBA_` という狭い語に
 限定したための誤り。実際には **in-repo の スパロボ戦記 fixture に汎用戦闘アニメ Lib 相当の `lib/BattleAnime*.eve`（無印/G/O/R/S）が既に存在**
@@ -25,7 +25,9 @@ overlay を即クリア＝毎フレーム空表示**だった。SRC immediate-mo
 GBA クローズアップが **`設定[全身戦闘アニメ]=オン` で分岐**することを実データで固定（Phase 3 配線の前提）。**Phase 1 gap 監査の結論**: 戦闘アニメ Lib が使う命令動詞に
 **未実装/Stub は 0 件**（図形 primitive 実装後。残ノイズは `#`/`//` コメント行と `List(...)` 継続断片のみ）。VFS file I/O（Open/Print/Close/Load）も駆動中に正常実行を確認。
 **配線確認**: combat が `対象ユニットＩＤ`/`相手ユニットＩＤ` を `try_play_battle_animation` 前に束縛済（`app.rs:3282-3284`→`:3654`）。
-native test 9 件＋統合 2 件。**残（Phase 3/4・要ブラウザ）**: クローズアップ本体の固定レイアウトでのユニット個別スプライト配置検証・実機の見栄え確認。詳細は §4「GBA 着手準備」。
+⑤ ✅ **実 combat 経路でフレームループを検証（`11b9429`）**: `attack_resolve_and_run`→戦闘アニメ起動の実経路で `Paint; Refresh; ClearPicture; Wait` 多フレームが
+各フレーム overlay に残る（毎フレーム空にならない・累積しない）ことを確認＝GBA フレーム描画の combat 統合 capstone。
+native test 10 件＋統合 2 件。**残（Phase 3/4・要ブラウザ）**: クローズアップ本体の固定レイアウトでのユニット個別スプライト配置検証・実機の見栄え確認。詳細は §4「GBA 着手準備」。
 
 **前セッション（2026-06-18・`master` 直接コミット）**: ① ✅ **B 単機ステータス詳細（`Scene::UnitDetail`）完了**（§1.2 B）。
 ② ✅ **差分オラクルを combat 予測（c）＋移動（d）＋気力/精神（e）＋改造/極端 level（f）＋別 fixture/サイズ差（g）へ拡張**。combat `placeattack` 45/45・移動 `moverange` 平地一致・
