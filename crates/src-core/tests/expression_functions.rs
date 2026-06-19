@@ -21,6 +21,31 @@ fn run(src: &str) -> App {
 //  String functions
 // ============================================================
 
+// ============================================================
+//  組込システム変数 / Built-in system variables
+// ============================================================
+
+#[test]
+fn app_version_reports_src_2_compatible_value() {
+    // SRC.Sharp `Expression.cs` の `appversion` = 10000*Major+100*Minor+Revision。
+    // 本移植は 2.2.33 相当 (20233) を報告し、SRC 2.00 以降を要求する版数ゲート
+    // (Welcome.eve 冒頭の `If AppVersion < 20000`) を通す。
+    let app = run("Set v AppVersion\n");
+    assert_eq!(app.script_var("v"), "20233");
+
+    // 大小無視で解決される (原典は変数名を小文字化して判別する)。
+    let app2 = run("Set v appversion\n");
+    assert_eq!(app2.script_var("v"), "20233");
+}
+
+#[test]
+fn app_version_passes_src2_gate() {
+    // Welcome.eve 冒頭の版数ゲートと同型: AppVersion >= 20000 で通過すること。
+    let app = run("If AppVersion < 20000 Then\nSet 古い 1\nElse\nSet 新しい 1\nEndif\n");
+    assert_eq!(app.script_var("古い"), "");
+    assert_eq!(app.script_var("新しい"), "1");
+}
+
 #[test]
 fn len_returns_char_count_not_byte_count() {
     // 日本語 3 文字 (UTF-8 では 9 bytes) → Len は 3 を返す

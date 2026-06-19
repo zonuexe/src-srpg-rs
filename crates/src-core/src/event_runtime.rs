@@ -11389,6 +11389,14 @@ fn numeric_arg(app: &App, arg: &str) -> Option<f64> {
     eval_numeric_atoms(app, &s).and_then(|r| r.parse::<f64>().ok())
 }
 
+/// 本移植が `AppVersion` で報告する SRC 互換バージョン番号。
+///
+/// 原典 SRC.Sharp `Expression.cs` の `appversion` は
+/// `10000*Major + 100*Minor + Revision` を返す。本移植は公式フルパッケージ
+/// 版 2.2.33 (本リポジトリの互換目標) 相当を報告する: `10000*2 + 100*2 + 33`。
+/// SRC 2.00 以降を要求するシナリオ (`If AppVersion < 20000` 等) を通すための値。
+pub const SRC_APP_VERSION: i64 = 10000 * 2 + 100 * 2 + 33;
+
 /// SRC のシステム変数 (`味方数` / `敵数` / `友軍数` / `中立数` / `ターン数` 等)
 /// に対する動的解決。該当しない名前なら `None`。
 fn system_variable_value(app: &App, name: &str) -> Option<String> {
@@ -11431,6 +11439,10 @@ fn system_variable_value(app: &App, name: &str) -> Option<String> {
         "中立レベル平均値" => Some(avg_level(Party::Neutral)),
         "ターン数" => Some(app.turn().number.to_string()),
         "総ターン数" => Some(app.total_turn().to_string()),
+        // SRC.Sharp `Expression.cs` の組込変数 `AppVersion`。SRC 2.00 以降を
+        // 要求するシナリオ (Welcome.eve 冒頭の版数ゲート等) を通すために報告する。
+        // 原典は変数名を小文字化して判別するため大小無視でマッチする。
+        n if n.eq_ignore_ascii_case("AppVersion") => Some(SRC_APP_VERSION.to_string()),
         // `フェイズ` は現在のフェーズの陣営名。SRC.Sharp の `SRC.Stage` 相当。
         "フェイズ" => Some(app.turn().phase.stage_name().to_string()),
         // `資金` は `App.money()` から動的に解決する。
