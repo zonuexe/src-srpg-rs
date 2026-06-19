@@ -6601,8 +6601,35 @@ fn eval_condition_args_with(app: &App, xargs: &[String]) -> bool {
 
 /// 名前から UnitInstance を引く。`uid` (Create で採番した一意 ID) /
 /// `unit_data_name` / `pilot_name` のいずれかが一致すれば真。
+/// SRC (VB6 `Option Compare Text` / Collection キー照合) はユニット/パイロット名の
+/// 照合で全角英数字を半角と同一視する。比較用に全角 ASCII (U+FF01–U+FF5E) を
+/// 半角 (U+0021–U+007E) へ畳み込む。例: `バ５` → `バ5`。
+///
+/// 公式サンプル1話は `Create … バ5`（半角）で生成したバルアドを `X(バ５)`/`Y(バ５)`
+/// （全角）で参照してユニガル防衛波を配置する。この正規化が無いと参照が解決できず
+/// 全波が誤座標に湧く。
+fn fold_fullwidth_ascii(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            let u = c as u32;
+            if (0xFF01..=0xFF5E).contains(&u) {
+                char::from_u32(u - 0xFEE0).unwrap_or(c)
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
 fn matches_unit_handle(u: &UnitInstance, key: &str) -> bool {
-    !u.uid.is_empty() && u.uid == key || u.unit_data_name == key || u.pilot_name == key
+    if (!u.uid.is_empty() && u.uid == key) || u.unit_data_name == key || u.pilot_name == key {
+        return true;
+    }
+    // SRC 互換: 全角/半角を同一視して再照合（例: ハンドル `バ5` ↔ 参照 `バ５`）。
+    let k = fold_fullwidth_ascii(key);
+    (!u.uid.is_empty() && fold_fullwidth_ascii(&u.uid) == k)
+        || fold_fullwidth_ascii(&u.unit_data_name) == k
+        || fold_fullwidth_ascii(&u.pilot_name) == k
 }
 
 /// 与えた名前のユニットが生存しているか。
@@ -13378,6 +13405,36 @@ fn err(line_num: usize, message: &str) -> ScriptError {
 mod tests {
     use super::*;
     use crate::data::event;
+
+    /// SRC 互換: 全角英数字を半角と同一視してユニットハンドルを照合する。
+    /// 公式サンプル1話の `Create … バ5`（半角）↔ `X(バ５)`/`Y(バ５)`（全角）の
+    /// 参照解決を保証する回帰テスト。
+    #[test]
+    fn unit_handle_lookup_folds_fullwidth_to_halfwidth() {
+        // 全角→半角畳み込みの基本
+        assert_eq!(fold_fullwidth_ascii("バ５"), "バ5");
+        assert_eq!(fold_fullwidth_ascii("ＡＢ12"), "AB12");
+        assert_eq!(fold_fullwidth_ascii("バ5"), "バ5"); // 既に半角は不変
+
+        // ハンドル `バ5`(半角) を `バ５`(全角) で参照できる (SRC 互換)
+        let mut u = UnitInstance::new("隕石バルアド５", "宇宙怪獣(ザコ)", Party::Enemy, 19, 20);
+        u.uid = "バ5".into();
+        assert!(
+            matches_unit_handle(&u, "バ５"),
+            "全角参照がハンドルに一致するはず"
+        );
+        assert!(
+            matches_unit_handle(&u, "バ5"),
+            "半角参照(完全一致)も当然一致"
+        );
+        assert!(!matches_unit_handle(&u, "バ6"), "別ハンドルには一致しない");
+
+        // find_unit (X()/Y() が使う) 経由でも解決し、座標が読める
+        let mut app = App::new();
+        app.database_mut().register_unit(u);
+        let found = find_unit(&app, "バ５").expect("全角ハンドルでユニットが見つかるはず");
+        assert_eq!((found.x, found.y), (19, 20));
+    }
 
     #[test]
     fn execute_basic_script() {
