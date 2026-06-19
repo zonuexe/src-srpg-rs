@@ -242,6 +242,25 @@ fn unit_names(app: &App) -> Vec<String> {
         .collect()
 }
 
+/// 全種別のダイアログを進める汎用ドライバ。Menu(Ask) は第1選択肢、Confirm は はい、
+/// Talk/WaitClick は次へ、Input はダミー応答、Timer は経過させる。idle で停止。
+/// (Harness の Drain は non-cancellable な Menu を進められないため、明示的に駆動する。)
+fn drive_all(app: &mut App, max: usize) {
+    for _ in 0..max {
+        if let Some(kind) = app.pending_dialog().map(|d| d.kind()) {
+            match kind {
+                "Menu" => app.respond_dialog(1),
+                "Input" => app.respond_dialog_text("テスト".to_string()),
+                _ => app.respond_dialog(0),
+            };
+        } else if let Some(t) = app.pending_timer() {
+            app.tick(t + 1.0);
+        } else {
+            break;
+        }
+    }
+}
+
 fn total_enemy_damage(app: &App) -> i64 {
     app.database()
         .unit_instances
@@ -496,5 +515,79 @@ fn kessen_chapter3_boots_with_upgrade_and_unit() {
             .iter()
             .any(|n| n.contains("ギルガス") || n.contains("ユニガル")),
         "敵(宇宙怪獣) が配置されていない: {names:?}"
+    );
+}
+
+#[test]
+fn campaign_chain_chapter1_to_chapter2_carries_party() {
+    let root = sample_root();
+    if !root.exists() {
+        eprintln!("[skip] サンプルシナリオ未配置: {}", root.display());
+        return;
+    }
+    // 第1話を起動 (Continue 経路で全配置→Battle)。
+    let mut app = boot_stage(&root, "決戦！宇宙怪獣1話.eve");
+    assert!(
+        unit_names(&app).iter().any(|n| n.contains("キャリバーン")),
+        "1話開始時に味方キャリバーンが居ない"
+    );
+
+    // 1話の勝利条件 = `接触 Pilot(補給艦リームズ) 敵:` (リームズが宇宙怪獣バルアドに
+    // 接触)。headless では リームズを バルアド隣接へ移動して接触イベントを発火させる。
+    // (ラベル名の関数 `Pilot(補給艦リームズ)` も解決されるようになった。)
+    let (bx, by) = app
+        .database()
+        .unit_instances
+        .iter()
+        .find(|u| u.unit_data_name.contains("バルアド"))
+        .map(|u| (u.x, u.y))
+        .expect("バルアドが居ない");
+    let riims_uid = app
+        .database()
+        .unit_instances
+        .iter()
+        .find(|u| u.unit_data_name.contains("リームズ"))
+        .map(|u| u.uid.clone())
+        .expect("補給艦リームズが居ない");
+    // バルアドの左隣 (x-1, y) へ移動 (バルアドは x>=18 なので x-1 は空き)。
+    assert!(
+        app.database_mut().move_unit(&riims_uid, bx - 1, by),
+        "リームズの移動に失敗"
+    );
+    let riims_idx = app
+        .database()
+        .unit_instances
+        .iter()
+        .position(|u| u.uid == riims_uid)
+        .unwrap();
+    event_runtime::fire_contact_event_labels(&mut app, riims_idx);
+
+    // ステージクリア (Ask クリア/やり直し → Confirm → Ask 終了) → Continue 2話 →
+    // エピローグ を全種別ダイアログ駆動で進める。Ask は第1選択肢 (=クリア) を選ぶ。
+    drive_all(&mut app, 800);
+
+    // インターミッションで停止していれば「次のステージへ」相当で 2話 を起動。
+    if !app.script_var("次ステージ").is_empty() {
+        assert!(app.advance_to_next_stage(), "2話への遷移に失敗");
+        drive_all(&mut app, 800);
+    }
+
+    let names = unit_names(&app);
+    eprintln!(
+        "[chain] scene={:?} stage_state={:?} stage={:?} units={names:?}",
+        app.scene(),
+        app.stage_state(),
+        app.stage(),
+    );
+
+    // 2話に到達: NPC(クルーワッハ) と 敵(ギルガス) が配置されている。
+    assert!(
+        names.iter().any(|n| n.contains("クルーワッハ")),
+        "2話の NPC が配置されていない (チェーン未到達?): {names:?}"
+    );
+    // 持ち越し検証: 1話の主力キャリバーンが 2話にも引き継がれている。
+    assert!(
+        names.iter().any(|n| n.contains("キャリバーン")),
+        "キャリバーンが2話に持ち越されていない: {names:?}"
     );
 }
