@@ -74,6 +74,27 @@ pub fn feature_level(features: &[ActiveFeature], base: &str) -> Option<i32> {
     })
 }
 
+/// 特殊能力名 `name` が **基底能力 `base` 本体か** を判定する。
+/// `base` と完全一致、または `base`Lv<n> 形式 (`feature_level` と同じレベル表記) なら
+/// `true`。`ＨＰ回復阻害` のような別接尾辞は別能力として `false`。
+///
+/// `Disable <unit> ＨＰ回復` のように **レベル無しの基底名** で指定された能力を、
+/// 実体 (`ＨＰ回復Lv1` 等) と突き合わせるのに使う。
+pub fn feature_name_matches_base(name: &str, base: &str) -> bool {
+    let Some(rest) = name.trim().strip_prefix(base) else {
+        return false;
+    };
+    if rest.is_empty() {
+        return true;
+    }
+    rest.strip_prefix("Lv")
+        .or_else(|| rest.strip_prefix("LV"))
+        .or_else(|| rest.strip_prefix("lv"))
+        .or_else(|| rest.strip_prefix("Ｌｖ"))
+        .or_else(|| rest.strip_prefix("ＬＶ"))
+        .is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,6 +151,18 @@ mod tests {
             is_active: false,
         }];
         assert_eq!(feature_level(&features, "ＨＰ回復"), None);
+    }
+
+    #[test]
+    fn feature_name_matches_base_handles_lv_and_exclusions() {
+        // 完全一致 / Lv 接尾辞は一致。
+        assert!(feature_name_matches_base("ＨＰ回復", "ＨＰ回復"));
+        assert!(feature_name_matches_base("ＨＰ回復Lv1", "ＨＰ回復"));
+        assert!(feature_name_matches_base("修理装置Lv3", "修理装置"));
+        // 別接尾辞 (阻害) は別能力 → 不一致。
+        assert!(!feature_name_matches_base("ＨＰ回復阻害", "ＨＰ回復"));
+        // 別能力 → 不一致。
+        assert!(!feature_name_matches_base("ＥＮ回復Lv1", "ＨＰ回復"));
     }
 
     #[test]

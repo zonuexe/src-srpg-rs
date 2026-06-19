@@ -2553,6 +2553,15 @@ fn exec_command_pc(
                             w.is_disabled = is_disable;
                         }
                     }
+                    // 特殊能力 (active_features) も切替える。`Disable unit ＨＰ回復` のように
+                    // レベル無し基底名で指定された能力を実体 (`ＨＰ回復Lv1` 等) と突き合わせ、
+                    // is_active を反転する。回復系等は feature_level が is_active を見るため、
+                    // これで「水上=ＨＰ回復ON / 陸上=OFF」(決戦2話の核ギミック) が成立する。
+                    for af in &mut app.database_mut().unit_instances[i].active_features {
+                        if crate::feature::feature_name_matches_base(&af.name, &ability_name) {
+                            af.is_active = !is_disable;
+                        }
+                    }
                 }
             }
             return Ok(pc + 1);
