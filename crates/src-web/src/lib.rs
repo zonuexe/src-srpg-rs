@@ -212,12 +212,15 @@ fn install_asset_packs(app: SharedApp, assets: SharedAssets, ctx: SharedCtx, pac
                 }
             };
             let on_img = make_image_redraw_cb(app.clone(), assets.clone(), ctx.clone());
-            // 起動時は画像/音声も登録 (register_media=true)。App 状態 (サンプル
-            // シナリオ) はリセットせず Assets / database にマージする。
+            // 素材パック (ZIP) は full_load=true で画像/音声/.eve を登録 + entrypoint
+            // 実行。SRC 本体システムデータ (terrain.txt / スペシャルパワー.eve 等の単体
+            // ファイル) は full_load=false で **データ取込 + .eve ラベル登録のみ** 行い
+            // top-level は実行しない (ライブラリ .eve を scenario として走らせない)。
+            let full_load = ASSET_PACK_FILES.contains(&name);
             let result = {
                 let mut a = app.borrow_mut();
                 let mut s = assets.borrow_mut();
-                archive::load_into_app(&mut a, &mut s, name, &bytes, &on_img, true)
+                archive::load_into_app(&mut a, &mut s, name, &bytes, &on_img, full_load)
             };
             match result {
                 Ok(log) => web_sys::console::log_1(&JsValue::from_str(&format!(
@@ -248,8 +251,14 @@ const ASSET_PACK_FILES: [&str; 3] = [
 /// `terrain.txt` (標準地形 91 種: 平地/道路/街/海/宇宙…) はサンプルを含む多くの
 /// シナリオが依存する。これが無いと組込みのミニ地形表 (ID 体系が別物) が使われ、
 /// マップの地形名・移動コスト・地形名ベースの進入イベント等が不正になる。
-/// `load_into_app` は単体テキストを内容種別で振り分けるため ZIP 化は不要。
-const SYSTEM_DATA_FILES: [&str; 1] = ["terrain.txt"];
+///
+/// `スペシャルパワー.eve` は精神コマンド/SP 演出のサブルーチン (`Mindanime` 等) を
+/// 定義する共有ライブラリ。シナリオが `Mindanime` 等を Call するため、ラベルを下地
+/// として登録しておく必要がある (full_load=false なので top-level は実行しない)。
+/// 公式の汎用グラフィック集 (`SRC_Graph*.zip`) にも含まれるが、単体配置にも対応する。
+///
+/// `load_into_app` は単体テキスト/.eve を内容種別で振り分けるため ZIP 化は不要。
+const SYSTEM_DATA_FILES: [&str; 2] = ["terrain.txt", "スペシャルパワー.eve"];
 
 /// 取得した素材パックの生バイトを `ASSET_PACK_FILES` の順序を保ってキャッシュする。
 /// 同名は上書き (再ロード対策)。

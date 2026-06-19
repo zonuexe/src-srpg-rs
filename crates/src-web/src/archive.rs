@@ -287,12 +287,12 @@ pub fn load_into_app(
             assets.midi_clips.len() / 2
         ));
     }
-    // データ専用の再適用モードでは .eve/.ini を一切登録・実行しない。
-    // ライブラリ .eve の top-level 実行は script context を suspend させ、
-    // この後に読み込むシナリオを壊すため (terrain/sp 等は pass 1 で取り込み済み)。
-    if !full_load {
-        return Ok(log);
-    }
+    // 再適用モード (full_load=false) でも .eve の **ラベル登録 (2a) は行う**。
+    // 共有 Lib (スペシャルパワー.eve の Mindanime、汎用戦闘アニメ GBA_*.eve 等) の
+    // サブルーチンは、シナリオ読込で App をリセットした後も下地として Call できる
+    // 必要があるため。**top-level 実行 (2b) と bootstrap は full_load 時のみ**行う
+    // (ライブラリ .eve の top-level 実行は script context を suspend させ後続シナリオを
+    // 壊すため)。terrain/sp 等は pass 1 で取り込み済み。
 
     // 第 2 パス: 全データ取り込み後に .eve スクリプトを実行する。
     // この順序にすることで .eve 内の `ChangeMap` / `Startbgm` /
@@ -363,6 +363,13 @@ pub fn load_into_app(
             }
         }
     }
+    // 再適用モードはここまで (.eve のラベル登録のみ)。共有 Lib のサブルーチンが
+    // 下地として登録されたので、この後に読み込むシナリオから Call できる。
+    // top-level 実行・bootstrap は行わない (後続シナリオ破壊を防ぐ)。
+    if !full_load {
+        return Ok(log);
+    }
+
     // エントリポイントの .eve のみ run_from_pc で実行する。
     // サブ .eve (章ファイル・ライブラリ・GameOver.eve 等) は script_library への
     // 登録済みで十分。Continue チェインが必要なタイミングで実行される。

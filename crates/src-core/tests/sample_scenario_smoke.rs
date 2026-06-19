@@ -810,3 +810,44 @@ fn kessen_chapter3_combine_completes_to_excaliver() {
         jade.pilot_ids
     );
 }
+
+#[test]
+fn shared_library_subroutine_callable_after_registration() {
+    let root = sample_root();
+    if !root.exists() {
+        eprintln!("[skip] サンプルシナリオ未配置: {}", root.display());
+        return;
+    }
+    // 共有 Lib のロード配線 (src-web: vendor-assets の .eve を register-only で下地登録)
+    // が実現する効果を headless で検証する: ライブラリ .eve を append_with_name で
+    // ラベル登録すると、その後のシナリオから **暗黙 Call** (`サブ名 引数...`) で
+    // サブルーチンを呼べる。
+    // 実 Lib (Lib/スペシャルパワー.eve) があればそれを登録して `SpecialPowerAnime`
+    // ラベルの登録を確認する。
+    let mut app = load_sample(&root, "SRCｻﾝﾌﾟﾙ.map");
+
+    // (1) 実 Lib を登録できれば、その代表サブルーチンラベルが引けること。
+    let lib_path = root.parent().unwrap().join("Lib/スペシャルパワー.eve");
+    if let Ok(lib_bytes) = fs::read(&lib_path) {
+        if let Ok(stmts) = event::parse(&loader::decode_text(&lib_bytes)) {
+            app.script_library_mut()
+                .append_with_name(&stmts, "Lib/スペシャルパワー.eve");
+        }
+        assert!(
+            app.script_library().label_pc("SpecialPowerAnime").is_some(),
+            "スペシャルパワー.eve の SpecialPowerAnime ラベルが登録されていない"
+        );
+    }
+
+    // (2) 登録済みライブラリサブルーチンが暗黙 Call で実行されること。
+    let lib = event::parse("共有サブルーチン:\nSet 共有実行 1\nReturn\n").expect("lib parse");
+    app.script_library_mut()
+        .append_with_name(&lib, "test_lib.eve");
+    let scenario = event::parse("共有サブルーチン\n").expect("scenario parse");
+    event_runtime::execute(&mut app, &scenario).expect("scenario exec");
+    assert_eq!(
+        app.script_var("共有実行"),
+        "1",
+        "登録済みライブラリサブルーチンが暗黙 Call で実行されていない"
+    );
+}
