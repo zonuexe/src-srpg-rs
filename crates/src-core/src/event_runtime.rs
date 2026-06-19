@@ -1817,7 +1817,61 @@ fn exec_command_pc(
                     .position(|u| u.party == crate::Party::Player)
             };
             if let Some(i) = target_idx {
-                app.database_mut().unit_instances[i].unit_data_name = mode.clone();
+                let main_uid = app.database().unit_instances[i].uid.clone();
+                let main_party = app.database().unit_instances[i].party;
+                // 合体形態の `分離` feature から構成パーツ名を取得 (表示フラグ除く)。
+                // 例: 未完成エクスカリバー `分離=非表示 キャリバーン(不完全) ヴィヴィアン(不完全)`。
+                let part_names: Vec<String> = app
+                    .database()
+                    .unit_by_name(&mode)
+                    .and_then(|ud| {
+                        ud.features
+                            .iter()
+                            .find(|(n, _)| n == "分離" || n == "Separate")
+                            .map(|(_, v)| v.clone())
+                    })
+                    .map(|v| {
+                        v.split_whitespace()
+                            .filter(|t| !matches!(*t, "非表示" | "表示"))
+                            .map(|s| s.to_string())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                // 相方パーツ (main 以外・同陣営・パーツ名一致) のパイロットを吸収し、
+                // 相方ユニットと Unit コマンドが先に作った空の合体形態テンプレ
+                // (無人・同名) を除去する。これで合体形態が 1 機に統合される。
+                let mut absorbed_pilots: Vec<String> = Vec::new();
+                let mut remove_uids: Vec<String> = Vec::new();
+                for u in &app.database().unit_instances {
+                    if u.uid == main_uid {
+                        continue;
+                    }
+                    let is_partner =
+                        u.party == main_party && part_names.iter().any(|p| p == &u.unit_data_name);
+                    let is_empty_template = u.unit_data_name == mode && u.pilot_name.is_empty();
+                    if is_partner {
+                        if !u.pilot_name.is_empty() {
+                            absorbed_pilots.push(u.pilot_name.clone());
+                        }
+                        remove_uids.push(u.uid.clone());
+                    } else if is_empty_template {
+                        remove_uids.push(u.uid.clone());
+                    }
+                }
+                // main を合体形態へ morph + HP/EN 全快 + 相方をサブパイロットに。
+                {
+                    let u = &mut app.database_mut().unit_instances[i];
+                    u.unit_data_name = mode.clone();
+                    u.damage = 0;
+                    u.en_consumed = 0;
+                    u.weapons.clear();
+                    for p in &absorbed_pilots {
+                        if !u.pilot_ids.contains(p) {
+                            u.pilot_ids.push(p.clone());
+                        }
+                    }
+                }
+                // 合体形態の特殊能力を再初期化。
                 let feats = app
                     .database()
                     .unit_by_name(&mode)
@@ -1829,18 +1883,32 @@ fn exec_command_pc(
                     app.database(),
                 );
                 app.database_mut().unit_instances[i].active_features = new_feats;
-                let u = &app.database().unit_instances[i];
-                let pilot_name = u.pilot_name.clone();
-                let unit_data_name = u.unit_data_name.clone();
-                let party = u.party;
-                fire_unit_event_labels(
-                    app,
-                    &["合体", "Combine"],
-                    &pilot_name,
-                    &unit_data_name,
-                    party,
-                    Some(&mode),
-                );
+                // 相方 / 空テンプレを除去 (pos_index も再構築)。
+                if !remove_uids.is_empty() {
+                    app.database_mut()
+                        .unit_instances
+                        .retain(|u| !remove_uids.contains(&u.uid));
+                    app.database_mut().rebuild_pos_index();
+                }
+                // 合体イベントラベル発火 (除去で index がずれるため uid で引き直す)。
+                if let Some(u) = app
+                    .database()
+                    .unit_instances
+                    .iter()
+                    .find(|u| u.uid == main_uid)
+                {
+                    let pilot_name = u.pilot_name.clone();
+                    let unit_data_name = u.unit_data_name.clone();
+                    let party = u.party;
+                    fire_unit_event_labels(
+                        app,
+                        &["合体", "Combine"],
+                        &pilot_name,
+                        &unit_data_name,
+                        party,
+                        Some(&mode),
+                    );
+                }
             }
             return Ok(pc + 1);
         }

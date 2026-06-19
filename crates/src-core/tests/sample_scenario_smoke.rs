@@ -749,3 +749,64 @@ fn kessen_chapter2_forced_loss_when_jade_destroyed() {
         "ジェイド撃破で GameOver (破壊 味方 → Switch → GameOver) していない"
     );
 }
+
+#[test]
+fn kessen_chapter3_combine_completes_to_excaliver() {
+    let root = sample_root();
+    if !root.exists() {
+        eprintln!("[skip] サンプルシナリオ未配置: {}", root.display());
+        return;
+    }
+    // 第3話の合体 (Over Ride): キャリバーン(不完全)[ジェイド] + ヴィヴィアン(不完全)[サラ]
+    //  → 未完成エクスカリバー。実シナリオの合体コマンド列 (Unit 合体形態 → Combine) を
+    //  実データで直接駆動して合体完走を検証する。
+    //  ※ 3話スタートの Over Ride 演出全体は `Mindanime` (共有 Lib/スペシャルパワー.eve
+    //    由来のカスタム命令) に依存し、未ロードだと演出途中で停止するため、ここでは
+    //    合体機構そのものを cinematic を介さず検証する。
+    let mut app = load_sample(&root, "決戦！宇宙怪獣3話.map");
+    let src = event::parse(
+        "Create 味方 キャリバーン(不完全) 0 ジェイド＝ソウマ 20 3 3\n\
+         Create 味方 ヴィヴィアン(不完全) 0 サラ＝Ｅ＝Ｊ＝ビップ 20 4 4\n\
+         Unit 未完成エクスカリバー Rank(ジェイド＝ソウマ)\n\
+         Combine ジェイド＝ソウマ 未完成エクスカリバー\n",
+    )
+    .expect("combine script parse");
+    event_runtime::execute(&mut app, &src).expect("combine script exec");
+
+    let names = unit_names(&app);
+    eprintln!("[3話合体] units={names:?}");
+
+    // 合体完了: ジェイドの機体が 未完成エクスカリバー になっている。
+    let jade = app
+        .database()
+        .unit_instances
+        .iter()
+        .find(|u| u.pilot_name == "ジェイド＝ソウマ")
+        .expect("ジェイドが居ない");
+    assert_eq!(
+        jade.unit_data_name, "未完成エクスカリバー",
+        "ジェイドが合体形態になっていない: {names:?}"
+    );
+    // 1 機に統合されている: 合体形態は 1 つだけ (Unit の空テンプレ重複が無い)。
+    assert_eq!(
+        names
+            .iter()
+            .filter(|n| n == &"未完成エクスカリバー")
+            .count(),
+        1,
+        "合体形態が重複している (空テンプレ未除去?): {names:?}"
+    );
+    // 構成パーツは吸収され消えている。
+    assert!(
+        !names
+            .iter()
+            .any(|n| n == "キャリバーン(不完全)" || n == "ヴィヴィアン(不完全)"),
+        "構成パーツ (不完全機) が残存している: {names:?}"
+    );
+    // 相方サラはサブパイロットとして統合機に取り込まれている。
+    assert!(
+        jade.pilot_ids.iter().any(|p| p == "サラ＝Ｅ＝Ｊ＝ビップ"),
+        "相方サラがサブパイロットに吸収されていない: pilot_ids={:?}",
+        jade.pilot_ids
+    );
+}
