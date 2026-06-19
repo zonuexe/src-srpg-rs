@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use src_core::data::{event, item, loader, map as mapdata, pilot, special_power, unit};
 use src_core::stage::StageState;
 use src_core::test_harness::{Harness, Step};
-use src_core::{App, Party};
+use src_core::{event_runtime, App, Party};
 
 /// リポジトリ直下に展開された非再配布パッケージのサンプルシナリオ root。
 fn sample_root() -> PathBuf {
@@ -57,17 +57,14 @@ fn rel_name(root: &Path, p: &Path) -> String {
         .replace('\\', "/")
 }
 
-/// サンプルシナリオ全体をロードして、指定エントリ .eve のステージを
-/// プロローグ→スタートイベント完走まで駆動した `App` を返す。
+/// サンプルシナリオ全体 (data/map/eve) を 1 つの `App` にロードして返す。
+/// ステージ起動はしない (テストが party 注入後に `advance_to_next_stage` する)。
 ///
 /// - 全データファイル (pilot/robot/item/sp) を DB に取込む (パースエラーは panic)。
 /// - 全 `.map` を basename で `store_map` する (`ChangeMap` が解決できるように)。
-///   エントリと同名の `.map` があれば active map にしておく
-///   (`SRCｻﾝﾌﾟﾙ.eve` のように `ChangeMap` を持たないステージ用)。
+///   `active_map_base` と一致する map は active map にしておく。
 /// - 全 `.eve` を `append_with_name` で登録 (ファイル間前方参照の解決)。
-/// - `次ステージ` にエントリを予約 → `advance_to_next_stage` (原典 Continue
-///   チェイン相当: プロローグ→スタート発火) → Talk を Drain で進める。
-fn boot_stage(root: &Path, entry_basename_lower: &str) -> App {
+fn load_sample(root: &Path, active_map_base: &str) -> App {
     let mut app = App::with_rng_seed(0x5A_4D_50_4C_u64);
 
     // ---- データファイル -> DB ------------------------------------------
@@ -122,14 +119,13 @@ fn boot_stage(root: &Path, entry_basename_lower: &str) -> App {
         &mut map_paths,
     );
     map_paths.sort();
-    let entry_map_base = format!("{}.map", entry_basename_lower.trim_end_matches(".eve"));
     for p in &map_paths {
         let Ok(bytes) = fs::read(p) else { continue };
         let txt = loader::decode_text(&bytes);
         let base = basename_lower(p);
         if let Ok(m) = mapdata::parse(&txt) {
-            // エントリと同名の map は active map にしておく。
-            if base == entry_map_base {
+            // 指定 basename の map は active map にしておく。
+            if base == active_map_base {
                 app.database_mut().replace_map(m.clone());
             }
             app.database_mut().store_map(base, m);
@@ -146,18 +142,12 @@ fn boot_stage(root: &Path, entry_basename_lower: &str) -> App {
     eve_paths.sort();
 
     let mut eve_parse_errors = Vec::<String>::new();
-    let mut entry_name = String::new();
     for p in &eve_paths {
         let Ok(bytes) = fs::read(p) else { continue };
         let txt = loader::decode_text(&bytes);
         let name = rel_name(root, p);
         match event::parse(&txt) {
-            Ok(stmts) => {
-                app.script_library_mut().append_with_name(&stmts, &name);
-                if basename_lower(p) == entry_basename_lower {
-                    entry_name = name.clone();
-                }
-            }
+            Ok(stmts) => app.script_library_mut().append_with_name(&stmts, &name),
             Err(e) => eve_parse_errors.push(format!("{name}: {e}")),
         }
     }
@@ -166,29 +156,22 @@ fn boot_stage(root: &Path, entry_basename_lower: &str) -> App {
         ".eve パース失敗:\n{}",
         eve_parse_errors.join("\n")
     );
-    assert!(
-        !entry_name.is_empty(),
-        "{entry_basename_lower} が見つからない"
-    );
+    app
+}
 
-    // ---- ステージ起動 (原典 Continue チェイン相当) --------------------
-    // `次ステージ` にエントリを予約して `advance_to_next_stage` を呼ぶ。これは
-    // Welcome.eve の `Continue <stage>` → インターミッション「次のステージへ」と
-    // 同じ起動経路で、プロローグ→(begin_battle 経由) スタート の順に発火する。
-    // インターミッション型 (決戦シリーズ) でも early-return せず Battle へ進む点が
-    // `bootstrap_stage_after_load` 経路との違い。
-    app.set_script_var("次ステージ".to_string(), entry_name.clone());
+/// ロード済み `app` で、登録済みエントリ .eve のステージを `次ステージ` +
+/// `advance_to_next_stage` (原典 Continue チェイン相当: プロローグ→スタート発火)
+/// で起動し、Talk を Drain で進めて駆動後の `App` を返す。
+fn drive_stage(mut app: App, entry_name: &str) -> App {
+    app.set_script_var("次ステージ".to_string(), entry_name.to_string());
     assert!(
         app.advance_to_next_stage(),
         "{entry_name} のステージ起動に失敗"
     );
-
-    // プロローグ / スタートイベントの Talk を順に流して進める。
     let mut h = Harness::from_app(app);
     let outcome = h
         .drive(&[Step::Drain(800)])
         .unwrap_or_else(|e| panic!("{entry_name} drive: {e}"));
-    eprintln!("[{entry_basename_lower}] drive outcome={outcome:?}");
 
     let app = h.app();
     let names: Vec<&str> = app
@@ -210,14 +193,37 @@ fn boot_stage(root: &Path, entry_basename_lower: &str) -> App {
         .filter(|u| u.party == Party::Player && !u.off_map)
         .count();
     eprintln!(
-        "[{entry_basename_lower}] scene={:?} stage_state={:?} turn={} phase={:?} alive(P/E)={alive_player}/{alive_enemy} 次ステージ={:?} units={names:?}",
+        "[{entry_name}] drive={outcome:?} scene={:?} stage_state={:?} turn={} phase={:?} alive(P/E)={alive_player}/{alive_enemy} units={names:?}",
         app.scene(),
         app.stage_state(),
         app.turn().number,
         app.turn().phase,
-        app.script_var("次ステージ"),
     );
     h.app().clone()
+}
+
+/// basename (小文字) から、登録名に使う原ケースの相対パスを解決する。
+/// 例: "srcｻﾝﾌﾟﾙ.eve" → "SRCｻﾝﾌﾟﾙ.eve" (登録時の append_with_name と一致させる)。
+fn entry_rel_name(root: &Path, entry_basename_lower: &str) -> String {
+    let mut eves = Vec::new();
+    walk(
+        root,
+        &|p| p.extension().and_then(|s| s.to_str()) == Some("eve"),
+        &mut eves,
+    );
+    eves.iter()
+        .find(|p| basename_lower(p) == entry_basename_lower)
+        .map(|p| rel_name(root, p))
+        .unwrap_or_else(|| panic!("{entry_basename_lower} が見つからない"))
+}
+
+/// `load_sample` + `drive_stage` の定番コンボ。エントリと同名 (basename) の
+/// `.map` を active map に採用する (ChangeMap を持たないステージ用)。
+fn boot_stage(root: &Path, entry_basename_lower: &str) -> App {
+    let map_base = format!("{}.map", entry_basename_lower.trim_end_matches(".eve"));
+    let app = load_sample(root, &map_base);
+    let entry_name = entry_rel_name(root, entry_basename_lower);
+    drive_stage(app, &entry_name)
 }
 
 fn count_party(app: &App, party: Party) -> usize {
@@ -435,5 +441,60 @@ fn kessen_chapter1_boots_to_deployment() {
         app.turn().phase,
         src_core::Phase::Player,
         "味方フェイズ未到達"
+    );
+}
+
+/// 連続シナリオ (決戦2話/3話) は前話からの持ち越し (セーブ) を前提に味方を Create
+/// しない。headless では最小の持ち越し party (キャリバーン=ジェイド) を注入してから
+/// 起動し、プロローグ/スタートの命令 (NPC 配置 / Upgrade / Unit / 必敗 設定 等) が
+/// runtime error なく実行され、敵/NPC が配置されることを確認する (コマンド網羅の煙試験)。
+fn boot_chapter_with_party(root: &Path, entry_basename_lower: &str, map_base: &str) -> App {
+    let mut app = load_sample(root, map_base);
+    // 持ち越し主力: キャリバーン (ジェイド＝ソウマ)。3話の `Unit ... Rank(ジェイド)` 等が
+    // ジェイドを参照するため最低限これを配置しておく (本来はセーブからの引き継ぎ)。
+    let setup = event::parse("Create 味方 キャリバーン 0 ジェイド＝ソウマ 23 3 3\n")
+        .expect("party setup parse");
+    event_runtime::execute(&mut app, &setup).expect("party setup exec");
+    let entry = entry_rel_name(root, entry_basename_lower);
+    drive_stage(app, &entry)
+}
+
+#[test]
+fn kessen_chapter2_boots_with_npc_and_enemies() {
+    let root = sample_root();
+    if !root.exists() {
+        eprintln!("[skip] サンプルシナリオ未配置: {}", root.display());
+        return;
+    }
+    // 第2話「沿岸都市を守れ」: テーマは NPC(友軍) 制御 + 必敗シナリオ。
+    // スタートで NPC(クルーワッハ) と 敵(宇宙怪獣ギルガス) を配置する。
+    let app = boot_chapter_with_party(&root, "決戦！宇宙怪獣2話.eve", "決戦！宇宙怪獣2話.map");
+    let names = unit_names(&app);
+    assert!(
+        names.iter().any(|n| n.contains("クルーワッハ")),
+        "NPC(クルーワッハ) が配置されていない: {names:?}"
+    );
+    assert!(
+        names.iter().any(|n| n.contains("ギルガス")),
+        "敵(宇宙怪獣ギルガス) が配置されていない: {names:?}"
+    );
+}
+
+#[test]
+fn kessen_chapter3_boots_with_upgrade_and_unit() {
+    let root = sample_root();
+    if !root.exists() {
+        eprintln!("[skip] サンプルシナリオ未配置: {}", root.display());
+        return;
+    }
+    // 第3話「決戦、宇宙怪獣！」: テーマは強制乗り換え/Upgrade/Unit による新型機導入。
+    // スタートで Upgrade(ギルガス第1→第2)・Unit(未完成エクスカリバー)・敵配置を行う。
+    let app = boot_chapter_with_party(&root, "決戦！宇宙怪獣3話.eve", "決戦！宇宙怪獣3話.map");
+    let names = unit_names(&app);
+    assert!(
+        names
+            .iter()
+            .any(|n| n.contains("ギルガス") || n.contains("ユニガル")),
+        "敵(宇宙怪獣) が配置されていない: {names:?}"
     );
 }
