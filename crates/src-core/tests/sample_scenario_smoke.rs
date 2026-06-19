@@ -523,6 +523,7 @@ fn kessen_chapter3_boots_with_upgrade_and_unit() {
         return;
     }
     // 第3話「決戦、宇宙怪獣！」: テーマは強制乗り換え/Upgrade/Unit による新型機導入。
+    // プロローグで `Upgrade キャリバーン キャリバーン(不完全)` (合体下準備の機体入れ替え)、
     // スタートで Upgrade(ギルガス第1→第2)・Unit(未完成エクスカリバー)・敵配置を行う。
     let app = boot_chapter_with_party(&root, "決戦！宇宙怪獣3話.eve", "決戦！宇宙怪獣3話.map");
     let names = unit_names(&app);
@@ -531,6 +532,16 @@ fn kessen_chapter3_boots_with_upgrade_and_unit() {
             .iter()
             .any(|n| n.contains("ギルガス") || n.contains("ユニガル")),
         "敵(宇宙怪獣) が配置されていない: {names:?}"
+    );
+    // Upgrade フォームチェンジが機能: ジェイドの機体がプロローグの
+    // `Upgrade キャリバーン キャリバーン(不完全)` で入れ替わっている (元キャリバーンは消える)。
+    assert!(
+        names.iter().any(|n| n == "キャリバーン(不完全)"),
+        "Upgrade による機体入れ替え (→キャリバーン(不完全)) が反映されていない: {names:?}"
+    );
+    assert!(
+        !names.iter().any(|n| n == "キャリバーン"),
+        "入れ替え前の キャリバーン が残存している: {names:?}"
     );
 }
 

@@ -890,66 +890,56 @@ Set b Bullet(リオ,ライフル)
 }
 
 // ============================================================
-//  Upgrade
+//  Upgrade (機体入れ替え / SRC Upgradeコマンド)
 // ============================================================
 
-fn unit_max_hp(app: &App, unit_name: &str) -> i64 {
-    app.database()
-        .units
-        .iter()
-        .find(|u| u.name == unit_name)
-        .map(|u| u.hp)
-        .unwrap_or(0)
-}
+/// SETUP の ブレイバー(リオ) を入れ替える先のユニットデータを定義する extra。
+const UPGRADE_TO: &str =
+    "Unit \"ブレイバー改\" リアル系 1 4 陸宇 5 M 5000 600 5500 150 1800 130 AAAA\n";
 
 #[test]
-fn upgrade_increases_unit_hp() {
-    // SETUP: Unit リアル系 ... 3000 400 3500 ... → value=3000, hp=3500。
-    // Upgrade unit hp 500 → UnitData の HP が 3500+500=4000 になる。
-    let app = run("Upgrade ブレイバー hp 500\n");
-    assert_eq!(unit_max_hp(&app, "ブレイバー"), 3500 + 500);
-}
-
-#[test]
-fn upgrade_hp_read_back_via_maxhp_function() {
-    // Upgrade 後、MaxHP() 関数がアップグレード後の値を返すこと。
-    let app = run("Upgrade ブレイバー hp 500\nSet m MaxHP(リオ)\n");
-    assert_eq!(app.script_var("m"), "4000");
-}
-
-#[test]
-fn upgrade_unknown_attr_is_noop() {
-    // 未知の属性は無視され、HP が変わらない。
-    let app = run("Upgrade ブレイバー 存在しない属性 999\n");
-    assert_eq!(unit_max_hp(&app, "ブレイバー"), 3500);
-}
-
-#[test]
-fn upgrade_en_increases_max_en() {
-    // Unit "ブレイバー" ... 3500 120 1200 110 → hp=3500, en=120, armor=1200, mob=110
-    let app = run("Upgrade ブレイバー en 100\n");
-    let en = app
+fn upgrade_replaces_unit_with_target_unit() {
+    // SRC `Upgrade unit1 unit2`: unit1 を unit2 のユニットデータに入れ替える。
+    // パイロット(リオ)・位置・陣営は引き継ぐ。
+    let app = run(&format!("{UPGRADE_TO}Upgrade ブレイバー ブレイバー改\n"));
+    let u = app
         .database()
-        .units
+        .unit_instances
         .iter()
-        .find(|u| u.name == "ブレイバー")
-        .map(|u| u.en)
-        .unwrap_or(0);
-    assert_eq!(en, 120 + 100);
+        .find(|u| u.pilot_name == "リオ")
+        .expect("リオ のユニットが無い");
+    assert_eq!(u.unit_data_name, "ブレイバー改", "機体が入れ替わっていない");
 }
 
 #[test]
-fn upgrade_armor_increases_armor() {
-    // Unit "ブレイバー" ... 3500 120 1200 110 → armor=1200。
-    let app = run("Upgrade ブレイバー armor 50\n");
-    let armor = app
+fn upgrade_full_recovers_hp() {
+    // 入れ替え時に HP が全快する (SRC: 「ＨＰ、ＥＮ、弾薬は全快」)。
+    let app = run(&format!(
+        "{UPGRADE_TO}Damage リオ 1000\nUpgrade ブレイバー ブレイバー改\n"
+    ));
+    let u = app
         .database()
-        .units
+        .unit_instances
         .iter()
-        .find(|u| u.name == "ブレイバー")
-        .map(|u| u.armor)
-        .unwrap_or(0);
-    assert_eq!(armor, 1200 + 50);
+        .find(|u| u.pilot_name == "リオ")
+        .unwrap();
+    assert_eq!(u.damage, 0, "HP が全快していない");
+}
+
+#[test]
+fn upgrade_unknown_target_is_noop() {
+    // 変換先ユニットデータが存在しなければ何もしない (機体は元のまま)。
+    let app = run("Upgrade ブレイバー 存在しない機体\n");
+    let u = app
+        .database()
+        .unit_instances
+        .iter()
+        .find(|u| u.pilot_name == "リオ")
+        .unwrap();
+    assert_eq!(
+        u.unit_data_name, "ブレイバー",
+        "未知の変換先で機体が変わった"
+    );
 }
 
 // ============================================================

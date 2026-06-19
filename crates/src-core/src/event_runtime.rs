@@ -2760,32 +2760,39 @@ fn exec_command_pc(
             return Ok(pc + 1);
         }
         "upgrade" => {
-            // `Upgrade unit attr n` — UnitData の base 値を + n
-            // (簡略化: hp/en/armor/mobility/speed のみ対応)
-            if xargs.len() < 3 {
+            // SRC `Upgrade [unit1] unit2` (`Upgradeコマンド.md` / C# `UpgradeCmd`):
+            // unit1 を unit2 のユニットデータに **入れ替える** (機体グレードアップ /
+            // ボスの形態変化)。ユニットランク (改造段階) は維持、HP/EN/弾薬は全快、
+            // パイロット・位置・陣営は引き継ぐ。unit1 省略時は selected_unit_for_event。
+            // (旧実装の `Upgrade unit attr n` ステータス加算は SRC に無い誤実装だった。)
+            let (target_key, new_unit) = match xargs.len() {
+                0 => return Ok(pc + 1),
+                1 => (app.selected_unit_for_event().to_string(), xargs[0].clone()),
+                _ => (xargs[0].clone(), xargs[1].clone()),
+            };
+            // 変換先ユニットデータが無ければ no-op (堅牢性優先)。
+            if app.database().unit_by_name(&new_unit).is_none() {
                 return Ok(pc + 1);
             }
-            let unit_name = xargs[0].clone();
-            let attr = xargs[1].to_ascii_lowercase();
-            let n: i64 = xargs[2].parse().unwrap_or(0);
-            if let Some(d) = app
+            let Some(idx) = app
                 .database()
                 .unit_instances
                 .iter()
-                .find(|u| matches_unit_handle(u, &unit_name))
-                .map(|u| u.unit_data_name.clone())
-            {
-                if let Some(ud) = app.database_mut().units.iter_mut().find(|u| u.name == d) {
-                    match attr.as_str() {
-                        "hp" => ud.hp += n,
-                        "en" => ud.en += n as i32,
-                        "armor" => ud.armor += n,
-                        "mobility" => ud.mobility += n as i32,
-                        "speed" => ud.speed += n as i32,
-                        _ => {}
-                    }
-                }
-            }
+                .position(|u| matches_unit_handle(u, &target_key))
+            else {
+                return Ok(pc + 1);
+            };
+            // インスタンスを取り出して機体データを差し替え、data 由来状態を再初期化。
+            let mut inst = app.database().unit_instances[idx].clone();
+            inst.unit_data_name = new_unit;
+            inst.damage = 0; // HP 全快
+            inst.en_consumed = 0; // EN 全快
+            inst.weapons.clear(); // 弾薬全快 (空 = 残弾フル)
+            inst.abilities.clear();
+            inst.active_features.clear();
+            inst.life_state.clear(); // 破壊扱いを解除 (= 復活)
+            populate_active_features(&mut inst, app);
+            app.database_mut().unit_instances[idx] = inst;
             return Ok(pc + 1);
         }
         "changeparty" => {
@@ -18586,17 +18593,29 @@ done:
     }
 
     #[test]
-    fn upgrade_modifies_unit_data() {
+    fn upgrade_replaces_unit_with_target() {
+        // SRC `Upgrade unit1 unit2`: unit1 を unit2 のデータに入れ替える (機体変化)。
         let mut app = App::new();
         setup_two_units(&mut app);
-        let before = app.database().unit_by_name("ブレイバー").unwrap().hp;
+        // setup_two_units が定義する 2 機目 (ゾルダII) へ入れ替える。
+        let target = "ゾルダII";
+        assert!(
+            app.database().unit_by_name(target).is_some(),
+            "テスト前提: {target} が定義されていること"
+        );
+        let pilot = app.database().unit_instances[0].pilot_name.clone();
         execute(
             &mut app,
-            &event::parse("Upgrade ブレイバー hp 500\n").unwrap(),
+            &event::parse(&format!("Upgrade ブレイバー {target}\n")).unwrap(),
         )
         .unwrap();
-        let after = app.database().unit_by_name("ブレイバー").unwrap().hp;
-        assert_eq!(after, before + 500);
+        let u = app
+            .database()
+            .unit_instances
+            .iter()
+            .find(|u| u.pilot_name == pilot)
+            .expect("パイロットの機体が消えた");
+        assert_eq!(u.unit_data_name, target, "機体が入れ替わっていない");
     }
 
     #[test]
