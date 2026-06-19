@@ -7058,7 +7058,7 @@ fn fire_unit_event_labels(
 /// - SRC.NET は `Attack`/`MapAttack` 等のシナリオ戦闘では発火させないが、
 ///   本実装は damage source を区別せず、HP が減れば一律発火する。シナリオ
 ///   作成時の用途 (HP 50% で台詞) を優先するための簡略化。
-fn fire_damage_threshold_labels(
+pub(crate) fn fire_damage_threshold_labels(
     app: &mut App,
     pilot_name: &str,
     unit_data_name: &str,

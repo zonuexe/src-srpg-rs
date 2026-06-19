@@ -3502,6 +3502,23 @@ impl App {
                 }
             } else {
                 // 通常ダメージ: defender が受ける (防御選択時は applied_damage で半減済)
+                // SRC `不死身` (SetStatus 不死身): 撃破させない。被ダメージを HP が
+                // 10 未満にならないようキャップする (C# Unit.attack.cs の てかげん/
+                // 不死身 と同一: HP<=10 なら 0、HP-dmg<10 なら HP-10)。サンプル
+                // シナリオの「不死身で耐える→損傷率 50% で回復＆不死身解除」の
+                // 演出を成立させる。
+                let applied_damage =
+                    if self.database.unit_instances[def_idx].has_condition("不死身") {
+                        let cur_hp = def_unit.hp - self.database.unit_instances[def_idx].damage;
+                        if cur_hp <= 10 {
+                            0
+                        } else {
+                            applied_damage.min(cur_hp - 10)
+                        }
+                    } else {
+                        applied_damage
+                    };
+                let def_old_dmg = self.database.unit_instances[def_idx].damage;
                 self.database.unit_instances[def_idx].damage += applied_damage;
                 let remaining = def_unit.hp - self.database.unit_instances[def_idx].damage;
                 if remaining <= 0 {
@@ -3564,6 +3581,21 @@ impl App {
                         m
                     }
                 } else {
+                    // 損傷率イベント (SRC `損傷率 <unit> <pct>:`): 戦闘ダメージで HP が
+                    // 閾値 (例 50%) を割ったら発火する。旧実装は `Damage` コマンド経由
+                    // (apply_damage) でしか発火せず、実戦闘では発火していなかった。
+                    // サンプルシナリオの「不死身で耐える→損傷率 50% で HP 回復＋不死身
+                    // 解除」演出はこの発火に依存する。
+                    let def_new_dmg = self.database.unit_instances[def_idx].damage;
+                    crate::event_runtime::fire_damage_threshold_labels(
+                        self,
+                        &def_pilot.name,
+                        &def_unit.name,
+                        def_inst.party,
+                        def_old_dmg,
+                        def_new_dmg,
+                        def_unit.hp,
+                    );
                     // 攻撃を受けて生存したユニットは気力 +1 (SRC `Unit.cs`: 損傷による気力上昇)。
                     {
                         let dm = &mut self.database.unit_instances[def_idx];
