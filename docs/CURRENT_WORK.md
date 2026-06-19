@@ -30,8 +30,9 @@ GBA クローズアップが **`設定[全身戦闘アニメ]=オン` で分岐*
 ⑥ ✅ **実 fixture のクローズアップ本体が headless で完走（`3d87adc`）**: `設定[全身戦闘アニメ]=オン`（スパロボ戦記は `スパロボ戦記.eve:48` で**既定 ON**）で
 実サブルーチン `戦闘アニメ_拡大小ビーム照射攻撃` が**未対応命令/欠落ラベルなく Wait まで完走**（ヘルパ・VFS file I/O 込み）。実 D 戦闘を `VERIFY_ANIMATE=1` で駆動し、
 実戦闘武器（スティンガン/ビームライフル/破壊光線＝全て animation.txt でクローズアップ sub に解決）の戦闘が ScriptError/panic なく完走することも確認。
-native test 11 件＋統合 2 件。**Phase 1/2 完了・Phase 3 は headless 検証可能範囲を完了**。**残（Phase 4・要ブラウザ）のみ**: 実アセットでの
-固定レイアウト スプライト配置の見栄え確認（`just serve` ＋ スパロボ戦記で確認）。詳細は §4「GBA 着手準備」。
+native test 11 件＋統合 2 件。**Phase 1/2 完了・Phase 3 headless 完了**。⑦ ✅ **Phase 4＝ブラウザ到達確認済（2026-06-19）**: in-repo 素材から組んだ
+**最小検証シナリオ**（§4 レシピ・著作権で非コミット）を `just serve` で読み込み、**マップ・ガンダム個別スプライト・戦闘（反撃手段選択）が実機描画**されることを
+ユーザがスクショで確認。攻撃実行でクローズアップ本体が再生（図形/ClearPicture/ペン状態の実機検証）。**残**: 各フレームの見栄え微調整のみ。詳細は §4「GBA 着手準備」。
 
 **前セッション（2026-06-18・`master` 直接コミット）**: ① ✅ **B 単機ステータス詳細（`Scene::UnitDetail`）完了**（§1.2 B）。
 ② ✅ **差分オラクルを combat 予測（c）＋移動（d）＋気力/精神（e）＋改造/極端 level（f）＋別 fixture/サイズ差（g）へ拡張**。combat `placeattack` 45/45・移動 `moverange` 平地一致・
@@ -528,9 +529,23 @@ Briefing → Title [【START】|…|真ゲッター/マジンガー/…] → 難
    ② 配線確認: combat が `対象ユニットＩＤ`/`相手ユニットＩＤ` を `try_play_battle_animation` 前に束縛（`app.rs:3282-3284`→`:3654`）、`animate_battle`＋`settings.battle_animation`(既定 true) で起動。
    ③ ✅ 実 fixture のクローズアップ本体が headless で Wait まで完走（`3d87adc`）・実 D 戦闘を `VERIFY_ANIMATE=1` で駆動し ScriptError なく完走。図形は Canvas2D で描画済。
    **残（Phase 4 と一体・要ブラウザ）**: 固定画面に `戦闘アニメ[対象ユニット画像]`/`Info(…,全身画像)` でユニット個別スプライトを置く**見栄え**（実アセットパックが要る）。
-4. **Phase 4 — 実機検証**（対話/描画ゆえ headless 不可の見栄え確認）。`just serve` ＋ スパロボ戦記（既定で `設定[全身戦闘アニメ]=オン`）で実機の見栄えを確認するのみ。
+4. **Phase 4 — 実機検証**（対話/描画ゆえ headless 不可の見栄え確認）: ⏳ **ブラウザで到達確認済（2026-06-19）**。最小検証シナリオ（下記レシピ）を
+   `just serve` で読み込み、**マップ・ガンダム個別スプライト・戦闘（反撃手段選択）が実機で正しく描画**されることをユーザがスクリーンショットで確認。
+   攻撃を実行するとクローズアップ本体が再生される（図形描画/ClearPicture 遅延クリア/ペン状態の実機確認）。**残**: クローズアップ各フレームの見栄え微調整のみ。
 > **方針メモ**: GBA は「engine に GBA 画面を作り込む」のではなく「**汎用戦闘アニメ Lib が要求する primitives を engine が満たす**」のが正道。
 > 推測で GBA 画面を実装せず、Lib スクリプトを駆動して gap を埋める（温泉旅館/スパロボ戦記で実証した「fixture を駆動して未対応を洗い出す」手法を踏襲）。
+
+#### Phase 4 最小検証シナリオ（再現レシピ・著作権により非コミット）
+
+実機の見栄え確認用に、in-repo の gitignore 済み素材 `crates/src-web/tests/fixtures/スパロボ戦記/`（84M・非コミット）から
+**最小構成シナリオ**を組み立てる。**生成物（zip）は著作権上コミットしない**（`/tmp` で運用）。要点:
+- **エントリ .eve（自作）**: キャラメイキングを回避し `Create 味方/敵 ガンダム 0 人工知能(ザコ) 20 x y` で 2vs2 を直接配置・`Set 設定[全身戦闘アニメ] オン`・
+  `ChangeMap "map\map-1.map"`。`@スパロボ戦記` でデータ＋（`data/スパロボ戦記/Include.eve` 経由で）汎用戦闘アニメ Lib を読む。`プロローグ`/`スタート` はエンジンが自動発火。
+- **同梱（不可分）**: `data/` ＋ `lib/` ＋ `map/map-1.map` ＋ `src.ini`（計 ~7M）。
+- **スプライト（最小）**: ガンダム個別（`Bitmap/Anime/Unit/EC_G0079_Gundam*.bmp` 全身・`Bitmap/Unit/G0079_Gundam*.bmp` マップ・Shield 等の小ディレクトリ、~1.9M）のみ。
+  **共通エフェクト**（`EFFECT_BeamRifle01` 等）は **vendor BA パック `vendor-assets/SRC_BA110418.zip`**（エンジン起動時自動ロード）が供給＝シナリオに含めない（"scenario=固有ユニット / vendor=共通" の最小化）。
+- **検証**: `VERIFY_SMOKE=1 VERIFY_DRIVE=1 VERIFY_AUTOSTART=1 VERIFY_AUTOPLAY=1 VERIFY_ANIMATE=1` で entry 自動選択・parse/runtime errors=0・Battle 到達・combat 成立を headless 確認 → `just serve` で実機読込。
+- **生成 8.9M（zip 1.2M）**。前提: `vendor-assets/` に 3 パック（特に `SRC_BA110418.zip`）が配置済みであること。
 
 ### 恒久的な制約（仕様・運用メモ）
 
