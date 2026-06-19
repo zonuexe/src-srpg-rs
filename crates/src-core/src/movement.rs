@@ -977,6 +977,73 @@ mod tests {
         assert!(r.contains_key(&(2, 1)), "空中ユニットは水越しに到達できる");
     }
 
+    /// パーサ修正の波及検証 (movement): robot.txt の裸名 `水上移動` がパースされ、
+    /// 移動コスト計算 (make_unit_cost_fn) に渡ると、地上 (陸) ユニットが水マスへ
+    /// 進入できるようになる。パース→移動の経路が実際に繋がることの回帰テスト。
+    /// (パーサ修正前は裸名特殊能力が全て欠落し、水上移動が常に無効化されていた。)
+    #[test]
+    fn parsed_surface_water_move_feature_enables_water_entry() {
+        // robot.txt の特殊能力セクションに裸名 `水上移動` を持つユニットをパース。
+        let units = crate::data::unit::parse(
+            "水棲機\n水棲機,すいせいき,敵,1,0\n陸,4,M,1000,100\n特殊能力\n水上移動\n3000,100,500,80\nAA--,x.bmp\n",
+        )
+        .expect("parse");
+        let feats: Vec<String> = units[0].features.iter().map(|(n, _)| n.clone()).collect();
+        assert!(
+            feats.iter().any(|f| f == "水上移動"),
+            "裸名 水上移動 がパースされるはず: {feats:?}"
+        );
+
+        let table = vec![terrain_entry(0, "陸", 1), terrain_entry(1, "水", 2)];
+        let mut m = MapData::new(2, 1);
+        m.set_cell(
+            0,
+            0,
+            MapCell {
+                terrain_id: 0,
+                bitmap_no: 0,
+            },
+        );
+        m.set_cell(
+            1,
+            0,
+            MapCell {
+                terrain_id: 1,
+                bitmap_no: 0,
+            },
+        );
+
+        // 水上移動 あり (パース結果) → 水マス到達可。
+        let cost_with = make_unit_cost_fn(
+            table.clone(),
+            "陸".to_string(),
+            *b"AA--",
+            String::new(),
+            feats,
+            vec![],
+        );
+        let r_with = compute_range_with(&m, (0, 0), 5, cost_with);
+        assert!(
+            r_with.contains_key(&(1, 0)),
+            "水上移動 ありで水マスに到達できるはず"
+        );
+
+        // 対照: 水上移動 なし (裸名欠落と同状態) → 水マス進入不可。
+        let cost_without = make_unit_cost_fn(
+            table,
+            "陸".to_string(),
+            *b"AA--",
+            String::new(),
+            vec![],
+            vec![],
+        );
+        let r_without = compute_range_with(&m, (0, 0), 5, cost_without);
+        assert!(
+            !r_without.contains_key(&(1, 0)),
+            "水上移動 なしでは水マスに進入できないはず"
+        );
+    }
+
     /// 移動範囲計算との統合テスト: 水適応なしの地上ユニットは水マスを越えられない。
     #[test]
     fn ground_unit_range_blocked_by_water() {
