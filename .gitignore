@@ -24,6 +24,10 @@ result-*
 # 実シナリオ検証用フィクスチャ (各自で取得; サイズが大きく追跡しない)
 crates/src-web/tests/fixtures/
 
+# SRC フルパッケージ版 (本体 / 汎用素材 / 公式サンプルシナリオ)。再配布不可。
+# 各自で展開して置くと sample_scenario_smoke 等の gated テストが参照する。
+srcall-*/
+
 # 汎用素材パック (SRC_Graph / SRC_BA / SRC_Wave 等)。公式から各自取得して
 # ここへ置くと起動時に自動読込される。再配布規約のためリポジトリには含めない
 # (ディレクトリは .gitkeep で保持し trunk copy-dir を成立させる)。
