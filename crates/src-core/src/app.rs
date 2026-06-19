@@ -15915,6 +15915,39 @@ mod tests {
     }
 
     #[test]
+    fn destruction_event_fires_with_pilot_function_label() {
+        // 回帰: ラベル名に関数 `Pilot(<unit名>)` を含む破壊イベントが、当該ユニットの
+        // 撃破で発火する (例: 決戦！宇宙怪獣1話 の `破壊 Pilot(補給艦リームズ):`)。
+        // マッチャは実ユニットの unit名から `Pilot(<unit名>)` 候補を再構成して照合する。
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6);
+        add_weapon(&mut app, "Hero", 9999, 3); // 一撃必殺 (HP100 を撃破)
+        place_player_unit(&mut app, "FoeData", 9, 9); // FoeData の UnitData/PilotData を用意
+        let foe = spawn_enemy(&mut app, "FoeData", 3, 6);
+        let stmts = crate::data::event::parse("破壊 Pilot(FoeData):\nSet 破壊発火 1\nExit\n")
+            .expect("parse 破壊 label");
+        app.script_library_mut()
+            .append_with_name(&stmts, "test_destroy.eve");
+        app.set_stage_state(crate::stage::StageState::Battle);
+
+        click_tile(&mut app, 2, 6); // Hero 選択
+        let ai = attack_item_index(&app);
+        click_menu_item(&mut app, ai); // 攻撃
+        click_tile(&mut app, 3, 6); // 敵を攻撃 (撃破)
+
+        assert!(
+            app.database().unit_by_uid(&foe).is_none(),
+            "敵が撃破されていない"
+        );
+        assert_eq!(
+            app.script_var("破壊発火"),
+            "1",
+            "`破壊 Pilot(FoeData)` 関数形ラベルが発火していない"
+        );
+    }
+
+    #[test]
     fn player_cannot_attack_npc_ally_but_can_attack_enemy_and_neutral() {
         // 味方 ↔ ＮＰＣ は同盟。Hero(味方) は隣の ＮＰＣ を攻撃できず、
         // 敵 / 中立 は攻撃できる（SRC 敵味方関係）。

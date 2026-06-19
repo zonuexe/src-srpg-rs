@@ -6631,11 +6631,19 @@ fn fire_game_over_labels(app: &mut App) {
 /// 外側の dispatch ctx を上書きしない (旧実装は再入で上書きハザードが
 /// あり、同期完結ハンドラ前提で割り切っていた)。
 pub(crate) fn fire_destruction_labels(app: &mut App, pilot_name: &str, unit_data_name: &str) {
+    // pilot名 / unit名 に加え、関数形 `Pilot(<unit名>)` / `Unit(<pilot名>)` も試す。
+    // 実シナリオは `破壊 Pilot(補給艦リームズ):` のように関数でユニットを指す。
+    let mut targets: Vec<String> = Vec::with_capacity(4);
+    if !pilot_name.is_empty() {
+        targets.push(pilot_name.to_string());
+        targets.push(format!("Unit({pilot_name})"));
+    }
+    if !unit_data_name.is_empty() {
+        targets.push(unit_data_name.to_string());
+        targets.push(format!("Pilot({unit_data_name})"));
+    }
     for prefix in ["Destruction", "破壊"] {
-        for target in [pilot_name, unit_data_name] {
-            if target.is_empty() {
-                continue;
-            }
+        for target in &targets {
             let label = format!("{prefix} {target}");
             if app.post_stage_event_label(label) {
                 break;
@@ -6702,27 +6710,40 @@ fn party_long_label(party: crate::Party) -> &'static str {
 /// 発火しない (= UI 経路の通常戦闘でだけ発火) という規定があるが、本実装は
 /// `attack_target` 経由 (= UI 攻撃のみ) で呼び出すため自然に満たす。
 fn fire_pair_event_labels(app: &mut App, prefixes: &[&str], atk: &UnitEventId, def: &UnitEventId) {
-    let atk_party_label = party_long_label(atk.party);
-    let def_party_label = party_long_label(def.party);
-    let atk_ids = [atk.pilot.as_str(), atk.unit.as_str(), atk_party_label];
-    let def_ids = [def.pilot.as_str(), def.unit.as_str(), def_party_label];
+    let atk_ids = event_label_identifiers(atk);
+    let def_ids = event_label_identifiers(def);
     for prefix in prefixes {
-        for a in atk_ids {
-            if a.is_empty() {
-                continue;
-            }
-            for d in def_ids {
-                if d.is_empty() {
-                    continue;
-                }
+        for a in &atk_ids {
+            for d in &def_ids {
                 let label = format!("{prefix} {a} {d}");
-                // 会話 / 攻撃 イベントは章ローカル。
+                // 会話 / 攻撃 / 接触 イベントは章ローカル。
                 if app.post_stage_event_label(label) {
                     return;
                 }
             }
         }
     }
+}
+
+/// イベントラベルのユニット側識別子候補。pilot 名 / unit 名 / 陣営名に加えて、
+/// **関数形** `Pilot(<unit名>)` / `Unit(<pilot名>)` も生成する。
+///
+/// SRC のシナリオは特定ユニットを指すのに `接触 Pilot(補給艦リームズ) 敵:` /
+/// `破壊 Pilot(補給艦リームズ):` のように関数をラベル名に書く。ラベルは関数テキスト
+/// のまま登録されるため、当該ユニットの unit名/pilot名から関数形キーを再構成して
+/// 突き合わせる (式評価不要)。
+fn event_label_identifiers(id: &UnitEventId) -> Vec<String> {
+    let mut ids = Vec::with_capacity(5);
+    if !id.pilot.is_empty() {
+        ids.push(id.pilot.clone());
+        ids.push(format!("Unit({})", id.pilot));
+    }
+    if !id.unit.is_empty() {
+        ids.push(id.unit.clone());
+        ids.push(format!("Pilot({})", id.unit));
+    }
+    ids.push(party_long_label(id.party).to_string());
+    ids
 }
 
 /// 攻撃 / 攻撃後 イベントの 1 ユニット側識別子 3 種 (pilot, unit, party)。
