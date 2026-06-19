@@ -895,3 +895,53 @@ UseAbility ブレイバー 召喚 ゾルダII 5 6
     let summoned = find_unit_named(&app, "ゾルダII").unwrap();
     assert_eq!((summoned.x, summoned.y), (5, 6), "指定座標に召喚");
 }
+
+// ============================================================
+//  Escape: 引数なし (ForEach 連携) / 陣営ラベル
+// ============================================================
+
+fn off_map_by_pilot(app: &App, pilot: &str) -> bool {
+    app.database()
+        .unit_instances
+        .iter()
+        .find(|u| u.pilot_name == pilot)
+        .map(|u| u.off_map)
+        .unwrap_or_else(|| panic!("{pilot} が見つからない"))
+}
+
+const ESCAPE_SETUP: &str = r#"
+Pilot "敵A" 敵A 男性 超能力者 AAAA 100 100 100 100 100 100 100
+Pilot "敵B" 敵B 男性 超能力者 AAAA 100 100 100 100 100 100 100
+Place "ブレイバー" "リオ" Player 1 1
+Place "ゾルダII" "敵A" Enemy 5 5
+Place "ゾルダII" "敵B" Enemy 6 6
+"#;
+
+#[test]
+fn foreach_enemy_escape_retreats_all_enemies() {
+    // SRC イディオム `ForEach 敵 / Escape / Next` で全敵を退避 (off_map)。
+    // ForEach 書式1 が各反復で SelectedUnitForEvent を設定し、引数なし Escape が
+    // それを対象にすることで成立する (決戦！宇宙怪獣1話 の勝利演出 `バルアド撃破`)。
+    let app = run_setup(&format!("{ESCAPE_SETUP}ForEach 敵\nEscape\nNext\n"));
+    assert!(off_map_by_pilot(&app, "敵A"), "敵A が退避していない");
+    assert!(off_map_by_pilot(&app, "敵B"), "敵B が退避していない");
+    assert!(!off_map_by_pilot(&app, "リオ"), "味方リオまで退避している");
+}
+
+#[test]
+fn escape_party_label_retreats_whole_party() {
+    // SRC `Escape 敵`: 当該陣営の出撃中ユニットを全退避 (EscapeCmd case 2)。
+    let app = run_setup(&format!("{ESCAPE_SETUP}Escape 敵\n"));
+    assert!(off_map_by_pilot(&app, "敵A"), "敵A が退避していない");
+    assert!(off_map_by_pilot(&app, "敵B"), "敵B が退避していない");
+    assert!(!off_map_by_pilot(&app, "リオ"), "味方リオまで退避している");
+}
+
+#[test]
+fn escape_named_unit_retreats_single() {
+    // 回帰: パイロット名指定の Escape は当該 1 体のみ退避 (従来挙動を維持)。
+    let app = run_setup(&format!("{ESCAPE_SETUP}Escape 敵A\n"));
+    assert!(off_map_by_pilot(&app, "敵A"), "敵A が退避していない");
+    assert!(!off_map_by_pilot(&app, "敵B"), "敵B まで退避している");
+    assert!(!off_map_by_pilot(&app, "リオ"), "味方リオまで退避している");
+}

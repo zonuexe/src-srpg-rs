@@ -2823,20 +2823,57 @@ fn exec_command_pc(
             return Ok(pc + 1);
         }
         "escape" => {
-            // `Escape unit_or_pilot` — マップから一時退避（撤退）。
+            // `Escape [unit_or_pilot | party]` — マップから一時退避（撤退）。
             // `off_map = true` を立てて AI / 戦闘 / 描画 / 勝利判定から除外。
             // 後段の `Launch` / `Place` で `off_map = false` に戻して再配置できる。
-            // 引数は裸識別子 (例: `対象ユニットＩＤ` システム変数) も解決する。
-            if let Some(target_arg) = xargs.first() {
-                let key = fn_arg_value(app, target_arg);
-                let uid = app
-                    .database()
-                    .unit_instances
-                    .iter()
-                    .find(|u| matches_unit_handle(u, &key))
-                    .map(|u| u.uid.clone());
-                if let Some(uid) = uid {
-                    app.database_mut().set_off_map(&uid, true);
+            // SRC `EscapeCmd` 準拠:
+            //  - 引数なし: `SelectedUnitForEvent` (ForEach ループ対象等) を退避。
+            //    `ForEach 敵 / Escape / Next` で全敵退避するイディオムを成立させる。
+            //  - 陣営ラベル (味方/敵/ＮＰＣ/中立): 当該陣営の出撃中ユニットを全退避。
+            //  - それ以外: パイロット名 / ユニット ID で 1 体退避。
+            // 末尾 `非同期` オプションは無視。
+            let args_no_opt: Vec<&String> =
+                xargs.iter().filter(|a| a.as_str() != "非同期").collect();
+            match args_no_opt.first() {
+                None => {
+                    // 引数なし: 選択ユニットを退避。
+                    let key = app.selected_unit_for_event().to_string();
+                    let uid = app
+                        .database()
+                        .unit_instances
+                        .iter()
+                        .find(|u| matches_unit_handle(u, &key))
+                        .map(|u| u.uid.clone());
+                    if let Some(uid) = uid {
+                        app.database_mut().set_off_map(&uid, true);
+                    }
+                }
+                Some(arg) => {
+                    let key = fn_arg_value(app, arg);
+                    if let Some(party) = parse_party_label(key.trim().trim_matches('"')) {
+                        // 陣営ラベル: 当該陣営の出撃中ユニットを全退避。
+                        let uids: Vec<String> = app
+                            .database()
+                            .unit_instances
+                            .iter()
+                            .filter(|u| u.party == party && !u.off_map)
+                            .map(|u| u.uid.clone())
+                            .collect();
+                        for uid in uids {
+                            app.database_mut().set_off_map(&uid, true);
+                        }
+                    } else {
+                        // パイロット名 / ユニット ID で 1 体退避。
+                        let uid = app
+                            .database()
+                            .unit_instances
+                            .iter()
+                            .find(|u| matches_unit_handle(u, &key))
+                            .map(|u| u.uid.clone());
+                        if let Some(uid) = uid {
+                            app.database_mut().set_off_map(&uid, true);
+                        }
+                    }
                 }
             }
             return Ok(pc + 1);
@@ -11897,6 +11934,10 @@ fn bind_foreach_unit(app: &mut App, ident: &str) {
     } else {
         uid
     };
+    // SRC `ForEachCmd` は各反復で `Event.SelectedUnitForEvent` を当該ユニットに
+    // 設定する。これにより ループ内の引数省略コマンド (`Escape` / `Finish` 等) が
+    // 現在のループ対象に作用する (`ForEach 敵 / Escape / Next` で全敵退避 等)。
+    app.set_selected_unit_for_event(uid.clone());
     app.set_script_var("対象ユニットＩＤ".to_string(), uid);
     app.set_script_var("対象パイロット".to_string(), pilot);
 }
