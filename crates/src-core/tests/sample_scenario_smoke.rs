@@ -920,6 +920,91 @@ fn kessen_chapter2_boss_hp_regen_toggles_with_disable_enable() {
 }
 
 #[test]
+fn kessen_chapter2_low_enemy_count_spawns_unigal_reinforcements() {
+    let root = sample_root();
+    if !root.exists() {
+        eprintln!("[skip] サンプルシナリオ未配置: {}", root.display());
+        return;
+    }
+    // 2話メカニクス: `*ターン全味方` は `If 敵数 < 5 Then Create 敵 宇宙怪獣ユニガル …
+    // X(宇宙怪獣ギルガス) Y(宇宙怪獣ギルガス)` でザコを補充し続ける。ターン1 味方フェイズ
+    // 開始時点では 敵数=1 (ギルガスのみ) < 5 なので、起動駆動の中でユニガルが補充される。
+    // → 敵数 システム変数 + ターン全味方イベント + X/Y(ボス) のパイロット名照合 が
+    //   連動して機能することの実データ検証。
+    let app = boot_chapter_with_party(&root, "決戦！宇宙怪獣2話.eve", "決戦！宇宙怪獣2話.map");
+
+    let unigal: Vec<&src_core::UnitInstance> = app
+        .database()
+        .unit_instances
+        .iter()
+        .filter(|u| u.party == Party::Enemy && u.unit_data_name.contains("ユニガル"))
+        .collect();
+    assert!(
+        unigal.len() >= 4,
+        "敵数<5 でユニガル増援が補充されるはず (*ターン全味方): {} 体",
+        unigal.len()
+    );
+
+    // X/Y(宇宙怪獣ギルガス) がパイロット名照合で解決し、ボス付近に湧くこと。
+    let (bx, by) = app
+        .database()
+        .unit_instances
+        .iter()
+        .find(|u| u.pilot_name == "宇宙怪獣ギルガス")
+        .map(|u| (u.x, u.y))
+        .expect("ギルガスが居ない");
+    assert!(
+        unigal
+            .iter()
+            .any(|u| u.x.abs_diff(bx) <= 5 && u.y.abs_diff(by) <= 5),
+        "ユニガル増援はボス (X/Y(宇宙怪獣ギルガス)) 付近に湧くはず"
+    );
+}
+
+#[test]
+fn kessen_chapter2_npc_ai_redirected_to_boss_by_changemode() {
+    let root = sample_root();
+    if !root.exists() {
+        eprintln!("[skip] サンプルシナリオ未配置: {}", root.display());
+        return;
+    }
+    // 2話メカニクス: NPC(クルーワッハ=友軍 AI) が敵を攻撃すると `*攻撃 ＮＰＣ 敵` が発火し、
+    // `ChangeMode ＮＰＣ 宇宙怪獣ギルガス` で全 NPC の思考をボスへ誘導する (火力支援)。
+    // ここでは ChangeMode ＮＰＣ <target> が NPC 陣営全体の ai_mode をボスへ向ける効果を検証。
+    // (注: 本体イベントは末尾の **引数無し ClearEvent** で一度きり化するが、現状の移植では
+    //  引数無し ClearEvent は no-op のため Talk は毎回再表示される。ai_mode 誘導効果自体は有効。)
+    let mut app = boot_chapter_with_party(&root, "決戦！宇宙怪獣2話.eve", "決戦！宇宙怪獣2話.map");
+
+    let npc_uids: Vec<String> = app
+        .database()
+        .unit_instances
+        .iter()
+        .filter(|u| u.party == Party::Npc)
+        .map(|u| u.uid.clone())
+        .collect();
+    assert!(
+        !npc_uids.is_empty(),
+        "2話に NPC(クルーワッハ) が配置されているはず"
+    );
+
+    let redirect = event::parse("ChangeMode ＮＰＣ 宇宙怪獣ギルガス\n").expect("parse ChangeMode");
+    event_runtime::execute(&mut app, &redirect).expect("exec ChangeMode");
+
+    for uid in &npc_uids {
+        let u = app
+            .database()
+            .unit_instances
+            .iter()
+            .find(|u| &u.uid == uid)
+            .expect("NPC が消えた");
+        assert_eq!(
+            u.ai_mode, "宇宙怪獣ギルガス",
+            "ChangeMode ＮＰＣ で全 NPC の思考がボスへ誘導されるはず"
+        );
+    }
+}
+
+#[test]
 fn kessen_chapter3_combine_completes_to_excaliver() {
     let root = sample_root();
     if !root.exists() {
