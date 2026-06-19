@@ -16892,6 +16892,67 @@ Return
     }
 
     #[test]
+    fn battle_animation_frame_loop_keeps_frame_visible_through_combat() {
+        // GBA クローズアップ実機相当: 戦闘解決から起動した戦闘アニメが
+        // `PaintPicture; Refresh; ClearPicture; Wait` のフレームループのとき、
+        // ClearPicture 遅延クリアにより各フレームが Wait 中も overlay に残ること
+        // (毎フレーム空表示にならないこと) を、実際の combat 経路で検証する。
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 5, 6);
+        add_weapon(&mut app, "Hero", 200, 1); // 武器名 = "テスト砲"
+        place_player_unit(&mut app, "Foe", 9, 9);
+        spawn_party(&mut app, "Foe", crate::Party::Enemy, 6, 6);
+        app.set_stage_state(crate::stage::StageState::Battle);
+
+        // 2 フレームのループ。各フレームで 1 枚描いて Refresh→ClearPicture→Wait。
+        let sub = "\
+戦闘アニメ_斬撃攻撃:
+For i = 1 To 2
+  PaintPicture frame.bmp 10 20 透過
+  Refresh
+  ClearPicture
+  Wait 5
+Next
+Return
+";
+        let stmts = crate::data::event::parse(sub).unwrap();
+        crate::event_runtime::library_append(&mut app, &stmts);
+        app.database_mut()
+            .merge_animation_data("汎用\nテスト砲(攻撃), 斬撃\n");
+
+        app.set_animate_battle(true);
+        app.set_map_cursor(5, 6);
+        assert!(app.attack_resolve_and_run(Some((6, 6)), false, ""));
+
+        // 1 フレーム目の Wait で中断。フレームの PaintPicture が overlay に残っている。
+        assert!(
+            app.pending_timer().is_some(),
+            "1 フレーム目 Wait で中断のはず"
+        );
+        let pics = |app: &App| {
+            app.script_overlay()
+                .cmds
+                .iter()
+                .filter(|c| matches!(c, crate::DrawCmd::Picture { .. }))
+                .count()
+        };
+        assert_eq!(
+            pics(&app),
+            1,
+            "Wait 中はフレームが見える (ClearPicture 即時クリアなら 0 になる)"
+        );
+
+        // tick で次フレームへ。毎フレーム ClearPicture されるので累積せず常に 1 枚。
+        app.tick(1.0);
+        assert!(
+            app.pending_timer().is_some(),
+            "2 フレーム目 Wait で再度中断"
+        );
+        assert_eq!(pics(&app), 1, "2 フレーム目も 1 枚 (累積しない)");
+    }
+
+    #[test]
     fn battle_animation_falls_back_to_native_without_data() {
         // animation.txt が無ければ従来どおりネイティブ演出 (battle_anim) が積まれる。
         let mut app = App::new();
