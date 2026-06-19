@@ -976,3 +976,37 @@ fn destruction_event_fires_party_level_label() {
         "破壊イベントで 対象ユニット が撃破ユニットに解決されていない"
     );
 }
+
+// ============================================================
+//  Ride (強制乗り換え / SRC Rideコマンド case3)
+// ============================================================
+
+#[test]
+fn ride_two_arg_swaps_pilot_and_vacates_old_unit() {
+    // SRC `Ride pilot unit`: パイロットを別ユニットへ乗せ替える。元の機体からは
+    // 降りる (GetOff)。決戦！宇宙怪獣3話 プロローグ `Ride サラ ヴィヴィアン(不完全)` 相当。
+    let app = run_setup(
+        "Place \"ブレイバー\" \"リオ\" Player 1 1\n\
+         Place \"ゾルダII\" \"ガロ\" Player 2 2\n\
+         Ride リオ ゾルダII\n",
+    );
+    // リオ はゾルダII に乗っている。
+    let zolda = app
+        .database()
+        .unit_instances
+        .iter()
+        .find(|u| u.unit_data_name == "ゾルダII")
+        .unwrap();
+    assert_eq!(zolda.pilot_name, "リオ", "リオ がゾルダII に乗っていない");
+    // 元のブレイバーからは降りている (パイロット重複が無い)。
+    let braver = app
+        .database()
+        .unit_instances
+        .iter()
+        .find(|u| u.unit_data_name == "ブレイバー")
+        .unwrap();
+    assert_ne!(
+        braver.pilot_name, "リオ",
+        "元のブレイバーにリオが残っている (乗り換えで降りていない)"
+    );
+}

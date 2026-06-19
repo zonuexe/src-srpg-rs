@@ -2255,13 +2255,31 @@ fn exec_command_pc(
                 app.selected_unit_for_event().to_string()
             };
             if !target_handle.is_empty() {
-                if let Some(u) = app
-                    .database_mut()
+                if let Some(tidx) = app
+                    .database()
                     .unit_instances
-                    .iter_mut()
-                    .find(|u| matches_unit_handle(u, &target_handle))
+                    .iter()
+                    .position(|u| matches_unit_handle(u, &target_handle))
                 {
-                    u.pilot_name = pilot;
+                    // SRC `RideCmd` は乗り換え前に `p.GetOff()` で元機を降りる。
+                    // pilot が target 以外のユニットに乗っていれば無人化して
+                    // パイロット重複を防ぐ (`Ride サラ ヴィヴィアン` で元機ブレスに
+                    // サラが残らないように)。1 引数形式 (新規サブパイロット搭乗) では
+                    // 元機が無いので no-op。
+                    let old: Vec<usize> = app
+                        .database()
+                        .unit_instances
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, u)| *i != tidx && u.pilot_name == pilot)
+                        .map(|(i, _)| i)
+                        .collect();
+                    for i in old {
+                        let u = &mut app.database_mut().unit_instances[i];
+                        u.pilot_name.clear();
+                        u.pilot_ids.retain(|p| p != &pilot);
+                    }
+                    app.database_mut().unit_instances[tidx].pilot_name = pilot;
                 }
             }
             return Ok(pc + 1);
