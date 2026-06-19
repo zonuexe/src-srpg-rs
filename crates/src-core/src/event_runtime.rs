@@ -1668,12 +1668,26 @@ fn exec_command_pc(
             return Ok(pc + 1);
         }
         "finish" => {
-            // `Finish` または `Finish label` — ステージを Victory にして
-            // (label 指定があれば) 後段ラベルへ自動遷移する用途。
-            // 簡略化: stage_state を Victory にし、label があれば script_var に記録。
-            app.set_stage_state(crate::stage::StageState::Victory);
-            if let Some(label) = xargs.first() {
-                app.set_script_var("__next_stage".to_string(), label.clone());
+            // SRC `Finish [unit]` (`Finishコマンド.md` / C# `FinishCmd`): 指定
+            // ユニットの行動を **1 回分終了** させるユニットコマンド。
+            // ステージ終了 (Victory) ではない点に注意 (旧実装は Win/GameClear と
+            // 混同して `stage_state=Victory` にしており、決戦！宇宙怪獣1話 の
+            // スタートイベント `Finish ジェイド＝ソウマ` で開始即勝利になっていた)。
+            //
+            // unit 省略時は `selected_unit_for_event`。本実装の行動モデルは
+            // boolean (`has_acted`, 最大 1 行動) なので has_acted=true が
+            // 「1 行動消費」に相当する。既に行動済みなら no-op (冪等)。
+            let key = match xargs.first() {
+                Some(u) => u.clone(),
+                None => app.selected_unit_for_event().to_string(),
+            };
+            if let Some(u) = app
+                .database_mut()
+                .unit_instances
+                .iter_mut()
+                .find(|u| matches_unit_handle(u, &key))
+            {
+                u.has_acted = true;
             }
             return Ok(pc + 1);
         }
@@ -14863,11 +14877,28 @@ Set m HasStatus(ブレイバー, 麻痺)
     }
 
     #[test]
-    fn finish_with_label_records_next_stage() {
+    fn finish_ends_unit_action_not_stage() {
+        // SRC `Finish [unit]` は指定ユニットの行動を終了させる (has_acted=true)。
+        // ステージ終了 (Victory) ではない (旧実装の混同を是正)。
         let mut app = App::new();
-        execute(&mut app, &event::parse("Finish 次章\n").unwrap()).unwrap();
-        assert_eq!(app.stage_state(), crate::stage::StageState::Victory);
-        assert_eq!(app.script_var("__next_stage"), "次章");
+        let src = "\
+Pilot \"リオ\" リオ 男性 超能力者 AAAA 100 100 100 100 100 100 100
+Unit \"ブレイバー\" Real 1 0 陸 5 M 1000 100 5000 100 1500 100 AAAA
+Create 味方 ブレイバー 0 リオ 10 3 3
+Finish リオ
+";
+        execute(&mut app, &event::parse(src).unwrap()).unwrap();
+        // ステージは Victory にならない。
+        assert_ne!(app.stage_state(), crate::stage::StageState::Victory);
+        // 対象ユニットは行動済み (Action() = 0)。
+        let acted = app
+            .database()
+            .unit_instances
+            .iter()
+            .find(|u| u.pilot_name == "リオ")
+            .map(|u| u.has_acted)
+            .unwrap_or(false);
+        assert!(acted, "Finish 後に has_acted=true であるべき");
     }
 
     #[test]

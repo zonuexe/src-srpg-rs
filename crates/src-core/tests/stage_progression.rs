@@ -175,14 +175,22 @@ fn start_sets_battle_state() {
 // ============================================================
 
 #[test]
-fn finish_sets_victory_state() {
-    let app = run("Finish\n");
-    assert_eq!(app.stage_state(), src_core::StageState::Victory);
-}
-
-#[test]
-fn finish_with_label_stores_next_stage() {
-    let app = run("Finish 第二話\n");
-    assert_eq!(app.stage_state(), src_core::StageState::Victory);
-    assert_eq!(app.script_var("__next_stage"), "第二話");
+fn finish_ends_unit_action_not_stage() {
+    // SRC `Finish [unit]` (Finishコマンド.md): 指定ユニットの行動を 1 回分終了
+    // させるユニットコマンド。ステージ終了 (Victory) ではない。
+    let app = run("\
+Pilot \"リオ\" リオ 男性 超能力者 AAAA 100 100 100 100 100 100 100
+Unit \"ブレイバー\" Real 1 0 陸 5 M 1000 100 5000 100 1500 100 AAAA
+Create 味方 ブレイバー 0 リオ 10 3 3
+Finish リオ
+");
+    assert_ne!(app.stage_state(), src_core::StageState::Victory);
+    let acted = app
+        .database()
+        .unit_instances
+        .iter()
+        .find(|u| u.pilot_name == "リオ")
+        .map(|u| u.has_acted)
+        .unwrap_or(false);
+    assert!(acted, "Finish 後に has_acted=true であるべき");
 }
