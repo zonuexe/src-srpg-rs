@@ -187,7 +187,14 @@ pub fn start() -> Result<(), JsValue> {
 /// 再配布規約のためリポジトリには同梱せず、各自が配置したファイルを配信・読込する。
 /// 未配置 (HTTP エラー) のパックは警告を出さずスキップする。
 fn install_asset_packs(app: SharedApp, assets: SharedAssets, ctx: SharedCtx, packs: SharedPacks) {
-    for name in ASSET_PACK_FILES {
+    // 汎用素材パック (ZIP) に加え、SRC 本体の標準システムデータ (terrain.txt 等) も
+    // 同じ経路で取り込む。`load_into_app` が単体テキストを内容種別で振り分け、
+    // `packs` にキャッシュされるためシナリオ読込後の `reapply_packs` でも再適用される。
+    for name in ASSET_PACK_FILES
+        .iter()
+        .chain(SYSTEM_DATA_FILES.iter())
+        .copied()
+    {
         let app = app.clone();
         let assets = assets.clone();
         let ctx = ctx.clone();
@@ -233,6 +240,16 @@ const ASSET_PACK_FILES: [&str; 3] = [
     "SRC_BA110418.zip",
     "SRC_Wave091207.zip",
 ];
+
+/// SRC 本体の標準システムデータ。`vendor-assets/` に **単体ファイル** で配置すると
+/// 起動時に取り込み、シナリオ読込後も下地として再適用する。再配布規約のため
+/// リポジトリには同梱せず各自が SRC 本体 (`Data/System/`) から配置する。
+///
+/// `terrain.txt` (標準地形 91 種: 平地/道路/街/海/宇宙…) はサンプルを含む多くの
+/// シナリオが依存する。これが無いと組込みのミニ地形表 (ID 体系が別物) が使われ、
+/// マップの地形名・移動コスト・地形名ベースの進入イベント等が不正になる。
+/// `load_into_app` は単体テキストを内容種別で振り分けるため ZIP 化は不要。
+const SYSTEM_DATA_FILES: [&str; 1] = ["terrain.txt"];
 
 /// 取得した素材パックの生バイトを `ASSET_PACK_FILES` の順序を保ってキャッシュする。
 /// 同名は上書き (再ロード対策)。
