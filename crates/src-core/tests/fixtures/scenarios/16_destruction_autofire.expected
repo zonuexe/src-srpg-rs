@@ -15,11 +15,13 @@ pending_audio = 0
 == messages (1) ==
 [0] all_damage_applied
 
-== vars (4) ==
+== vars (6) ==
 d1_fired = 1
 d2_fired = 1
 d3_fired = 1
 d4_unit_fallback = 1
+対象パイロット = 鋼鉄4号
+対象ユニット = 鋼鉄4号
 
 == units (0) ==
 

@@ -17,8 +17,10 @@ pending_audio = 0
 [1] after_second_kill
 [2] annihilation_fired
 
-== vars (1) ==
+== vars (3) ==
 enemy_wipeout_count = 1
+対象パイロット = 鋼鉄2号
+対象ユニット = 鋼鉄2号
 
 == units (1) ==
 [0] 味方ブレイバー/味方A Player @(1,1) HP=3500/3500 EN=120/120 morale=100

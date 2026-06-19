@@ -5680,17 +5680,17 @@ fn exec_command_pc(
             // 撃破ラベル発火用に該当ユニットの (pilot, unit_data) を退避。
             // `Kill name` は名前 1 致するもの全てを除去するので、複数該当
             // した場合は順に発火する。
-            let mut destroyed: Vec<(String, String)> = Vec::new();
+            let mut destroyed: Vec<(String, String, crate::Party)> = Vec::new();
             for u in &app.database().unit_instances {
                 if matches_unit_handle(u, target) {
-                    destroyed.push((u.pilot_name.clone(), u.unit_data_name.clone()));
+                    destroyed.push((u.pilot_name.clone(), u.unit_data_name.clone(), u.party));
                 }
             }
             app.database_mut()
                 .unit_instances
                 .retain(|u| !matches_unit_handle(u, target));
-            for (p, ud) in destroyed {
-                fire_destruction_labels(app, &p, &ud);
+            for (p, ud, party) in destroyed {
+                fire_destruction_labels(app, &p, &ud, party);
             }
             return Ok(pc + 1);
         }
@@ -6609,11 +6609,12 @@ fn apply_damage(app: &mut App, key: &str, amount: i64) {
     u.damage = (u.damage + amount).max(0);
     let new_dmg = u.damage;
     if new_dmg >= max_hp && max_hp > 0 {
-        // 撃破前にラベル発火用の名前を退避してから unit_instance を除去。
+        // 撃破前にラベル発火用の名前/陣営を退避してから unit_instance を除去。
         let pilot_name = u.pilot_name.clone();
         let unit_data_name = u.unit_data_name.clone();
+        let party = u.party;
         app.database_mut().remove_unit_at(idx);
-        fire_destruction_labels(app, &pilot_name, &unit_data_name);
+        fire_destruction_labels(app, &pilot_name, &unit_data_name, party);
     } else if new_dmg > old_dmg {
         // HP 残存 + ダメージ増加 → 損傷率閾値跨ぎを検査。
         let u = &app.database().unit_instances[idx];
@@ -6667,10 +6668,25 @@ fn fire_game_over_labels(app: &mut App) {
 /// Destruction ハンドラに `Talk` 等の suspend 系命令が含まれていても
 /// 外側の dispatch ctx を上書きしない (旧実装は再入で上書きハザードが
 /// あり、同期完結ハンドラ前提で割り切っていた)。
-pub(crate) fn fire_destruction_labels(app: &mut App, pilot_name: &str, unit_data_name: &str) {
-    // pilot名 / unit名 に加え、関数形 `Pilot(<unit名>)` / `Unit(<pilot名>)` も試す。
-    // 実シナリオは `破壊 Pilot(補給艦リームズ):` のように関数でユニットを指す。
-    let mut targets: Vec<String> = Vec::with_capacity(4);
+pub(crate) fn fire_destruction_labels(
+    app: &mut App,
+    pilot_name: &str,
+    unit_data_name: &str,
+    party: crate::Party,
+) {
+    // pilot名 / unit名 に加え、関数形 `Pilot(<unit名>)` / `Unit(<pilot名>)`、
+    // **陣営名** (`破壊 味方:` / `破壊 敵:` 等) も試す。SRC は 破壊ラベルの識別子を
+    // ユニット識別子 (pilot/unit/ID/陣営) として照合する (`SearchLabel` is_unit)。
+    // 実シナリオは `破壊 Pilot(補給艦リームズ):` や `破壊 味方:` (Switch 対象ユニット)
+    // のように書く。
+    // 破壊イベント本体が `Switch 対象ユニット` / `$(対象ユニット)` で撃破ユニットを
+    // 参照できるよう、対象系システム変数を撃破ユニットに設定する (SRC `対象ユニット`
+    // = メインパイロット名)。決戦！宇宙怪獣2話 `破壊 味方: / Switch 対象ユニット`。
+    if !pilot_name.is_empty() {
+        app.set_script_var("対象ユニット".to_string(), pilot_name.to_string());
+        app.set_script_var("対象パイロット".to_string(), pilot_name.to_string());
+    }
+    let mut targets: Vec<String> = Vec::with_capacity(5);
     if !pilot_name.is_empty() {
         targets.push(pilot_name.to_string());
         targets.push(format!("Unit({pilot_name})"));
@@ -6679,6 +6695,7 @@ pub(crate) fn fire_destruction_labels(app: &mut App, pilot_name: &str, unit_data
         targets.push(unit_data_name.to_string());
         targets.push(format!("Pilot({unit_data_name})"));
     }
+    targets.push(party_long_label(party).to_string());
     for prefix in ["Destruction", "破壊"] {
         for target in &targets {
             let label = format!("{prefix} {target}");
@@ -13166,8 +13183,9 @@ pub(crate) fn map_attack(
                 // 通常戦闘と同様に 破壊 <name> / 全滅 <party> イベントを発火する。
                 // これが無いとマップ兵器でラスト1機を撃破してもシナリオが進行しない。
                 let (vp, vu) = (def_pilot.name.clone(), def_unit.name.clone());
+                let vparty = app.database().unit_instances[def_idx].party;
                 app.database_mut().remove_unit_at(def_idx);
-                fire_destruction_labels(app, &vp, &vu);
+                fire_destruction_labels(app, &vp, &vu, vparty);
                 kills += 1;
             }
         }

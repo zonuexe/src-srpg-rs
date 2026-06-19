@@ -3486,9 +3486,10 @@ impl App {
                             .unwrap_or("?"),
                         def_pilot.nickname
                     );
+                    let guard_party = self.database.unit_instances[g_idx].party;
                     self.database.remove_unit_at(g_idx);
                     if let (Some(gp), Some(gu)) = (guard_pilot, guard_unit) {
-                        self.fire_destruction_label(&gp.name, &gu.name);
+                        self.fire_destruction_label(&gp.name, &gu.name, guard_party);
                     }
                     m
                 } else {
@@ -3719,9 +3720,9 @@ impl App {
         } else {
             None
         };
-        // 撃破時の自動発火ラベル `Destruction <unit>` / `<pilot>` を実行。
+        // 撃破時の自動発火ラベル `Destruction <unit>` / `<pilot>` / `破壊 <陣営>` を実行。
         if defender_killed {
-            self.fire_destruction_label(&def_pilot.name, &def_unit.name);
+            self.fire_destruction_label(&def_pilot.name, &def_unit.name, def_inst.party);
         }
 
         // 攻撃後イベント発火前に残り戦闘系システム変数を更新。
@@ -3994,7 +3995,7 @@ impl App {
                 let victim_value = def_unit.value;
                 let victim_party = self.database.unit_instances[def_idx].party;
                 self.database.remove_unit_at(def_idx);
-                self.fire_destruction_label(&def_pilot.name, &def_unit.name);
+                self.fire_destruction_label(&def_pilot.name, &def_unit.name, victim_party);
                 if let Some(killer_idx) = self
                     .database
                     .unit_instances
@@ -4162,8 +4163,8 @@ impl App {
     /// `破壊 <name>` / `全滅 敵 → クリア` が走らず進行不能** だった (実機報告: ターンだけ
     /// 増えて撃破しても何も起こらない)。`.eve` `Kill`/`Damage` 経路で使われている
     /// 正しい `fire_destruction_labels` (破壊 + 全滅) に委譲して一本化する。
-    fn fire_destruction_label(&mut self, pilot: &str, unit: &str) {
-        crate::event_runtime::fire_destruction_labels(self, pilot, unit);
+    fn fire_destruction_label(&mut self, pilot: &str, unit: &str, party: crate::Party) {
+        crate::event_runtime::fire_destruction_labels(self, pilot, unit, party);
     }
 
     /// `(dx, dy)` の防御側ユニットが `target` へ反撃可能なら 1 度だけ実行。

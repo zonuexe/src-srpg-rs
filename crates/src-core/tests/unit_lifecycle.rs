@@ -945,3 +945,34 @@ fn escape_named_unit_retreats_single() {
     assert!(!off_map_by_pilot(&app, "敵B"), "敵B まで退避している");
     assert!(!off_map_by_pilot(&app, "リオ"), "味方リオまで退避している");
 }
+
+// ============================================================
+//  破壊 <陣営> (party-level destruction event)
+// ============================================================
+
+#[test]
+fn destruction_event_fires_party_level_label() {
+    // SRC は 破壊ラベルの識別子を pilot/unit/ID/陣営 で照合する。`破壊 味方:`
+    // (陣営レベル) が、味方ユニット撃破で発火することを検証 (決戦！宇宙怪獣2話 の
+    // 敗北フロー `破壊 味方: / Switch 対象ユニット`)。
+    let app = run_setup(
+        "Place \"ブレイバー\" \"リオ\" Player 3 3\n\
+         Kill リオ\n\
+         Exit\n\
+         破壊 味方:\n\
+         Set 破壊陣営発火 1\n\
+         Set 破壊対象名 $(対象ユニット)\n\
+         Exit\n",
+    );
+    assert_eq!(
+        app.script_var("破壊陣営発火"),
+        "1",
+        "`破壊 味方` (陣営レベル破壊イベント) が発火していない"
+    );
+    // `対象ユニット` が撃破ユニットのパイロット名に解決される (Switch 対象ユニット 用)。
+    assert_eq!(
+        app.script_var("破壊対象名"),
+        "リオ",
+        "破壊イベントで 対象ユニット が撃破ユニットに解決されていない"
+    );
+}
