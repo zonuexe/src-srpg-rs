@@ -962,6 +962,31 @@ fn kessen_chapter2_low_enemy_count_spawns_unigal_reinforcements() {
 }
 
 #[test]
+fn kessen_chapter2_star_prefixed_multitoken_labels_register() {
+    let root = sample_root();
+    if !root.exists() {
+        eprintln!("[skip] サンプルシナリオ未配置: {}", root.display());
+        return;
+    }
+    // `*` 接頭辞付き multi-token 自動発火ラベル (`*攻撃 ＮＰＣ 敵:` / `*ターン 全 味方:`)
+    // が `*` を剥がしたフル名で 2話ファイル内に解決できることを検証する。
+    // 旧実装は `*` 付き multi-token を単一トークンへ潰し、`*攻撃 ＮＰＣ 敵:` を "攻撃"
+    // として誤登録 → NPC 攻撃イベントが発火しなかった (HandleEvent 候補 "攻撃 ＮＰＣ 敵"
+    // と不一致)。
+    let app = load_sample(&root, "決戦！宇宙怪獣2話.map");
+    let lib = app.script_library();
+    let f = "決戦！宇宙怪獣2話.eve";
+    assert!(
+        lib.label_pc_in_file(f, "攻撃 ＮＰＣ 敵").is_some(),
+        "`*攻撃 ＮＰＣ 敵:` が \"攻撃 ＮＰＣ 敵\" として解決できるはず"
+    );
+    assert!(
+        lib.label_pc_in_file(f, "ターン 全 味方").is_some(),
+        "`*ターン 全 味方:` が \"ターン 全 味方\" として解決できるはず"
+    );
+}
+
+#[test]
 fn kessen_chapter2_npc_ai_redirected_to_boss_by_changemode() {
     let root = sample_root();
     if !root.exists() {

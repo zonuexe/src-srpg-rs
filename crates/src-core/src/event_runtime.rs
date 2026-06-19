@@ -169,6 +169,11 @@ pub struct ScriptLibrary {
     /// コマンドメニュー項目。
     #[serde(default)]
     pub custom_commands: Vec<CustomCommandDef>,
+    /// `ClearEvent` で無効化されたラベル行の pc 集合 (SRC `LabelData.Enable=false`
+    /// 相当)。`label_pc` / `label_pc_in_file` はこの集合の pc をスキップするので、
+    /// 一度きりイベント (`*攻撃 ＮＰＣ 敵` 等) が再発火しなくなる。`Restore` で解除。
+    #[serde(default)]
+    pub disabled_pcs: std::collections::HashSet<usize>,
 }
 
 /// `*ユニットコマンド` / `*マップコマンド` ラベルで定義される、シナリオ独自の
@@ -318,12 +323,25 @@ impl ScriptLibrary {
     /// exact 優先なので通常の解決は従来どおり O(1)、フォールバック走査はミス時のみ。
     fn labels_get_ci(&self, name: &str) -> Option<usize> {
         if let Some(pc) = self.labels.get(name) {
-            return Some(*pc);
+            if !self.disabled_pcs.contains(pc) {
+                return Some(*pc);
+            }
         }
         self.labels
             .iter()
+            .filter(|(_, v)| !self.disabled_pcs.contains(v))
             .find(|(k, _)| k.eq_ignore_ascii_case(name))
             .map(|(_, v)| *v)
+    }
+
+    /// `ClearEvent` 用: 指定 pc のラベル行を無効化する (再発火・解決をスキップ)。
+    pub fn disable_pc(&mut self, pc: usize) {
+        self.disabled_pcs.insert(pc);
+    }
+
+    /// `Restore` 用: [`Self::disable_pc`] を解除する。
+    pub fn enable_pc(&mut self, pc: usize) {
+        self.disabled_pcs.remove(&pc);
     }
 
     /// パス (`Eve\onsen.eve` でも `onsen.eve` でも可) から FileEntry を引く。
@@ -350,6 +368,9 @@ impl ScriptLibrary {
     pub fn label_pc_in_file(&self, file_path: &str, label: &str) -> Option<usize> {
         let entry = self.find_file(file_path)?;
         for i in entry.start_pc..entry.end_pc.min(self.statements.len()) {
+            if self.disabled_pcs.contains(&i) {
+                continue; // ClearEvent で無効化済みのラベル行はスキップ
+            }
             if let EventStatement::Command { name, args, .. } = &self.statements[i] {
                 if canonical_label_full(name, args)
                     .as_deref()
@@ -470,10 +491,18 @@ fn canonical_label_full(name: &str, args: &[String]) -> Option<String> {
     if args.is_empty() {
         return canonical_label(name);
     }
-    // 2) anchor 系 (`@xxx` / `*xxx:`) は単一トークン採用に固定。
-    if name.starts_with('@') || name.starts_with('*') {
+    // 2) `@xxx` anchor は単一トークンの Goto/Call ターゲット専用。
+    if name.starts_with('@') {
         return canonical_label(name);
     }
+    // 2b) `*` 接頭辞付き自動発火ラベル (`*ターン 全 味方:` / `*攻撃 ＮＰＣ 敵:`) は
+    //     `*` を剥がして multi-token として扱う。SRC は `*` をキーに保持しつつ
+    //     SearchLabel が token 単位で吸収して照合するが、本実装は exact-key 方式
+    //     なので発火側 (`*` 無しの HandleEvent 候補) と一致するよう登録時に `*` を除去
+    //     する。`*ユニットコマンド`/`*マップコマンド` は parse_custom_command が先に処理済み。
+    //     (旧実装は `*` 付き multi-token を canonical_label で単一トークンへ潰し、
+    //      `*攻撃 ＮＰＣ 敵:` を "攻撃" として誤登録 → NPC 攻撃イベントが発火しなかった。)
+    let name = name.strip_prefix('*').unwrap_or(name);
     // 3) multi-token ラベル: SRC が自動発火する label のみホワイトリスト方式で
     //    受理。`Turn N` / `ターン N` / `Turn N 味方` / `Destruction <名>`
     //    / `破壊 <名>` 等。
@@ -752,6 +781,8 @@ pub fn trigger_label(app: &mut App, name: &str) -> bool {
         labels: lib.labels.clone(),
         pc,
     };
+    // 引数無し `ClearEvent` が「いま実行中のイベントラベル」を消せるよう pc を記録。
+    app.set_current_event_label_pc(Some(pc));
     let _ = run_loop(app, ctx);
     true
 }
@@ -777,6 +808,8 @@ pub fn trigger_label_in_file(app: &mut App, file_path: &str, label: &str) -> boo
         labels: lib.labels.clone(),
         pc,
     };
+    // 引数無し `ClearEvent` 用に実行中イベントラベルの pc を記録。
+    app.set_current_event_label_pc(Some(pc));
     let _ = run_loop(app, ctx);
     true
 }
@@ -821,11 +854,15 @@ fn run_loop(app: &mut App, ctx: ScriptContext) -> Result<(), ScriptError> {
             // エラー終了も「完了」として扱い、flow 継続を stale にしない
             // (実行時エラー黙殺の方針に合わせ、進行は止めない)。
             if app.script_run_depth() == 0 {
+                app.set_current_event_label_pc(None);
                 app.on_script_completed();
             }
         }
         Ok(ExecOutcome::Completed) => {
             if app.script_run_depth() == 0 {
+                // イベントスクリプト完走 → 実行中イベントラベルの追跡を解除。
+                // (Talk 中断時は Suspended 枝なのでクリアせず resume まで保持する。)
+                app.set_current_event_label_pc(None);
                 app.on_script_completed();
             }
         }
@@ -2164,6 +2201,8 @@ fn exec_command_pc(
                         if let Some(canon) = canonical_label(name) {
                             if canon == key {
                                 lib.labels.insert(key.clone(), i);
+                                // ClearEvent で無効化されていた場合は再度有効化する。
+                                lib.enable_pc(i);
                                 break;
                             }
                         }
@@ -2251,23 +2290,46 @@ fn exec_command_pc(
         }
         "clearevent" => {
             // SRC `ClearEvent [label]` (`ClearEventコマンド.md`):
-            // 指定ラベルを script_library.labels から削除。引数省略時は
-            // **現在実行中の auto-fire ラベル** を消すが、本実装はその情報を
-            // 持たないため省略時は no-op (`攻撃 A B` 等で `ClearEvent` 単独
-            // 使用するシナリオは `ClearEvent "攻撃 A B"` への置換が必要)。
-            // 機能的には `Forget` のエイリアス + ラベル名引数の正規化。
+            // - 引数あり: 指定ラベルを無効化。
+            // - 引数省略: **現在実行中の auto-fire ラベル** を無効化 (SRC
+            //   `Event.CurrentLabel`)。`*攻撃 ＮＰＣ 敵` 等の一度きりイベントの末尾で使う。
+            // 無効化は disabled_pcs (label 解決でスキップ) で行う。自動発火は
+            // file-scoped (`label_pc_in_file` = statements 走査) のため、labels マップ
+            // からの削除だけでは止まらない。両方を無効化する。
             // SRC.Sharp 準拠: 2 引数以上はエラー。
             if xargs.len() > 1 {
                 return Err(err(line, "ClearEventコマンドの引数の数が違います"));
             }
-            if let Some(label) = xargs.first() {
-                let key = label
-                    .trim_start_matches('@')
-                    .trim_start_matches('*')
-                    .trim_end_matches(':')
-                    .trim_matches('"')
-                    .to_string();
-                app.script_library_mut().labels.remove(&key);
+            match xargs.first() {
+                Some(label) => {
+                    let key = label
+                        .trim_start_matches('@')
+                        .trim_start_matches('*')
+                        .trim_end_matches(':')
+                        .trim_matches('"')
+                        .to_string();
+                    // file-scoped 発火も止めるため pc を解決して無効化 (現ステージ
+                    // ファイル優先 → global フォールバック)。
+                    let resolved = {
+                        let lib = app.script_library();
+                        let cur = app.current_stage_file();
+                        if cur.is_empty() {
+                            lib.label_pc(&key)
+                        } else {
+                            lib.label_pc_in_file(cur, &key)
+                                .or_else(|| lib.label_pc(&key))
+                        }
+                    };
+                    if let Some(p) = resolved {
+                        app.script_library_mut().disable_pc(p);
+                    }
+                    app.script_library_mut().labels.remove(&key);
+                }
+                None => {
+                    if let Some(p) = app.current_event_label_pc() {
+                        app.script_library_mut().disable_pc(p);
+                    }
+                }
             }
             return Ok(pc + 1);
         }
@@ -15180,6 +15242,39 @@ hello:
         assert!(app.script_library().label_pc("hello").is_none());
         execute(&mut app, &event::parse("Restore hello\n").unwrap()).unwrap();
         assert!(app.script_library().label_pc("hello").is_some());
+    }
+
+    #[test]
+    fn no_arg_clearevent_makes_autofire_event_oneshot() {
+        // 引数無し `ClearEvent` が「実行中のイベントラベル」を一度きり化することを検証。
+        // (決戦2話 `*攻撃 ＮＰＣ 敵` 末尾の `ClearEvent` 相当。) execute は先頭 Exit で
+        // 停止し label のみ登録。trigger_label で 2 回発火し、1 回目のみ body が走る
+        // (2 回目は ClearEvent で無効化済み) ことを確認する。
+        let src = "\
+Exit
+
+攻撃 味方 敵:
+Set ran 1
+ClearEvent
+Exit
+";
+        let mut app = App::new();
+        execute(&mut app, &event::parse(src).unwrap()).unwrap();
+        assert!(app.script_library().label_pc("攻撃 味方 敵").is_some());
+
+        // 1 回目: body が走り ran=1。
+        assert!(trigger_label(&mut app, "攻撃 味方 敵"));
+        assert_eq!(app.script_var("ran"), "1", "1 回目は発火するはず");
+
+        // ran をリセットし再発火を観測。ClearEvent で無効化済みなら body は走らず
+        // ran は "0" のまま。
+        app.set_script_var("ran".to_string(), "0".to_string());
+        trigger_label(&mut app, "攻撃 味方 敵");
+        assert_eq!(
+            app.script_var("ran"),
+            "0",
+            "引数無し ClearEvent 後は再発火しないはず (一度きり化)"
+        );
     }
 
     #[test]

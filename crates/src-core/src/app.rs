@@ -467,6 +467,13 @@ pub struct App {
     /// 発生元ラベルを特定できる (動的構築されたメニューの源を追う triage 用)。
     #[serde(skip)]
     exec_pc: std::cell::Cell<usize>,
+    /// 現在実行中の自動発火イベントラベルの pc (`trigger_label*` で起動したもの)。
+    /// 引数無し `ClearEvent` が「いま実行中のイベントラベルを消す」(SRC
+    /// `Event.CurrentLabel` 相当) ために使う。trigger 時に設定し、最外殻 run_loop の
+    /// **完了時**にクリア (Talk 中断→resume を跨いで保持)。非イベント実行中は None
+    /// なので、その場合の引数無し ClearEvent は no-op (SRC 準拠)。transient。
+    #[serde(skip)]
+    current_event_label_pc: Option<usize>,
     /// 直近の `Wait Click` 系の中断を **右クリックで解除した** か。SRC の
     /// `Wait Click` → `If KeyState(2) Then` (右ボタン = キャンセル/戻る) を実現する。
     /// 右クリック応答で true、`KeyState(2)` が読むと **その場で false に消費** する
@@ -652,6 +659,7 @@ impl App {
             last_return_value: String::new(),
             keystate_call_count: std::cell::Cell::new(0),
             exec_pc: std::cell::Cell::new(0),
+            current_event_label_pc: None,
             wait_click_right: std::cell::Cell::new(false),
             selected_unit_for_event: String::new(),
             current_stage_file: String::new(),
@@ -698,6 +706,16 @@ impl App {
     /// 直近に実行した .eve 文の pc を返す (対話の発生元特定用)。
     pub fn current_exec_pc(&self) -> usize {
         self.exec_pc.get()
+    }
+
+    /// 現在実行中の自動発火イベントラベルの pc を設定する (`trigger_label*` が起動時に呼ぶ)。
+    pub(crate) fn set_current_event_label_pc(&mut self, pc: Option<usize>) {
+        self.current_event_label_pc = pc;
+    }
+
+    /// 現在実行中の自動発火イベントラベルの pc (引数無し `ClearEvent` 用)。
+    pub(crate) fn current_event_label_pc(&self) -> Option<usize> {
+        self.current_event_label_pc
     }
 
     /// 検証/デバッグ専用: オンマップ各ユニットの武器の発射可否を要約する (verify-archive が
