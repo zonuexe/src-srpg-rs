@@ -568,6 +568,18 @@ fn default_time_of_day() -> String {
     "昼".to_string()
 }
 
+/// 戦闘判定 (`predict_*`) は status 名スライスのみを参照するため、特徴由来の戦闘修正
+/// 特殊能力 (分身 / ステルス) を condition 由来の status 一覧へ合流させる。これが無いと
+/// ユニットデータの特殊能力 (分身/ステルス) が戦闘の命中判定に反映されない
+/// (`predict_with_status_terrain` は条件名のみを見るため)。
+fn push_combat_feature_statuses(unit: &crate::UnitInstance, statuses: &mut Vec<String>) {
+    for f in &unit.active_features {
+        if f.is_active && matches!(f.name.as_str(), "分身" | "ステルス") {
+            statuses.push(f.name.clone());
+        }
+    }
+}
+
 impl Default for App {
     fn default() -> Self {
         Self::new()
@@ -3314,13 +3326,15 @@ impl App {
         // 状態異常 / 精神コマンド分の補正は predict_with_status に任せる。
         let atk_morale = self.database.unit_instances[atk_idx].morale;
         let def_morale = def_inst.morale;
-        let atk_statuses: Vec<String> = self.database.unit_instances[atk_idx]
+        let mut atk_statuses: Vec<String> = self.database.unit_instances[atk_idx]
             .conditions
             .iter()
             .map(|c| c.name.clone())
             .collect();
-        let def_statuses: Vec<String> =
+        push_combat_feature_statuses(&self.database.unit_instances[atk_idx], &mut atk_statuses);
+        let mut def_statuses: Vec<String> =
             def_inst.conditions.iter().map(|c| c.name.clone()).collect();
+        push_combat_feature_statuses(&def_inst, &mut def_statuses);
         // 地形適応 (SRC `戦闘システム詳細.md`): 攻撃側は自地形、防御側は自地形で参照。
         let atk_env = self.terrain_env_at(
             self.database.unit_instances[atk_idx].x,
@@ -3923,13 +3937,15 @@ impl App {
         let def_damage_mod = self.database.terrain_damage_mod(terrain_id);
         let sup_morale = self.database.unit_instances[sup_idx].morale;
         let def_morale_sup = def_inst.morale;
-        let sup_statuses: Vec<String> = self.database.unit_instances[sup_idx]
+        let mut sup_statuses: Vec<String> = self.database.unit_instances[sup_idx]
             .conditions
             .iter()
             .map(|c| c.name.clone())
             .collect();
-        let def_statuses: Vec<String> =
+        push_combat_feature_statuses(&self.database.unit_instances[sup_idx], &mut sup_statuses);
+        let mut def_statuses: Vec<String> =
             def_inst.conditions.iter().map(|c| c.name.clone()).collect();
+        push_combat_feature_statuses(&def_inst, &mut def_statuses);
         let sup_env = self.terrain_env_at(
             self.database.unit_instances[sup_idx].x,
             self.database.unit_instances[sup_idx].y,
@@ -4219,17 +4235,25 @@ impl App {
         let counter_def_morale = self.database.unit_instances[atk_idx].morale;
         // 反撃側の状態。捨て身 は反撃時には無効 (§0.8 / SRC: 自分から攻撃したときのみ
         // ×3。反撃では適用しない) なので除外する。
-        let counter_atk_statuses: Vec<String> = self.database.unit_instances[def_idx]
+        let mut counter_atk_statuses: Vec<String> = self.database.unit_instances[def_idx]
             .conditions
             .iter()
             .map(|c| c.name.clone())
             .filter(|n| n != "捨て身")
             .collect();
-        let counter_def_statuses: Vec<String> = self.database.unit_instances[atk_idx]
+        push_combat_feature_statuses(
+            &self.database.unit_instances[def_idx],
+            &mut counter_atk_statuses,
+        );
+        let mut counter_def_statuses: Vec<String> = self.database.unit_instances[atk_idx]
             .conditions
             .iter()
             .map(|c| c.name.clone())
             .collect();
+        push_combat_feature_statuses(
+            &self.database.unit_instances[atk_idx],
+            &mut counter_def_statuses,
+        );
         // 反撃側 = defender (位置 dx,dy)、被弾側 = attacker (位置 target)。
         let counter_atk_env = self.terrain_env_at(dx, dy);
         let counter_def_env = self.terrain_env_at(target.0, target.1);
@@ -11756,6 +11780,45 @@ mod tests {
             app.database().unit_by_uid(&uid).unwrap().damage,
             40,
             "Enable 後は ＨＰ回復Lv1 = 最大HP10% (10) 回復 (水上のボス挙動)"
+        );
+    }
+
+    /// パーサ修正の波及検証 (combat): 特徴由来の戦闘修正特殊能力 (分身/ステルス) が
+    /// `push_combat_feature_statuses` で condition 由来 status に合流すること。これにより
+    /// `predict_*` の命中判定 (分身=命中-40 等) にユニットデータの特殊能力が反映される。
+    /// (修正前は combat が conditions のみ参照し、特徴 分身/ステルス は戦闘で死んでいた。)
+    #[test]
+    fn combat_feature_statuses_merges_active_defense_features() {
+        use crate::feature::ActiveFeature;
+        let mut u = crate::UnitInstance::new("X", "P", crate::Party::Enemy, 0, 0);
+        u.active_features = vec![
+            ActiveFeature::new("分身", ""),
+            // 戦闘 status 修正ではない特徴 → 合流しない。
+            ActiveFeature::new("水上移動", ""),
+            // 無効化された特徴 → 合流しない。
+            ActiveFeature {
+                name: "ステルス".into(),
+                value: String::new(),
+                is_active: false,
+            },
+        ];
+        let mut s = vec!["集中".to_string()]; // 既存の condition 由来 status
+        push_combat_feature_statuses(&u, &mut s);
+        assert!(
+            s.contains(&"分身".to_string()),
+            "有効な 分身 特徴は戦闘 status に合流するはず"
+        );
+        assert!(
+            !s.contains(&"水上移動".to_string()),
+            "非戦闘特徴 (水上移動) は合流しない"
+        );
+        assert!(
+            !s.contains(&"ステルス".to_string()),
+            "無効化された特徴は合流しない"
+        );
+        assert!(
+            s.contains(&"集中".to_string()),
+            "既存 condition 由来 status は保持される"
         );
     }
 
