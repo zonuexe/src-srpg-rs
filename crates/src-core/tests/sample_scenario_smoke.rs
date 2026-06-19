@@ -14,7 +14,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use src_core::data::{event, item, loader, map as mapdata, pilot, special_power, unit};
+use src_core::data::{
+    event, item, loader, map as mapdata, pilot, special_power, terrain_file, unit,
+};
 use src_core::stage::StageState;
 use src_core::test_harness::{Harness, Step};
 use src_core::{event_runtime, App, Party};
@@ -110,6 +112,20 @@ fn load_sample(root: &Path, active_map_base: &str) -> App {
         "データファイルのパース失敗:\n{}",
         data_errors.join("\n")
     );
+
+    // ---- SRC 標準地形を取り込む (パッケージ <root>/../Data/System/terrain.txt) ----
+    // サンプルは自前の terrain.txt を持たず SRC 本体の標準地形 (91 種, 街/道路/海 等) に
+    // 依存する。これを読まないとマップの terrain_id が名前解決できず (移植組込みの
+    // ミニ地形表は ID 体系が別物)、地形名ベースの 進入イベント等が成立しない。
+    if let Some(pkg_root) = root.parent() {
+        let terrain_path = pkg_root.join("Data/System/terrain.txt");
+        if let Ok(bytes) = fs::read(&terrain_path) {
+            let txt = loader::decode_text(&bytes);
+            if let Ok(terrains) = terrain_file::parse(&txt) {
+                app.database_mut().extend_terrains(terrains);
+            }
+        }
+    }
 
     // ---- 全 .map を DB に格納 (ChangeMap 解決用) ------------------------
     let mut map_paths = Vec::new();
@@ -616,5 +632,109 @@ fn campaign_chain_chapter1_to_chapter2_carries_party() {
     assert!(
         alive_enemy.iter().any(|n| n.contains("ギルガス")),
         "2話の敵ギルガスが出撃していない: {alive_enemy:?}"
+    );
+}
+
+#[test]
+fn kessen_chapter2_forced_loss_when_monster_enters_town() {
+    let root = sample_root();
+    if !root.exists() {
+        eprintln!("[skip] サンプルシナリオ未配置: {}", root.display());
+        return;
+    }
+    // 第2話のテーマの一つ「必敗のシナリオ」: 宇宙怪獣ギルガスが街へ進入すると
+    // `進入 敵 街:` → 演出 (Move/Explode/ChangeTerrain) → GameOver で敗北する。
+    // 地形名ベースの進入イベント + 必敗フロー + 演出コマンドを headless 検証する。
+    let app = boot_chapter_with_party(&root, "決戦！宇宙怪獣2話.eve", "決戦！宇宙怪獣2話.map");
+
+    // SRC 標準地形が読み込まれ、マップに「街」地形が存在すること。
+    let (mw, mh) = {
+        let m = app.database().map.as_ref().expect("active map 無し");
+        (m.width, m.height)
+    };
+    let terrain_name = |app: &App, x: u32, y: u32| -> Option<String> {
+        let tid = app.database().map.as_ref().unwrap().cell(x, y).terrain_id;
+        app.database()
+            .terrains
+            .iter()
+            .find(|t| t.id == tid)
+            .map(|t| t.name.clone())
+    };
+    let mut town: Option<(u32, u32)> = None;
+    'scan: for y in 0..mh {
+        for x in 0..mw {
+            if terrain_name(&app, x, y).as_deref() == Some("街") {
+                town = Some((x, y));
+                break 'scan;
+            }
+        }
+    }
+    let (tx, ty) = town.expect("2話マップに「街」地形が無い (標準地形が未ロード?)");
+
+    // 宇宙怪獣ギルガスを街へ移動 → 進入イベント発火。
+    let mut app = app;
+    let g_uid = app
+        .database()
+        .unit_instances
+        .iter()
+        .find(|u| u.unit_data_name.contains("ギルガス"))
+        .map(|u| u.uid.clone())
+        .expect("宇宙怪獣ギルガスが居ない");
+    assert!(
+        app.database_mut().move_unit(&g_uid, tx, ty),
+        "ギルガスの街への移動に失敗"
+    );
+    let g_idx = app
+        .database()
+        .unit_instances
+        .iter()
+        .position(|u| u.uid == g_uid)
+        .unwrap();
+    event_runtime::fire_entry_event_labels(&mut app, g_idx);
+
+    // 進入演出 (Talk/Wait/Move/Explode/ChangeTerrain) → GameOver を駆動。
+    drive_all(&mut app, 800);
+
+    eprintln!(
+        "[必敗] town=({tx},{ty}) scene={:?} stage_state={:?}",
+        app.scene(),
+        app.stage_state(),
+    );
+    assert_eq!(
+        app.stage_state(),
+        StageState::Defeat,
+        "宇宙怪獣の街進入で敗北 (GameOver) していない"
+    );
+}
+
+#[test]
+fn kessen_chapter2_forced_loss_when_jade_destroyed() {
+    let root = sample_root();
+    if !root.exists() {
+        eprintln!("[skip] サンプルシナリオ未配置: {}", root.display());
+        return;
+    }
+    // 第2話のもう一つの敗北条件: キャリバーン(ジェイド)が撃破されると
+    // `破壊 味方: / Switch 対象ユニット` の "ジェイド＝ソウマ" ケースで GameOver。
+    // 陣営レベル破壊イベント + 対象ユニット解決 + Switch + GameOver を検証する。
+    let mut app = boot_chapter_with_party(&root, "決戦！宇宙怪獣2話.eve", "決戦！宇宙怪獣2話.map");
+    assert!(
+        unit_names(&app).iter().any(|n| n.contains("キャリバーン")),
+        "2話開始時にキャリバーンが居ない"
+    );
+    // ジェイド (キャリバーン) を撃破 → 破壊イベント発火。
+    let kill = event::parse("Kill ジェイド＝ソウマ\n").expect("parse Kill");
+    event_runtime::execute(&mut app, &kill).expect("exec Kill");
+    drive_all(&mut app, 800);
+
+    eprintln!(
+        "[必敗2] scene={:?} stage_state={:?}",
+        app.scene(),
+        app.stage_state()
+    );
+    assert_eq!(
+        app.stage_state(),
+        StageState::Defeat,
+        "ジェイド撃破で GameOver (破壊 味方 → Switch → GameOver) していない"
     );
 }
