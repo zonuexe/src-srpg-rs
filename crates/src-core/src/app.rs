@@ -15833,6 +15833,87 @@ mod tests {
         assert_eq!(near_dmg, 0, "最寄り敵 (3,6) を誤って攻撃している");
     }
 
+    /// テスト用に `損傷率 <unit> <pct>:` ラベルを登録する (本体は `Set <var> 1`)。
+    /// `current_stage_file` が空のままなので発火は global 経路 (`post_event_label`)。
+    fn register_damage_threshold_label(app: &mut App, unit_name: &str, pct: i64, var: &str) {
+        let src = format!("損傷率 {unit_name} {pct}:\nSet {var} 1\nExit\n");
+        let stmts = crate::data::event::parse(&src).expect("parse 損傷率 label");
+        app.script_library_mut()
+            .append_with_name(&stmts, "test_dmg.eve");
+    }
+
+    #[test]
+    fn combat_fires_damage_threshold_event_on_main_attack() {
+        // 回帰: 通常攻撃で防御側の HP が閾値を割ったら `損傷率` イベントが発火する。
+        // (旧実装は `Damage` コマンド経由でしか発火せず、実戦闘では沈黙していた。)
+        // 閾値 10% + 最低ダメージ 10 / HP 100 なので、命中すれば必ず跨ぎ、かつ撃破しない。
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6);
+        add_weapon(&mut app, "Hero", 30, 3);
+        place_player_unit(&mut app, "FoeData", 9, 9); // FoeData の UnitData/PilotData を用意
+        let foe = spawn_enemy(&mut app, "FoeData", 3, 6);
+        register_damage_threshold_label(&mut app, "FoeData", 10, "損傷率主");
+        app.set_stage_state(crate::stage::StageState::Battle);
+
+        click_tile(&mut app, 2, 6); // Hero 選択
+        let ai = attack_item_index(&app);
+        click_menu_item(&mut app, ai); // 攻撃
+        click_tile(&mut app, 3, 6); // 敵を攻撃
+
+        let foe_dmg = app.database().unit_by_uid(&foe).map(|u| u.damage).unwrap();
+        assert!(foe_dmg >= 10, "敵が被弾していない (dmg={foe_dmg})");
+        assert!(foe_dmg < 100, "敵が撃破されてしまった (損傷率は生存時のみ)");
+        assert_eq!(
+            app.script_var("損傷率主"),
+            "1",
+            "通常攻撃で損傷率イベントが発火していない"
+        );
+    }
+
+    #[test]
+    fn combat_fires_damage_threshold_event_on_counterattack() {
+        // 回帰: 反撃で攻撃側 (Hero) の HP が閾値を割ったら `損傷率 Hero` が発火する。
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6);
+        add_weapon(&mut app, "Hero", 30, 3); // Hero の攻撃 (敵を撃破しない低威力)
+        place_player_unit(&mut app, "FoeData", 9, 9);
+        let _foe = spawn_enemy(&mut app, "FoeData", 3, 6);
+        add_weapon(&mut app, "FoeData", 30, 3); // 敵の反撃武器 (射程内に Hero)
+        register_damage_threshold_label(&mut app, "Hero", 10, "損傷率反撃");
+        app.set_stage_state(crate::stage::StageState::Battle);
+
+        let hero_uid = app
+            .database()
+            .unit_instances
+            .iter()
+            .find(|u| u.unit_data_name == "Hero")
+            .map(|u| u.uid.clone())
+            .unwrap();
+
+        click_tile(&mut app, 2, 6); // Hero 選択
+        let ai = attack_item_index(&app);
+        click_menu_item(&mut app, ai); // 攻撃
+        click_tile(&mut app, 3, 6); // 敵を攻撃 → 敵が反撃
+
+        let hero_dmg = app
+            .database()
+            .unit_by_uid(&hero_uid)
+            .map(|u| u.damage)
+            .unwrap();
+        assert!(
+            hero_dmg >= 10,
+            "Hero が反撃で被弾していない (dmg={hero_dmg})"
+        );
+        assert!(hero_dmg < 100, "Hero が反撃で撃破されてしまった");
+        assert_eq!(
+            app.script_var("損傷率反撃"),
+            "1",
+            "反撃で損傷率イベントが発火していない"
+        );
+    }
+
     #[test]
     fn player_cannot_attack_npc_ally_but_can_attack_enemy_and_neutral() {
         // 味方 ↔ ＮＰＣ は同盟。Hero(味方) は隣の ＮＰＣ を攻撃できず、
