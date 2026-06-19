@@ -11704,6 +11704,61 @@ mod tests {
         assert_eq!(u.en_consumed, 10, "ＥＮ回復Lv2 = 最大EN 20% (10) 回復");
     }
 
+    /// `Disable unit ＨＰ回復` / `Enable unit ＨＰ回復` (レベル無し基底名) が実体
+    /// `ＨＰ回復Lv1` の is_active を切替え、フェイズ開始回復の有無に反映されることを検証。
+    /// 決戦2話の核ギミック「水上=ＨＰ回復ON / 陸上=OFF」(`*ターン全味方` の Enable/Disable
+    /// + Area 分岐) の combat 経路 (毎フェイズ回復) を実検証する。
+    #[test]
+    fn disable_enable_toggles_hp_regen_feature() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Regenner", 2, 6);
+        // 勝敗即決回避の敵 (遠方)。`place_player_unit` が登録する "Regenner" の
+        // ユニットデータを流用する (データ無しだと敵フェイズ AI が panic する)。
+        app.database_mut().register_unit(crate::UnitInstance::new(
+            "Regenner",
+            "PILOT",
+            crate::Party::Enemy,
+            12,
+            12,
+        ));
+        app.set_stage_state(crate::stage::StageState::Battle);
+        let uid = first_player_uid(&app);
+        {
+            let u = app.database_mut().unit_by_uid_mut(&uid).unwrap();
+            u.active_features = vec![crate::feature::ActiveFeature::new("ＨＰ回復Lv1", "")];
+            u.damage = 50; // 最大HP=100
+        }
+
+        // (1) Disable → 基底名一致で is_active=false → フェイズ開始回復しない。
+        let dis = crate::data::event::parse(&format!("Disable {uid} ＨＰ回復\n")).unwrap();
+        crate::event_runtime::execute(&mut app, &dis).unwrap();
+        assert!(
+            !app.database().unit_by_uid(&uid).unwrap().active_features[0].is_active,
+            "Disable で ＨＰ回復Lv1 が無効化されるはず"
+        );
+        app.handle_input(Input::EndPhase);
+        assert_eq!(
+            app.database().unit_by_uid(&uid).unwrap().damage,
+            50,
+            "Disable 中は ＨＰ回復 で回復しない (陸上のボス挙動)"
+        );
+
+        // (2) Enable → 再有効 → ＨＰ回復Lv1 = 最大HP10% (10) 回復。
+        let en = crate::data::event::parse(&format!("Enable {uid} ＨＰ回復\n")).unwrap();
+        crate::event_runtime::execute(&mut app, &en).unwrap();
+        assert!(
+            app.database().unit_by_uid(&uid).unwrap().active_features[0].is_active,
+            "Enable で ＨＰ回復Lv1 が再有効化されるはず"
+        );
+        app.handle_input(Input::EndPhase);
+        assert_eq!(
+            app.database().unit_by_uid(&uid).unwrap().damage,
+            40,
+            "Enable 後は ＨＰ回復Lv1 = 最大HP10% (10) 回復 (水上のボス挙動)"
+        );
+    }
+
     /// ＨＰ消費Lv*/ＥＮ消費Lv* は同率を減少させる (ＨＰ は最低 1)。
     #[test]
     fn drain_features_reduce_hp_and_en_at_player_phase_start() {

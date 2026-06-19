@@ -869,6 +869,57 @@ fn kessen_chapter2_destroying_gilgas_triggers_stage_clear() {
 }
 
 #[test]
+fn kessen_chapter2_boss_hp_regen_toggles_with_disable_enable() {
+    let root = sample_root();
+    if !root.exists() {
+        eprintln!("[skip] サンプルシナリオ未配置: {}", root.display());
+        return;
+    }
+    // 2話の核ギミック: ボス(宇宙怪獣ギルガス第１形態 = ＨＰ回復Lv1 所持) は水上で
+    // 毎フェイズ回復し、陸上では回復しない。`*ターン全味方` が `Area(ギルガス)` に応じて
+    // `Enable/Disable 宇宙怪獣ギルガス第１形態 ＨＰ回復` を発行して切替える。
+    // その Enable/Disable コマンドが、実ボスデータの ＨＰ回復**Lv1** を**レベル無し基底名**
+    // `ＨＰ回復` で正しく切替えられることを実データで検証する (combat 経路: 毎フェイズ回復の
+    // 有無は app.rs::disable_enable_toggles_hp_regen_feature で別途検証)。
+    let mut app = boot_chapter_with_party(&root, "決戦！宇宙怪獣2話.eve", "決戦！宇宙怪獣2話.map");
+
+    let boss_regen_level = |app: &App| -> Option<i32> {
+        let boss = app
+            .database()
+            .unit_instances
+            .iter()
+            .find(|u| u.pilot_name == "宇宙怪獣ギルガス")
+            .expect("ギルガス(パイロット名=宇宙怪獣ギルガス)が居ない");
+        src_core::feature::feature_level(&boss.active_features, "ＨＰ回復")
+    };
+
+    // 初期はボスデータどおり ＨＰ回復Lv1 が有効。
+    assert_eq!(
+        boss_regen_level(&app),
+        Some(1),
+        "ボスは ＨＰ回復Lv1 を有効状態で持つはず"
+    );
+
+    // 陸上挙動: `*ターン全味方` Else 枝の Disable をそのまま実行 → 回復無効。
+    let dis = event::parse("Disable 宇宙怪獣ギルガス第１形態 ＨＰ回復\n").expect("parse Disable");
+    event_runtime::execute(&mut app, &dis).expect("exec Disable");
+    assert_eq!(
+        boss_regen_level(&app),
+        None,
+        "Disable で ＨＰ回復 が無効化されるはず (陸上=回復停止)"
+    );
+
+    // 水上挙動: Then 枝の Enable → 回復再有効。
+    let en = event::parse("Enable 宇宙怪獣ギルガス第１形態 ＨＰ回復\n").expect("parse Enable");
+    event_runtime::execute(&mut app, &en).expect("exec Enable");
+    assert_eq!(
+        boss_regen_level(&app),
+        Some(1),
+        "Enable で ＨＰ回復 が再有効化されるはず (水上=回復)"
+    );
+}
+
+#[test]
 fn kessen_chapter3_combine_completes_to_excaliver() {
     let root = sample_root();
     if !root.exists() {
