@@ -5847,6 +5847,22 @@ impl App {
         if effects.is_empty() && morale_down.is_none() && possession.is_none() {
             return Vec::new();
         }
+        // 特殊効果無効化 (防御特性に関する特殊能力.md): 防御側が指定特殊効果を無効化する。
+        // `特殊効果無効化=全` (または値省略) は全特殊効果を無効化 (サンプルは全て `=全`)。
+        // 個別指定は値に一致する効果のみ無効化する (下のループで部分一致判定)。
+        let nullify_vals: Vec<String> = self.database.unit_instances[def_idx]
+            .active_features
+            .iter()
+            .filter(|f| f.is_active && f.name == "特殊効果無効化")
+            .map(|f| f.value.trim().to_string())
+            .collect();
+        let nullify_all = nullify_vals
+            .iter()
+            .any(|v| v.is_empty() || v.split_whitespace().any(|t| t == "全"));
+        if nullify_all {
+            // 全特殊効果 (状態異常・気力低下・支配) を無効化。ダメージ自体は別経路。
+            return Vec::new();
+        }
         let prob =
             (weapon.critical + (atk_pilot.technique - def_pilot.technique) / 2).clamp(1, 100);
         // 耐性 / 弱点: 武器の属性に対し対象が耐性を持てば発動率半減、弱点を持てば倍。
@@ -5859,6 +5875,13 @@ impl App {
         for (name, lifetime) in effects {
             // ボスランク適用ユニットは石化 / 死の宣告 を無効化 (BossRankコマンド.md)。
             if is_boss && (name == "石化" || name == "死の宣告") {
+                continue;
+            }
+            // 特殊効果無効化 (個別指定): 値が状態異常名に部分一致するものは無効化。
+            if nullify_vals
+                .iter()
+                .any(|v| !v.is_empty() && (name.contains(v.as_str()) || v.contains(name.as_str())))
+            {
                 continue;
             }
             self.database.unit_instances[def_idx]
@@ -13768,6 +13791,53 @@ mod tests {
         assert!(
             app.database().unit_instances[def_idx].attack_disabled(),
             "麻痺 は行動不能 (AI / 攻撃ゲートが効く)"
+        );
+    }
+
+    /// 特殊効果無効化=全 を持つ防御側は武器の特殊効果 (状態異常付与) を受けない
+    /// (防御特性に関する特殊能力.md)。決戦サンプルのザコは全て `特殊効果無効化=全` を持つ。
+    #[test]
+    fn tokushu_kouka_mukouka_blocks_status_effects() {
+        use crate::data::unit::WeaponData;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6);
+        let target = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "PILOT",
+            crate::Party::Enemy,
+            3,
+            6,
+        ));
+        let def_idx = app.database().idx_by_uid(&target).unwrap();
+        // 防御側に 特殊効果無効化=全 を付与。
+        app.database_mut().unit_instances[def_idx]
+            .active_features
+            .push(crate::feature::ActiveFeature::new("特殊効果無効化", "全"));
+        let pilot = app.database().pilot_by_name("PILOT").unwrap().clone();
+        // 痺 属性 + critical 100 → 通常なら必ず麻痺。
+        let weapon = WeaponData {
+            name: "麻痺銃".into(),
+            power: 100,
+            min_range: 1,
+            max_range: 1,
+            precision: 0,
+            bullet: -1,
+            en_consumption: 0,
+            necessary_morale: 0,
+            adaption: "AAAA".into(),
+            critical: 100,
+            class: "痺".into(),
+            extras: Vec::new(),
+        };
+        let applied = app.apply_weapon_special_effects(def_idx, def_idx, &weapon, &pilot, &pilot);
+        assert!(
+            applied.is_empty(),
+            "特殊効果無効化=全 なら特殊効果は一切付与されないはず: {applied:?}"
+        );
+        assert!(
+            !app.database().unit_instances[def_idx].has_condition("麻痺"),
+            "特殊効果無効化=全 が麻痺付与を防ぐはず"
         );
     }
 
