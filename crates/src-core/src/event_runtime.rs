@@ -309,7 +309,21 @@ impl ScriptLibrary {
     }
 
     pub fn label_pc(&self, name: &str) -> Option<usize> {
-        self.labels.get(name).copied()
+        self.labels_get_ci(name)
+    }
+
+    /// `labels` を **大小無視** で引く。exact 一致を優先し、見つからなければ ASCII
+    /// 大文字小文字を無視して走査する。SRC のイベントラベルは大小を区別しない
+    /// (例: シナリオの `Mindanime` 命令が Lib の `MindAnime:` サブルーチンを呼ぶ)。
+    /// exact 優先なので通常の解決は従来どおり O(1)、フォールバック走査はミス時のみ。
+    fn labels_get_ci(&self, name: &str) -> Option<usize> {
+        if let Some(pc) = self.labels.get(name) {
+            return Some(*pc);
+        }
+        self.labels
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| *v)
     }
 
     /// パス (`Eve\onsen.eve` でも `onsen.eve` でも可) から FileEntry を引く。
@@ -337,7 +351,10 @@ impl ScriptLibrary {
         let entry = self.find_file(file_path)?;
         for i in entry.start_pc..entry.end_pc.min(self.statements.len()) {
             if let EventStatement::Command { name, args, .. } = &self.statements[i] {
-                if canonical_label_full(name, args).as_deref() == Some(label) {
+                if canonical_label_full(name, args)
+                    .as_deref()
+                    .is_some_and(|c| c.eq_ignore_ascii_case(label))
+                {
                     return Some(i);
                 }
             }
@@ -362,13 +379,16 @@ impl ScriptLibrary {
             let end = entry.end_pc.min(self.statements.len());
             for i in entry.start_pc..end {
                 if let EventStatement::Command { name, args, .. } = &self.statements[i] {
-                    if canonical_label_full(name, args).as_deref() == Some(label) {
+                    if canonical_label_full(name, args)
+                        .as_deref()
+                        .is_some_and(|c| c.eq_ignore_ascii_case(label))
+                    {
                         return Some(i);
                     }
                 }
             }
         }
-        self.labels.get(label).copied()
+        self.labels_get_ci(label)
     }
 
     /// `current_pc` を含むファイル**内のみ**で `label` を探す。
@@ -389,7 +409,10 @@ impl ScriptLibrary {
             let end = entry.end_pc.min(self.statements.len());
             for i in entry.start_pc..end {
                 if let EventStatement::Command { name, args, .. } = &self.statements[i] {
-                    if canonical_label_full(name, args).as_deref() == Some(label) {
+                    if canonical_label_full(name, args)
+                        .as_deref()
+                        .is_some_and(|c| c.eq_ignore_ascii_case(label))
+                    {
                         return Some(i);
                     }
                 }
@@ -398,7 +421,7 @@ impl ScriptLibrary {
             return None;
         }
         // ファイル未登録経路: 旧挙動どおり global で解決。
-        self.labels.get(label).copied()
+        self.labels_get_ci(label)
     }
 }
 

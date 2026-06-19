@@ -475,3 +475,22 @@ Set n $(ArgNum)
     // ArgNum はトップレベルでは "0" (N4 fix で対応済み)
     assert_eq!(app.script_var("n"), "0");
 }
+
+// ============================================================
+//  ラベル解決の大小無視 (SRC は label を case-insensitive で扱う)
+// ============================================================
+
+#[test]
+fn implicit_call_resolves_label_case_insensitively() {
+    // シナリオが小文字 `myanime` で呼び出しても、大文字定義 `MyAnime:` の
+    // サブルーチンが暗黙 Call で解決される (決戦3話 `Mindanime`→Lib `MindAnime:` 相当)。
+    let app = run("Goto skip\nMyAnime:\nSet ran 1\nReturn\nskip:\nmyanime\n");
+    assert_eq!(app.script_var("ran"), "1");
+}
+
+#[test]
+fn goto_resolves_label_case_insensitively() {
+    // Goto も大小無視で解決する。
+    let app = run("Goto TARGET\nSet step skipped\ntarget:\nSet step arrived\n");
+    assert_eq!(app.script_var("step"), "arrived");
+}
