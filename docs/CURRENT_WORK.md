@@ -10,7 +10,7 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 ## 現在地（2026-06-19）
 
 **テスト**: `cargo test -p src-core` 全緑（**1974 件**）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。  
-**最新セッション（2026-06-19・`master` 直接コミット）= GBA 着手 Phase 1〜3（図形 primitive＋画面意味論＋実データ検証）**:
+**最新セッション（2026-06-19・`master` 直接コミット）= GBA 着手 Phase 1〜3 完了（図形 primitive＋画面意味論＋実データ検証）。残は Phase 4 実機見栄えのみ**:
 ★★ **前提ブロッカーの誤認を是正**: 前セッションは「in-repo に GBA シナリオが無い」と結論したが、これは grep を `_GBA_` という狭い語に
 限定したための誤り。実際には **in-repo の スパロボ戦記 fixture に汎用戦闘アニメ Lib 相当の `lib/BattleAnime*.eve`（無印/G/O/R/S）が既に存在**
 （`設定[全身戦闘アニメ]`＝クローズアップを描画 primitive で実現）。**GBA は当初からブロックされていなかった**。エンジンも `try_play_battle_animation`
@@ -27,7 +27,11 @@ GBA クローズアップが **`設定[全身戦闘アニメ]=オン` で分岐*
 **配線確認**: combat が `対象ユニットＩＤ`/`相手ユニットＩＤ` を `try_play_battle_animation` 前に束縛済（`app.rs:3282-3284`→`:3654`）。
 ⑤ ✅ **実 combat 経路でフレームループを検証（`11b9429`）**: `attack_resolve_and_run`→戦闘アニメ起動の実経路で `Paint; Refresh; ClearPicture; Wait` 多フレームが
 各フレーム overlay に残る（毎フレーム空にならない・累積しない）ことを確認＝GBA フレーム描画の combat 統合 capstone。
-native test 10 件＋統合 2 件。**残（Phase 3/4・要ブラウザ）**: クローズアップ本体の固定レイアウトでのユニット個別スプライト配置検証・実機の見栄え確認。詳細は §4「GBA 着手準備」。
+⑥ ✅ **実 fixture のクローズアップ本体が headless で完走（`3d87adc`）**: `設定[全身戦闘アニメ]=オン`（スパロボ戦記は `スパロボ戦記.eve:48` で**既定 ON**）で
+実サブルーチン `戦闘アニメ_拡大小ビーム照射攻撃` が**未対応命令/欠落ラベルなく Wait まで完走**（ヘルパ・VFS file I/O 込み）。実 D 戦闘を `VERIFY_ANIMATE=1` で駆動し、
+実戦闘武器（スティンガン/ビームライフル/破壊光線＝全て animation.txt でクローズアップ sub に解決）の戦闘が ScriptError/panic なく完走することも確認。
+native test 11 件＋統合 2 件。**Phase 1/2 完了・Phase 3 は headless 検証可能範囲を完了**。**残（Phase 4・要ブラウザ）のみ**: 実アセットでの
+固定レイアウト スプライト配置の見栄え確認（`just serve` ＋ スパロボ戦記で確認）。詳細は §4「GBA 着手準備」。
 
 **前セッション（2026-06-18・`master` 直接コミット）**: ① ✅ **B 単機ステータス詳細（`Scene::UnitDetail`）完了**（§1.2 B）。
 ② ✅ **差分オラクルを combat 予測（c）＋移動（d）＋気力/精神（e）＋改造/極端 level（f）＋別 fixture/サイズ差（g）へ拡張**。combat `placeattack` 45/45・移動 `moverange` 平地一致・
@@ -519,11 +523,12 @@ Briefing → Title [【START】|…|真ゲッター/マジンガー/…] → 難
    ClearPicture が Wait 前に overlay を即クリア＝毎フレーム空表示だった真因を是正（SRC immediate-mode のバックバッファ消去意味論を retained-overlay で再現）。
    ③ 描画ペン状態（色/塗り/線幅/フォント）を ClearPicture 跨ぎで永続化（`8ab258a`、SRC ObjColor 準拠）。
    **注**: `Keep` は依然 BGM 用 `KeepBgm` のみ＝画面 Keep は戦闘アニメ Lib で未使用（gap 監査で出現せず）＝対応不要。
-3. **Phase 3 — 固定レイアウト描画の配線**（src-web）: ⏳ 進行中。✅ **GBA 分岐の前提を実データで固定**（`596f7bd`）＝クローズアップは
-   **`設定[全身戦闘アニメ]=オン`** で開く。✅ **配線確認**: combat が `対象ユニットＩＤ`/`相手ユニットＩＤ` を `try_play_battle_animation` 前に束縛（`app.rs:3282-3284`→`:3654`）。
-   図形は Canvas2D で描画済。**残**: クローズアップ本体が `BaseX/BaseY=0` 固定画面に `戦闘アニメ[対象ユニット画像]`/`Info(…,全身画像)` 等で
-   ユニット個別スプライトを置く配置・解像（実ユニット＋アセットパックが要る＝ブラウザ駆動が現実的）。
-4. **Phase 4 — 実機検証**（対話/描画ゆえ headless 不可の見栄え確認）。`設定[全身戦闘アニメ]=オン` ＋ 戦闘アニメ表示設定で実機の見栄えを確認。
+3. **Phase 3 — 固定レイアウト描画の配線**（src-web）: ✅ **headless 検証可能範囲を完了**。① GBA 分岐の前提を実データで固定（`596f7bd`）＝クローズアップは
+   **`設定[全身戦闘アニメ]=オン`** で開く（スパロボ戦記は `スパロボ戦記.eve:48` で**既定 ON**＝この scenario の既定戦闘表示が GBA クローズアップ）。
+   ② 配線確認: combat が `対象ユニットＩＤ`/`相手ユニットＩＤ` を `try_play_battle_animation` 前に束縛（`app.rs:3282-3284`→`:3654`）、`animate_battle`＋`settings.battle_animation`(既定 true) で起動。
+   ③ ✅ 実 fixture のクローズアップ本体が headless で Wait まで完走（`3d87adc`）・実 D 戦闘を `VERIFY_ANIMATE=1` で駆動し ScriptError なく完走。図形は Canvas2D で描画済。
+   **残（Phase 4 と一体・要ブラウザ）**: 固定画面に `戦闘アニメ[対象ユニット画像]`/`Info(…,全身画像)` でユニット個別スプライトを置く**見栄え**（実アセットパックが要る）。
+4. **Phase 4 — 実機検証**（対話/描画ゆえ headless 不可の見栄え確認）。`just serve` ＋ スパロボ戦記（既定で `設定[全身戦闘アニメ]=オン`）で実機の見栄えを確認するのみ。
 > **方針メモ**: GBA は「engine に GBA 画面を作り込む」のではなく「**汎用戦闘アニメ Lib が要求する primitives を engine が満たす**」のが正道。
 > 推測で GBA 画面を実装せず、Lib スクリプトを駆動して gap を埋める（温泉旅館/スパロボ戦記で実証した「fixture を駆動して未対応を洗い出す」手法を踏襲）。
 
@@ -661,9 +666,12 @@ target/debug/scan_eve /tmp/out
 - **描画ペン状態の永続化（`8ab258a`）**: Color/FillStyle/FillColor/DrawWidth はループ外で 1 度設定し毎フレーム ClearPicture するため、cmds から消えると
   図形が既定色（白）に。SRC の ObjColor 等の永続性を再現＝`current_fill_solid`/`current_fill_color`/`current_line_width` 永続フィールド＋レンダラ seed・
   `clear()`(シーン遷移) でリセット・`defer_clear()`(ClearPicture) で保持。回帰 `pen_state_persists_across_clearpicture`。
-- **実 fixture 解決パイプライン＋GBA 分岐の検証（`596f7bd`、`tests/battle_anim_lib.rs`）**: animation.txt の武器→`resolve_weapon`→Lib ラベル実在を突合。
-  GBA クローズアップが `設定[全身戦闘アニメ]=オン` で分岐することを実データで固定。**Phase 1 gap 監査の結論**: 戦闘アニメ Lib が使う命令動詞に未実装/Stub は 0 件。
+- **実 fixture 解決パイプライン＋GBA 分岐の検証（`596f7bd`/`3d87adc`、`tests/battle_anim_lib.rs`）**: animation.txt の武器→`resolve_weapon`→Lib ラベル実在を突合。
+  GBA クローズアップが `設定[全身戦闘アニメ]=オン` で分岐（スパロボ戦記は `スパロボ戦記.eve:48` で既定 ON）。実サブルーチン `戦闘アニメ_拡大小ビーム照射攻撃` が
+  headless で **Wait まで完走**（ヘルパ・VFS file I/O 込み・ScriptError 無し）。**Phase 1 gap 監査の結論**: 戦闘アニメ Lib が使う命令動詞に未実装/Stub は 0 件。
   配線確認: combat が `対象ユニットＩＤ`/`相手ユニットＩＤ` を `try_play_battle_animation`（`app.rs:3654`）前に束縛（`:3282-3284`）。
+- **実 combat 経路の検証（`11b9429`/`3d87adc`）**: 実 `attack_resolve_and_run`→戦闘アニメ起動でフレームループが正しく表示（ClearPicture 遅延クリア）。
+  実 D 戦闘を `VERIFY_ANIMATE=1` で駆動し、実戦闘武器（animation.txt でクローズアップ sub に解決）の戦闘が ScriptError/panic なく完走することも確認。
 
 ### 2026-06-17 セッション（C# オラクル監査・差分 harness）
 
