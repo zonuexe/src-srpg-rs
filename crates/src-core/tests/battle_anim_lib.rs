@@ -129,18 +129,24 @@ fn gba_closeup_is_gated_on_zenshin_setting() {
         "全身 OFF では 2D 経路の武器個別ラベルへ Goto するはず: {off_err:?}"
     );
 
-    // 全身戦闘アニメ ON: 2D 早期分岐を踏まず、Lib 外の武器個別ラベルへは飛ばない。
-    // (クローズアップ本体は対象ユニット未配置のため別の所で止まりうるが、少なくとも
-    //  「2D 経路の武器個別ラベル未検出」は起きない＝GBA 分岐へ入ったことを意味する。)
+    // 全身戦闘アニメ ON: クローズアップ本体（照射ビーム攻撃変数設定/戦闘アニメ背景描写 等の
+    // ヘルパは BattleAnime.eve に在る）へ入り、未対応命令/欠落ラベルで ScriptError を出さず
+    // **最初の Wait まで完走**する（run_from_pc は Wait 中断時 Ok を返す）。対象ユニット未配置でも
+    // Info(…) は空/0 を返し、VFS file I/O (Open/Print/Close/Load 特殊処理) も成立する。
     let mut app_on = App::new();
     assert!(load_battle_anim_lib(&mut app_on, &root.join("lib")) >= 5);
     app_on.set_script_var("設定[全身戦闘アニメ]".to_string(), "オン".to_string());
     let stmts = event::parse("Call 戦闘アニメ_拡大小ビーム照射攻撃\n").unwrap();
     let pc = event_runtime::library_append(&mut app_on, &stmts);
     let on = event_runtime::run_from_pc(&mut app_on, pc);
-    let on_err = on.err().map(|e| e.message).unwrap_or_default();
     assert!(
-        !on_err.contains("戦闘アニメ_ビームライフル準備"),
-        "全身 ON ではクローズアップ経路に入り 2D 武器個別ラベルへは飛ばないはず: {on_err:?}"
+        on.is_ok(),
+        "全身 ON ではクローズアップ本体が未対応命令/欠落ラベルなく Wait まで完走するはず: {:?}",
+        on.err()
+    );
+    // クローズアップ本体に入った証拠: 描画コマンドが overlay に積まれ、Wait で中断している。
+    assert!(
+        app_on.pending_timer().is_some() || !app_on.script_overlay().cmds.is_empty(),
+        "クローズアップ本体が描画 or Wait まで到達しているはず"
     );
 }
