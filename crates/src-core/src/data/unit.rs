@@ -14,9 +14,10 @@
 //! ... 武器 / アビリティ ... (v1 では無視)
 //! ```
 //!
-//! v1 パーサは特殊能力以降を「HP 行 (3 個のカンマで全フィールド数値)」と
+//! パーサは特殊能力以降を「HP 行 (3 個のカンマで全フィールド数値)」と
 //! 「適応行 (4 文字 ASCII + カンマ + 任意のビットマップ名)」を heuristics で
-//! 拾う方式で実装。武器 / アビリティはスキップ。
+//! 拾う方式で実装。特殊能力 (`名前=値` / 値無し裸名)・武器・(`===` 以降の)
+//! アビリティも取り込む。
 
 use serde::{Deserialize, Serialize};
 
@@ -358,6 +359,7 @@ fn parse_record(record: &[SourceLine]) -> Result<UnitData, ParseError> {
     let mut stats_seen = false;
     let mut adaption_seen = false;
     let mut in_abilities = false;
+    let mut in_features = false;
 
     for line in it {
         if line.text.is_empty() {
@@ -387,10 +389,26 @@ fn parse_record(record: &[SourceLine]) -> Result<UnitData, ParseError> {
                 stats_seen = true;
                 continue;
             }
-            // 「特殊能力 / 特殊能力なし / 全ユニット共通」等の section marker は
-            // 値を持たないので features には積まない（= が無い行は無視）。
+            // 「特殊能力」セクションマーカー: 以降の行を特殊能力として取り込む。
+            let t = line.text.trim();
+            if t == "特殊能力" {
+                in_features = true;
+                continue;
+            }
+            // 「特殊能力なし」等のマーカーは能力を持たないので積まない。
+            if t == "特殊能力なし" || t == "全ユニット共通" {
+                continue;
+            }
+            // `名前=値` 形式 (例: `分離=ユニットA ユニットB`)。マーカー有無に依らず採用。
             if let Some(feat) = try_parse_feature(&line.text) {
                 features.push(feat);
+                continue;
+            }
+            // 特殊能力セクション内の **値無し裸名** (例: 水上移動 / ＨＰ回復Lv1)。
+            // SRC の特殊能力は値を持たないものが大半。`=` 必須だと全て取りこぼすため、
+            // 「特殊能力」マーカー配下に限り裸名を value 空で取り込む。
+            if in_features {
+                features.push((t.to_string(), String::new()));
                 continue;
             }
         }
@@ -644,6 +662,50 @@ AAAA,Braver.bmp
 2400,80,900,80
 BBBB,ZoldaII.bmp
 ";
+
+    #[test]
+    fn parses_bare_name_special_abilities() {
+        // 特殊能力セクションの **値無し裸名** (水上移動 / ＨＰ回復Lv1) を取り込む。
+        // `名前=値` 形式 (分離) も併存できる。マーカー行「特殊能力」は積まない。
+        const BOSS: &str = "\
+怪獣
+怪獣,かいじゅう,敵,1,0
+陸水,3,LL,10000,150
+特殊能力
+水上移動
+ＨＰ回復Lv1
+分離=パーツA パーツB
+24000,200,1000,60
+-AAA,boss.bmp
+触手,1600,1,1,+20,-,-,-,AAAA,+0,実
+";
+        let units = parse(BOSS).expect("parse ok");
+        let u = &units[0];
+        let feat_names: Vec<&str> = u.features.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(
+            feat_names.contains(&"水上移動"),
+            "裸名 水上移動 を取り込むはず: {feat_names:?}"
+        );
+        assert!(
+            feat_names.contains(&"ＨＰ回復Lv1"),
+            "裸名 ＨＰ回復Lv1 を取り込むはず: {feat_names:?}"
+        );
+        // `名前=値` 形式は value も保持。
+        let bunri = u
+            .features
+            .iter()
+            .find(|(n, _)| n == "分離")
+            .expect("分離 が無い");
+        assert_eq!(bunri.1, "パーツA パーツB");
+        // 「特殊能力」マーカー自体は能力として積まない。
+        assert!(
+            !feat_names.contains(&"特殊能力"),
+            "マーカー行を能力にしてはいけない"
+        );
+        // 武器・ステータスも従来どおり読める。
+        assert_eq!(u.hp, 24000);
+        assert_eq!(u.weapons.len(), 1);
+    }
 
     #[test]
     fn parses_two_units() {
