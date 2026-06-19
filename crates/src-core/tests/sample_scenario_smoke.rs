@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use src_core::data::{
     event, item, loader, map as mapdata, pilot, special_power, terrain_file, unit,
 };
+use src_core::dialog::PendingDialog;
 use src_core::stage::StageState;
 use src_core::test_harness::{Harness, Step};
 use src_core::{event_runtime, App, Party};
@@ -747,6 +748,123 @@ fn kessen_chapter2_forced_loss_when_jade_destroyed() {
         app.stage_state(),
         StageState::Defeat,
         "ジェイド撃破で GameOver (破壊 味方 → Switch → GameOver) していない"
+    );
+}
+
+#[test]
+fn kessen_chapter2_non_jade_ally_loss_is_survivable() {
+    let root = sample_root();
+    if !root.exists() {
+        eprintln!("[skip] サンプルシナリオ未配置: {}", root.display());
+        return;
+    }
+    // 第2話 `破壊 味方: / Switch 対象ユニット` の分岐スコープを differential 検証する。
+    // GameOver になるのは ジェイド(キャリバーン) 撃破時のみ。他の味方(サラ等) 撃破は
+    // 「脱出」Talk のみで戦闘続行 (敗北しない)。`対象ユニット` システム変数が撃墜
+    // パイロット名へ正しく解決され、Switch が正しいケースへ分岐することを保証する。
+    // (対象ユニットが壊れて常に同値なら、サラ撃破とジェイド撃破が同挙動になり破綻する)
+    let mut app = boot_chapter_with_party(&root, "決戦！宇宙怪獣2話.eve", "決戦！宇宙怪獣2話.map");
+
+    let has_pilot = |app: &App, p: &str| {
+        app.database()
+            .unit_instances
+            .iter()
+            .any(|u| u.pilot_name == p)
+    };
+
+    // サラ(ブレス) を増援配置 (本来はセーブ引き継ぎ)。boot の キャリバーン Create と同形式。
+    let add = event::parse("Create 味方 ブレス 0 サラ＝Ｅ＝Ｊ＝ビップ 23 8 8\n")
+        .expect("parse Create サラ");
+    event_runtime::execute(&mut app, &add).expect("exec Create サラ");
+    assert!(
+        has_pilot(&app, "サラ＝Ｅ＝Ｊ＝ビップ"),
+        "サラの増援配置に失敗"
+    );
+
+    // (1) サラ撃破 → `破壊 味方` → Switch "サラ…" → Talk のみ。敗北しないはず。
+    let kill_sara = event::parse("Kill サラ＝Ｅ＝Ｊ＝ビップ\n").expect("parse Kill サラ");
+    event_runtime::execute(&mut app, &kill_sara).expect("exec Kill サラ");
+    drive_all(&mut app, 800);
+    assert!(
+        !has_pilot(&app, "サラ＝Ｅ＝Ｊ＝ビップ"),
+        "サラは撃破され盤上から除かれているはず"
+    );
+    assert_eq!(
+        app.stage_state(),
+        StageState::Battle,
+        "非ジェイド味方(サラ)の撃破で敗北してはならない (Switch が誤分岐)"
+    );
+    assert!(
+        has_pilot(&app, "ジェイド＝ソウマ"),
+        "ジェイド(キャリバーン) はまだ健在のはず"
+    );
+
+    // (2) 続けてジェイド撃破 → Switch "ジェイド…" → GameOver。今度は敗北するはず。
+    let kill_jade = event::parse("Kill ジェイド＝ソウマ\n").expect("parse Kill ジェイド");
+    event_runtime::execute(&mut app, &kill_jade).expect("exec Kill ジェイド");
+    drive_all(&mut app, 800);
+    assert_eq!(
+        app.stage_state(),
+        StageState::Defeat,
+        "ジェイド撃破で GameOver していない (差分判定: 対象ユニット が誤っている可能性)"
+    );
+}
+
+#[test]
+fn kessen_chapter2_destroying_gilgas_triggers_stage_clear() {
+    let root = sample_root();
+    if !root.exists() {
+        eprintln!("[skip] サンプルシナリオ未配置: {}", root.display());
+        return;
+    }
+    // 第2話の勝利トリガー配線を検証する。ギルガスは `Create 敵 宇宙怪獣ギルガス第１形態
+    // 0 宇宙怪獣ギルガス …` で生成され **パイロット名=宇宙怪獣ギルガス**。撃破すると
+    // `破壊 宇宙怪獣ギルガス: → Goto ステージクリア` が走り、ステージクリアの選択 Ask
+    // ("ステージクリアです。どうしますか？") に到達する。
+    //
+    // 注: ステージクリア本体は「ギルガス復活→マップ兵器→FadeOut→Continue 3話」という
+    // 重い画像演出シネマティックで、3話 Over Ride 同様 headless 完走はしない。よって
+    // ここでは **勝利ラベルへの分岐 (Ask 到達)** までを境界付きで確認し、敗北しない
+    // ことを assert する (完走はしない)。
+    let mut app = boot_chapter_with_party(&root, "決戦！宇宙怪獣2話.eve", "決戦！宇宙怪獣2話.map");
+    assert!(
+        app.database()
+            .unit_instances
+            .iter()
+            .any(|u| u.pilot_name == "宇宙怪獣ギルガス"),
+        "2話開始時にギルガス(パイロット名=宇宙怪獣ギルガス)が居ない"
+    );
+
+    let kill = event::parse("Kill 宇宙怪獣ギルガス\n").expect("parse Kill ギルガス");
+    event_runtime::execute(&mut app, &kill).expect("exec Kill ギルガス");
+
+    // ステージクリア冒頭の Wait を消化し、選択 Ask に到達するまで境界付きで駆動。
+    let mut reached_clear_prompt = false;
+    for _ in 0..200 {
+        let at_clear_prompt = app.pending_dialog().is_some_and(|d| {
+            matches!(d, PendingDialog::Menu { prompt, .. } if prompt.contains("ステージクリア"))
+        });
+        if at_clear_prompt {
+            reached_clear_prompt = true;
+            break;
+        }
+        if app.pending_dialog().is_some() {
+            app.respond_dialog(0);
+        } else if let Some(t) = app.pending_timer() {
+            app.tick(t + 1.0);
+        } else {
+            break;
+        }
+    }
+
+    assert_ne!(
+        app.stage_state(),
+        StageState::Defeat,
+        "ギルガス撃破で敗北してはならない (勝利トリガーのはず)"
+    );
+    assert!(
+        reached_clear_prompt,
+        "`破壊 宇宙怪獣ギルガス` → ステージクリアの選択 Ask に到達しない (勝利配線の欠落)"
     );
 }
 
