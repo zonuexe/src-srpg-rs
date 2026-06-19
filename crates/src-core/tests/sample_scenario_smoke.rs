@@ -236,6 +236,79 @@ fn unit_names(app: &App) -> Vec<String> {
         .collect()
 }
 
+fn total_enemy_damage(app: &App) -> i64 {
+    app.database()
+        .unit_instances
+        .iter()
+        .filter(|u| u.party == Party::Enemy)
+        .map(|u| u.damage)
+        .sum()
+}
+
+#[test]
+fn sample_scenario_player_phase_engages_combat() {
+    let root = sample_root();
+    if !root.exists() {
+        eprintln!("[skip] サンプルシナリオ未配置: {}", root.display());
+        return;
+    }
+    // SRCｻﾝﾌﾟﾙ を戦闘 (Battle / 味方フェイズ) まで起動。
+    let mut app = boot_stage(&root, "srcｻﾝﾌﾟﾙ.eve");
+    // scene→MapView はフロント責務なのでテスト側で再現 (debug_run_phase_ai の前提)。
+    app.set_scene(src_core::Scene::MapView);
+
+    let dmg_before = total_enemy_damage(&app);
+    let msgs_before = app.messages().len();
+
+    // 味方フェイズを AI 自動行動させ、合間に発生する `攻撃` イベント等の Talk を
+    // 解消する。複数ユニットが順次行動するので数回繰り返す。
+    for _ in 0..40 {
+        if app.pending_dialog().is_some() {
+            app.respond_dialog(0);
+            continue;
+        }
+        app.debug_run_phase_ai();
+        if app.pending_dialog().is_none() {
+            break;
+        }
+    }
+
+    let dmg_after = total_enemy_damage(&app);
+    let new_msgs: Vec<&String> = app.messages().iter().skip(msgs_before).collect();
+    let joined = new_msgs
+        .iter()
+        .map(|s| s.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    eprintln!(
+        "[combat] enemy damage {dmg_before} -> {dmg_after}, +{} msgs",
+        new_msgs.len()
+    );
+    for m in new_msgs.iter().take(16) {
+        eprintln!("  msg+ {m}");
+    }
+
+    // 実データ (パイロット能力・武器・命中/ダメージ計算) で味方フェイズの戦闘が
+    // 成立し、敵が被弾している (= 交戦が起きた) こと。
+    assert!(
+        dmg_after > dmg_before,
+        "味方フェイズで戦闘が発生していない (敵被ダメージ {dmg_before}->{dmg_after})"
+    );
+    // 攻撃イベント (`攻撃 ジェイド サラ:`) がプレイヤー攻撃で発火していること。
+    assert!(
+        joined.contains("へん、ブレスなんざ"),
+        "攻撃イベントが発火していない:\n{joined}"
+    );
+    // サンプルの目玉ギミックが成立: 不死身 (撃破阻止) → 損傷率 50% イベント
+    // (HP 回復 + 不死身解除) が戦闘ダメージで発火する。
+    // (Finish=ステージ終了の誤実装 / 不死身未実装 / 損傷率が戦闘で非発火 の
+    //  3 連鎖バグを修正した結果としてここまで通る。)
+    assert!(
+        joined.contains("ブレスのＨＰが５０％回復した"),
+        "損傷率 50% イベント (不死身→回復) が戦闘で発火していない:\n{joined}"
+    );
+}
+
 #[test]
 fn sample_scenario_boots_to_start_event() {
     let root = sample_root();
