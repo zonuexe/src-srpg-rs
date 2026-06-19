@@ -1524,13 +1524,13 @@ fn exec_command_pc(
             return Ok(pc + 1);
         }
         "suspend" => {
-            // SRC `Suspend` (`Suspendコマンド.md`):
-            // ゲーム進行を中断 (= 中断セーブの自動作成 + Title 復帰)。
-            // 本実装は中断セーブの自動保存は行わず、シーンを Title に戻し
-            // インターミッションコマンド / 進行情報をクリアして「ゲーム中断」
-            // 状態を擬似的に再現する。フロントエンドが to_save_json() を
-            // 呼んで localStorage 保存する責務を持つ。
-            app.set_scene(crate::Scene::Title);
+            // SRC `Suspend` (C# `SuspendCmd` は `return NextID` = **何もせず次へ**):
+            // Talk ブロック内では「メッセージウィンドウを残したままクリック待ち」の
+            // 区切りとして機能する (= `collect_until_end` が Talk 終端として消費する)。
+            // Talk 外の単独 `Suspend` は no-op (次へ進む) であり、ゲーム中断/Title 復帰
+            // ではない (中断は `Quit` コマンドの役割)。旧実装は単独 Suspend で
+            // scene=Title にしていたが、これは誤りで、cinematic 途中の Suspend が
+            // タイトルへ飛ばしてしまっていた。
             return Ok(pc + 1);
         }
         "makepilotlist" => {

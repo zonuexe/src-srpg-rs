@@ -1933,12 +1933,20 @@ fn telop_prefixes_message() {
 }
 
 #[test]
-fn suspend_returns_to_title() {
+fn standalone_suspend_is_noop() {
+    // SRC `SuspendCmd` は `return NextID` = no-op (Talk 外の単独 Suspend は何もしない)。
+    // ゲーム中断/Title 復帰ではない (それは Quit の役割)。cinematic 途中の Suspend が
+    // タイトルへ飛ばさないことを保証する。
     let mut app = run_with_unit("\n");
     app.set_scene(src_core::Scene::MapView);
-    let stmts = event::parse("Suspend\n").unwrap();
+    let stmts = event::parse("Suspend\nSet 続行 1\n").unwrap();
     event_runtime::execute(&mut app, &stmts).unwrap();
-    assert_eq!(app.scene(), src_core::Scene::Title);
+    assert_eq!(
+        app.scene(),
+        src_core::Scene::MapView,
+        "Suspend で scene が変わった"
+    );
+    assert_eq!(app.script_var("続行"), "1", "Suspend で後続が実行されない");
 }
 
 #[test]
