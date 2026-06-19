@@ -4659,6 +4659,43 @@ impl App {
                 target_pos = gpos;
             }
         }
+        // ChangeMode による思考誘導 (決戦！宇宙怪獣2話 の NPC 制御):
+        //  - `ChangeMode <unit> <x> <y>` (座標モード): 指定座標へ向かう (ボスを釣る)。
+        //  - `ChangeMode <unit> <対象ユニット名>` (ユニット狙い): 指定ユニットを
+        //    優先ターゲットにする (NPC をボスへ集中させる)。
+        // (`通常`/`待機`/`固定`/`逃亡`/`護衛 …` は別途処理済み。)
+        {
+            let mode = ai_mode.trim();
+            let toks: Vec<&str> = mode.split_whitespace().collect();
+            let coord = match toks.as_slice() {
+                [a, b] => match (a.parse::<u32>(), b.parse::<u32>()) {
+                    (Ok(x), Ok(y)) => Some((x, y)),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(c) = coord {
+                target_pos = c;
+            } else if !mode.is_empty()
+                && !matches!(mode, "通常" | "待機" | "固定" | "逃亡")
+                && !mode.starts_with("護衛")
+            {
+                // ユニット狙い: 名前一致する敵対ユニットを優先ターゲットに。
+                if let Some(tpos) = self
+                    .database
+                    .unit_instances
+                    .iter()
+                    .find(|u| {
+                        !u.off_map
+                            && u.party.is_hostile_to(party)
+                            && (u.unit_data_name == mode || u.pilot_name == mode || u.uid == mode)
+                    })
+                    .map(|u| (u.x, u.y))
+                {
+                    target_pos = tpos;
+                }
+            }
+        }
 
         // 移動範囲を Dijkstra で計算 (地形適応・特殊能力を考慮)。
         let move_cost_fn = {
@@ -15945,6 +15982,60 @@ mod tests {
             app.script_var("破壊発火"),
             "1",
             "`破壊 Pilot(FoeData)` 関数形ラベルが発火していない"
+        );
+    }
+
+    #[test]
+    fn ai_changemode_coord_lures_unit_toward_coordinate() {
+        // ChangeMode <unit> <x> <y> (座標モード): 近い敵ではなく指定座標へ向かう。
+        // 決戦！宇宙怪獣2話 の `ChangeMode 宇宙怪獣ギルガス 17 1` (ボスを釣る) 相当。
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app); // 24x16
+        place_player_unit(&mut app, "FoeData", 23, 15); // FoeData の UnitData/Pilot 登録用
+        add_weapon(&mut app, "FoeData", 100, 1);
+        place_player_unit(&mut app, "Hero", 0, 14); // 敵から見て近い標的 (下方向, dist14)
+        let foe = spawn_enemy(&mut app, "FoeData", 0, 0); // AI 敵ユニット
+        app.set_stage_state(crate::stage::StageState::Battle);
+        let fidx = app.database().idx_by_uid(&foe).unwrap();
+        app.database_mut().unit_instances[fidx].ai_mode = "20 0".to_string(); // 右方向へ誘導
+
+        app.ai_act_unit(fidx);
+
+        let u = app.database().unit_by_uid(&foe).unwrap();
+        assert!(u.x > 0, "座標誘導で右へ動いていない (x={}, y={})", u.x, u.y);
+        assert!(
+            u.x > u.y,
+            "近い Hero(下) へ動いてしまっている (x={}, y={})",
+            u.x,
+            u.y
+        );
+    }
+
+    #[test]
+    fn ai_changemode_target_focuses_named_unit() {
+        // ChangeMode <unit> <対象名> (ユニット狙い): 近い敵ではなく指定ユニットを
+        // 優先ターゲットにする。決戦！宇宙怪獣2話 `ChangeMode ＮＰＣ 宇宙怪獣ギルガス`
+        // (NPC をボスへ集中) 相当。
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "NearData", 0, 3); // 近い標的 (下, dist3)
+        place_player_unit(&mut app, "FarData", 20, 0); // 指定する遠い標的 (右, dist20)
+        add_weapon(&mut app, "FarData", 100, 1);
+        let foe = spawn_enemy(&mut app, "FarData", 0, 0); // AI 敵 (FarData 流用)
+                                                          // 武器を持たせる (spawn_enemy は UnitData を共有するので FarData に付与済み)
+        app.set_stage_state(crate::stage::StageState::Battle);
+        let fidx = app.database().idx_by_uid(&foe).unwrap();
+        app.database_mut().unit_instances[fidx].ai_mode = "FarData".to_string(); // FarData を狙う
+
+        app.ai_act_unit(fidx);
+
+        let u = app.database().unit_by_uid(&foe).unwrap();
+        // 指定した FarData(右) 方向へ動く。近い NearData(下) ではない。
+        assert!(
+            u.x > u.y,
+            "指定ユニット(右)でなく近い標的(下)へ動いている (x={}, y={})",
+            u.x,
+            u.y
         );
     }
 
