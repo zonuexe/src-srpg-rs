@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use src_core::data::{event, item, loader, map as mapdata, pilot, special_power, unit};
 use src_core::stage::StageState;
 use src_core::test_harness::{Harness, Step};
-use src_core::{event_runtime, App, Party};
+use src_core::{App, Party};
 
 /// リポジトリ直下に展開された非再配布パッケージのサンプルシナリオ root。
 fn sample_root() -> PathBuf {
@@ -65,7 +65,8 @@ fn rel_name(root: &Path, p: &Path) -> String {
 ///   エントリと同名の `.map` があれば active map にしておく
 ///   (`SRCｻﾝﾌﾟﾙ.eve` のように `ChangeMap` を持たないステージ用)。
 /// - 全 `.eve` を `append_with_name` で登録 (ファイル間前方参照の解決)。
-/// - エントリ top-level を実行 → `bootstrap_stage_after_load` → Talk を Drain。
+/// - `次ステージ` にエントリを予約 → `advance_to_next_stage` (原典 Continue
+///   チェイン相当: プロローグ→スタート発火) → Talk を Drain で進める。
 fn boot_stage(root: &Path, entry_basename_lower: &str) -> App {
     let mut app = App::with_rng_seed(0x5A_4D_50_4C_u64);
 
@@ -145,7 +146,6 @@ fn boot_stage(root: &Path, entry_basename_lower: &str) -> App {
     eve_paths.sort();
 
     let mut eve_parse_errors = Vec::<String>::new();
-    let mut entry_pc: Option<usize> = None;
     let mut entry_name = String::new();
     for p in &eve_paths {
         let Ok(bytes) = fs::read(p) else { continue };
@@ -153,10 +153,8 @@ fn boot_stage(root: &Path, entry_basename_lower: &str) -> App {
         let name = rel_name(root, p);
         match event::parse(&txt) {
             Ok(stmts) => {
-                let pc = app.script_library().statements.len();
                 app.script_library_mut().append_with_name(&stmts, &name);
                 if basename_lower(p) == entry_basename_lower {
-                    entry_pc = Some(pc);
                     entry_name = name.clone();
                 }
             }
@@ -168,14 +166,22 @@ fn boot_stage(root: &Path, entry_basename_lower: &str) -> App {
         ".eve パース失敗:\n{}",
         eve_parse_errors.join("\n")
     );
-    let entry_pc = entry_pc.unwrap_or_else(|| panic!("{entry_basename_lower} が見つからない"));
+    assert!(
+        !entry_name.is_empty(),
+        "{entry_basename_lower} が見つからない"
+    );
 
-    // ---- ステージ起動 (verify-archive と同じ順序) ---------------------
-    // エントリ .eve の top-level を実行 (プロローグまで流れて Talk で suspend)
-    // → ロード末尾ブートストラップで スタート 発火 → 味方フェイズへ。
-    event_runtime::run_from_pc(&mut app, entry_pc)
-        .unwrap_or_else(|e| panic!("{entry_name} top-level 実行: {e}"));
-    app.bootstrap_stage_after_load(&entry_name);
+    // ---- ステージ起動 (原典 Continue チェイン相当) --------------------
+    // `次ステージ` にエントリを予約して `advance_to_next_stage` を呼ぶ。これは
+    // Welcome.eve の `Continue <stage>` → インターミッション「次のステージへ」と
+    // 同じ起動経路で、プロローグ→(begin_battle 経由) スタート の順に発火する。
+    // インターミッション型 (決戦シリーズ) でも early-return せず Battle へ進む点が
+    // `bootstrap_stage_after_load` 経路との違い。
+    app.set_script_var("次ステージ".to_string(), entry_name.clone());
+    assert!(
+        app.advance_to_next_stage(),
+        "{entry_name} のステージ起動に失敗"
+    );
 
     // プロローグ / スタートイベントの Talk を順に流して進める。
     let mut h = Harness::from_app(app);
@@ -191,11 +197,25 @@ fn boot_stage(root: &Path, entry_basename_lower: &str) -> App {
         .iter()
         .map(|u| u.unit_data_name.as_str())
         .collect();
+    let alive_enemy = app
+        .database()
+        .unit_instances
+        .iter()
+        .filter(|u| u.party == Party::Enemy && !u.off_map)
+        .count();
+    let alive_player = app
+        .database()
+        .unit_instances
+        .iter()
+        .filter(|u| u.party == Party::Player && !u.off_map)
+        .count();
     eprintln!(
-        "[{entry_basename_lower}] scene={:?} stage_state={:?} phase={:?} units={names:?}",
+        "[{entry_basename_lower}] scene={:?} stage_state={:?} turn={} phase={:?} alive(P/E)={alive_player}/{alive_enemy} 次ステージ={:?} units={names:?}",
         app.scene(),
         app.stage_state(),
+        app.turn().number,
         app.turn().phase,
+        app.script_var("次ステージ"),
     );
     h.app().clone()
 }
@@ -285,21 +305,20 @@ fn tutorial_runs_to_completion() {
 }
 
 #[test]
-fn kessen_chapter1_boots_intermission() {
+fn kessen_chapter1_boots_to_deployment() {
     let root = sample_root();
     if !root.exists() {
         eprintln!("[skip] サンプルシナリオ未配置: {}", root.display());
         return;
     }
-    // 第1話は連続シナリオの初回で、プロローグで `Option 乗り換え/アイテム交換`
-    // + `IntermissionCommand` を登録する **インターミッション型**。core の
-    // bootstrap はインターミッション型を auto-start せず (メニューの「次のステージ
-    // へ」/「出撃」で進む設計)、Briefing で待機するのが正しい挙動。
-    // ※ インターミッションメニュー経由の戦闘開始駆動は将来課題。ここでは
-    //   プロローグが runtime error 無く完走し、IntermissionCommand が登録され、
-    //   ミニキャンペーンのプロローグ台詞が出ることを検証する。
+    // 第1話は連続シナリオの初回。プロローグで `Option 乗り換え/アイテム交換`
+    // + `IntermissionCommand` を登録する **インターミッション型**で、本来は
+    // Welcome.eve の `Continue` → インターミッション「次のステージへ」で起動する。
+    // boot_stage は `次ステージ` + `advance_to_next_stage` でこの経路を再現し、
+    // プロローグ→スタート (味方/敵配置 + ChangeMap で本番マップ) まで完走させる。
     let app = boot_stage(&root, "決戦！宇宙怪獣1話.eve");
 
+    // インターミッションコマンドが登録されている (Option/IntermissionCommand)。
     let icmds: Vec<&str> = app
         .intermission_commands()
         .iter()
@@ -309,11 +328,39 @@ fn kessen_chapter1_boots_intermission() {
         icmds.iter().any(|n| n.contains("乗り換え説明")),
         "IntermissionCommand 乗り換え説明 が登録されていない: {icmds:?}"
     );
+
+    // スタートイベントが本編ユニットを配置していること (味方キャリバーン +
+    // 補給艦リームズ、敵の巨大宇宙怪獣バルアド)。
+    let names = unit_names(&app);
     assert!(
-        app.messages()
-            .iter()
-            .any(|m| m.contains("ミニキャンペーン")),
-        "プロローグ台詞が出ていない: {:?}",
-        app.messages()
+        names.iter().any(|n| n.contains("キャリバーン")),
+        "味方キャリバーンが配置されていない: {names:?}"
+    );
+    assert!(
+        names.iter().any(|n| n.contains("リームズ")),
+        "補給艦リームズが配置されていない: {names:?}"
+    );
+    assert!(
+        names.iter().any(|n| n.contains("バルアド")),
+        "敵バルアドが配置されていない: {names:?}"
+    );
+    assert!(count_party(&app, Party::Player) >= 1, "味方ユニット無し");
+    assert!(count_party(&app, Party::Enemy) >= 1, "敵ユニット無し");
+    // ChangeMap で本番マップ (決戦1話.map) が読み込まれていること。
+    assert!(app.database().map.is_some(), "active map が無い");
+
+    // スタートイベント完走後、戦闘 (Battle) + 味方フェイズに到達していること。
+    // ※ 以前は スタートの `Finish ジェイド＝ソウマ` を「ステージ終了」と誤実装して
+    //   いたため開始即 Victory に落ちていた。Finish=行動終了 に修正済み。
+    assert_eq!(
+        app.stage_state(),
+        StageState::Battle,
+        "Battle 状態に到達していない (scene={:?})",
+        app.scene()
+    );
+    assert_eq!(
+        app.turn().phase,
+        src_core::Phase::Player,
+        "味方フェイズ未到達"
     );
 }
