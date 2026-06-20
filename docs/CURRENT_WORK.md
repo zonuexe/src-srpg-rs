@@ -10,7 +10,7 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 ## 現在地（2026-06-20）— 公式サンプルシナリオ互換 + 防御能力の方針決定
 
 **ブランチ**: `feat/sample-scenario-smoke`（`master` ではなくフィーチャーブランチ。push 未指示）。
-**テスト**: `cargo test -p src-core` 全緑（約 2010 件）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。
+**テスト**: `cargo test -p src-core` 全緑（約 2011 件）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。
 **主題**: 非再配布パッケージ `srcall-2_2_33-111106/サンプルシナリオ`（公式サンプル）を Rust 移植で
 動作させる。テストは実フォルダを **参照のみ**（無ければ skip・本文 embed なし・`srcall-*/` は `.gitignore`）。
 
@@ -34,6 +34,16 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
   破壊/全滅 は撃破ループ内で既発火。**マップ攻撃破壊**（Help 未記載の内部イベント）は仕様不明のため
   未実装（推測実装回避）。テスト `map_attack_fires_after_damage_events_only_in_normal_battle_mode`。
   → **マップ兵器の発火イベントは 使用/攻撃/使用後/攻撃後/損傷率/破壊/全滅 が通常攻撃と対称**。
+
+**★ 追加（2026-06-20・続き）= 攻撃系精神の `スペシャルパワー無効化` 免疫を実装**:
+- サンプル決戦1話は全敵に `SetStatus スペシャルパワー無効化` を付与し、挑発/脱力等の攻撃系精神から
+  ザコを守る（1話コメント「スペシャルパワー無効化／特殊効果無効化 は必須」）。ポートは `apply_spirit_effect`
+  が無効化を一切見ておらず、攻撃系精神が無効化持ちにも効いていた。
+- **是正**: SRC `SpecialPowerData.cs:523-540`（TargetType 敵/全敵/任意/全 の SP は `スペシャルパワー
+  無効化`/`精神コマンド無効化` 保持ユニットに効果なし）準拠で、`apply_spirit_effect` 冒頭に免疫判定を
+  追加。敵対象（`SpiritTargetKind::SingleEnemy`）の精神を、対象が当該 condition を持つときは効果のみ
+  無効化（SP コストは発動側で消費済み）。テスト `special_power_nullification_blocks_offensive_spirit`
+  （脱力 で無効化あり=気力不変・なし=気力-10）。
 
 **このセッションで修正した実バグ / 実装**（feature 由来戦闘修正・イベント発火基盤）:
 - **特殊能力パーサが値無し裸名を全捨て**（`data/unit.rs`）: `水上移動`/`ＨＰ回復Lv1`/`分身` 等の
