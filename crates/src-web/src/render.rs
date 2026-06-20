@@ -2185,9 +2185,11 @@ fn draw_status_panel(
     let _ = ctx.fill_text(&truncate(&pname, 6), tx, py);
     py += 13.0;
     ctx.set_font(&format!("10px {JP_SANS}"));
-    // レベル (撃墜数は未実装 → (0) プレースホルダ)。
+    // レベル (撃墜数)。撃墜数は PilotInstance.skills の「撃墜数 N」(increment_kill_count
+    // が書き戻す) を skill_level で読む。未撃破なら 0。
     let level = pilot_inst.map(|p| p.level).unwrap_or(1);
-    lv(ctx, tx, py, "Lv", 22.0, &format!("{level} (0)"));
+    let kills = pilot_inst.map(|p| p.skill_level("撃墜数")).unwrap_or(0);
+    lv(ctx, tx, py, "Lv", 22.0, &format!("{level} ({kills})"));
     py += 12.0;
     // 気力 + 性格 (例: 100 (強気))。
     let personality = pilot_data.as_ref().and_then(|p| p.personality.clone());
@@ -2323,14 +2325,15 @@ fn draw_status_panel(
         // 装甲 / 運動性 / 移動力 / サイズ / 適応。
         ctx.set_font(&format!("10px {JP_SANS}"));
         let col2 = pad_x + (w - 12.0) / 2.0;
-        lv(
-            ctx,
-            pad_x,
-            y,
-            "装甲",
-            28.0,
-            &database.effective_armor(u).to_string(),
-        );
+        // 装甲は base+bonus 表示 (改造段階・強化パーツ・ボス補正の上乗せ分を分割)。
+        let armor_eff = database.effective_armor(u);
+        let armor_bonus = armor_eff - d.armor;
+        let armor_text = if armor_bonus > 0 {
+            format!("{}+{}", d.armor, armor_bonus)
+        } else {
+            armor_eff.to_string()
+        };
+        lv(ctx, pad_x, y, "装甲", 28.0, &armor_text);
         lv(
             ctx,
             col2,
@@ -2637,14 +2640,10 @@ fn build_combat_preview_line(
     )
     // 散 (散布) 属性武器の距離補正 (命中アップ・ダメージダウン) をプレビューにも反映。
     .apply_scatter(&weapon.class, combat::manhattan((cx, cy), (dx, dy)));
+    // 160px パネル幅に収まる短縮形 (相手愛称・命中率・与ダメージ)。
     Some(format!(
-        "→ vs [{}] {} ({},{})  [{}] dist={}  命中:{}%  ダメージ:{}",
-        def.party.short_label(),
-        def_pilot.nickname,
-        dx,
-        dy,
-        weapon.name,
-        combat::manhattan((cx, cy), (dx, dy)),
+        "▶{} 命中{}% 与{}",
+        truncate(&def_pilot.nickname, 5),
         cp.hit_chance.min(100),
         cp.damage
     ))
