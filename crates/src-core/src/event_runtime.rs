@@ -6946,6 +6946,36 @@ pub(crate) fn fire_destruction_labels(
     unit_data_name: &str,
     party: crate::Party,
 ) {
+    fire_destruction_labels_inner(
+        app,
+        pilot_name,
+        unit_data_name,
+        party,
+        &["Destruction", "破壊"],
+    );
+}
+
+/// マップ攻撃で撃破された対象用の破壊系イベント (SRC VB6 `Unit.cls:17214` /
+/// `Event.bas:1744` で `破壊` と同じ `DestructionEventLabel`)。原典はマップ攻撃の
+/// 撃破に対し `破壊` ではなく **`マップ攻撃破壊 <対象>`** を発火する。対象ユニット
+/// システム変数の設定と `全滅 <party>` 発火は `破壊` と共通。プレイヤー/AI 発の
+/// マップ攻撃 (is_event=false) でのみ使う。
+pub(crate) fn fire_map_attack_destruction_labels(
+    app: &mut App,
+    pilot_name: &str,
+    unit_data_name: &str,
+    party: crate::Party,
+) {
+    fire_destruction_labels_inner(app, pilot_name, unit_data_name, party, &["マップ攻撃破壊"]);
+}
+
+fn fire_destruction_labels_inner(
+    app: &mut App,
+    pilot_name: &str,
+    unit_data_name: &str,
+    party: crate::Party,
+    prefixes: &[&str],
+) {
     // pilot名 / unit名 に加え、関数形 `Pilot(<unit名>)` / `Unit(<pilot名>)`、
     // **陣営名** (`破壊 味方:` / `破壊 敵:` 等) も試す。SRC は 破壊ラベルの識別子を
     // ユニット識別子 (pilot/unit/ID/陣営) として照合する (`SearchLabel` is_unit)。
@@ -6968,7 +6998,7 @@ pub(crate) fn fire_destruction_labels(
         targets.push(format!("Pilot({unit_data_name})"));
     }
     targets.push(party_long_label(party).to_string());
-    for prefix in ["Destruction", "破壊"] {
+    for prefix in prefixes {
         for target in &targets {
             let label = format!("{prefix} {target}");
             if app.post_stage_event_label(label) {
@@ -13515,12 +13545,19 @@ pub(crate) fn map_attack(
             if app.revive_if_possible(def_idx) {
                 app.push_message(format!("{} は【復活】で立ち上がった！", def_unit.name));
             } else {
-                // 通常戦闘と同様に 破壊 <name> / 全滅 <party> イベントを発火する。
-                // これが無いとマップ兵器でラスト1機を撃破してもシナリオが進行しない。
                 let (vp, vu) = (def_pilot.name.clone(), def_unit.name.clone());
                 let vparty = app.database().unit_instances[def_idx].party;
                 app.database_mut().remove_unit_at(def_idx);
-                fire_destruction_labels(app, &vp, &vu, vparty);
+                if is_event {
+                    // スクリプトの `MapAttack` コマンド: 原典は「イベント上の戦闘」として
+                    // 破壊系を発火しないが、ポートは進行保証のため従来どおり 破壊 を発火する
+                    // (これが無いとスクリプトのマップ兵器で撃破してもシナリオが進まない)。
+                    fire_destruction_labels(app, &vp, &vu, vparty);
+                } else {
+                    // プレイヤー/AI 発のマップ攻撃: 原典 (VB6 `Unit.cls:17214`) 準拠で
+                    // `破壊` ではなく `マップ攻撃破壊 <対象>` を発火する。`全滅`/勝敗は共通。
+                    fire_map_attack_destruction_labels(app, &vp, &vu, vparty);
+                }
                 kills += 1;
             }
         } else if !is_event {
@@ -18230,6 +18267,65 @@ MapWeapon リオ メガキャノン 6 5
             app.script_var("損傷率発火"),
             "1",
             "通常戦闘 MapAttack は 生存対象に 損傷率 イベントを発火するはず"
+        );
+    }
+
+    /// SRC VB6 `Unit.cls:17214`: プレイヤー/AI 発のマップ攻撃 (is_event=false) の撃破は
+    /// `破壊` ではなく **`マップ攻撃破壊 <対象>`** を発火する。スクリプトの素の `MapAttack`
+    /// (is_event=true) はポートの進行保証のため従来どおり `破壊` を発火する。
+    #[test]
+    fn map_attack_kill_fires_map_destruction_for_player_but_normal_for_script() {
+        fn run(tail: &str) -> App {
+            let mut app = App::new();
+            // ゾルダ(HP100/装甲10) はメガキャノン(9000) で確実に撃破される。
+            let src = format!(
+                "Pilot リオ リオ 男性 超能力者 AAAA 100 100 100 100 100 100 100\n\
+                 Pilot ガロ ガロ 男性 一般 AAAA 100 100 100 100 100 100 100\n\
+                 Unit ブレイバー Real 1 0 陸 5 M 1000 100 5000 100 1500 100 AAAA\n\
+                 Unit ゾルダ Mass 1 0 陸 5 M 1000 100 100 80 10 80 BBBB\n\
+                 Weapon ブレイバー メガキャノン 9000 1 3 +0 0\n\
+                 Place ブレイバー リオ 味方 5 5\n\
+                 Place ゾルダ ガロ 敵 6 5\n\
+                 MapAttack リオ メガキャノン 6 5{tail}\n\
+                 Exit\n\
+                 \n\
+                 破壊 ガロ:\n\
+                 Incr 破壊発火\n\
+                 Return\n\
+                 \n\
+                 マップ攻撃破壊 ガロ:\n\
+                 Incr マップ破壊発火\n\
+                 Return\n"
+            );
+            let stmts = event::parse(&src).unwrap();
+            execute(&mut app, &stmts).unwrap();
+            app
+        }
+
+        // スクリプト MapAttack (is_event=true): 破壊 が発火、マップ攻撃破壊 は不発。
+        let app = run("");
+        assert_eq!(
+            app.script_var("破壊発火"),
+            "1",
+            "スクリプト MapAttack の撃破は 破壊 を発火する"
+        );
+        assert_eq!(
+            app.script_var("マップ破壊発火"),
+            "",
+            "スクリプト MapAttack は マップ攻撃破壊 を発火しない"
+        );
+
+        // 通常戦闘 MapAttack (is_event=false): マップ攻撃破壊 が発火、破壊 は不発。
+        let app = run(" 通常戦闘");
+        assert_eq!(
+            app.script_var("マップ破壊発火"),
+            "1",
+            "通常戦闘 MapAttack の撃破は マップ攻撃破壊 を発火する (原典準拠)"
+        );
+        assert_eq!(
+            app.script_var("破壊発火"),
+            "",
+            "通常戦闘 MapAttack は 破壊 を発火しない (原典は マップ攻撃破壊)"
         );
     }
 
