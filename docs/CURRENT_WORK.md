@@ -10,7 +10,7 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 ## 現在地（2026-06-20）— 公式サンプルシナリオ互換 + 防御能力の方針決定
 
 **ブランチ**: `feat/sample-scenario-smoke`（`master` ではなくフィーチャーブランチ。push 未指示）。
-**テスト**: `cargo test -p src-core` 全緑（約 2012 件）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。
+**テスト**: `cargo test -p src-core` 全緑（約 2014 件）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。
 **主題**: 非再配布パッケージ `srcall-2_2_33-111106/サンプルシナリオ`（公式サンプル）を Rust 移植で
 動作させる。テストは実フォルダを **参照のみ**（無ければ skip・本文 embed なし・`srcall-*/` は `.gitignore`）。
 
@@ -62,10 +62,20 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 - **B1（戦闘リダイレクト）**: 通常攻撃のダメージ適用直前に最優先で `apply_migawari` を挿入。保護対象が
   `みがわり` を持てば身代わりへ100%肩代わり（身代わりの バリア/フィールド/シールド/不死身 を適用、HP0で
   撃破・破壊イベント・勝敗判定）し condition 消費。援護防御の先例に倣う。
-- **C1（範囲＝みがわり戦闘のみ）**: 通常攻撃経路で synthetic 検証（`migawari_redirects_attack_damage_to_substitute_once`）。
-- **残（次段）**: ① **反撃/援護攻撃/援護防御 経路への展開**（現状は通常攻撃のみ）。② **`イベント=<routine>` SP効果種別＋
-  プレイヤー発動フロー**（生贄 選択→対象/相手ユニットＩＤ 束縛→サブルーチン実行）。③ 近似（肩代わりダメージは
-  身代わりの装甲で再計算せず防御側向け値を流用）。
+- **反撃/援護経路へ展開済（ユーザ決定）**: 通常攻撃に加え、**反撃**（`try_counterattack`）・**援護攻撃**
+  （`try_support_attack`）の被弾経路にも `apply_migawari` を最優先で配線（被ダメージ→身代わりへ、防御側 0）。
+  援護防御は元々 みがわり が防御側で最優先のため二重肩代わりにならない。検証: `migawari_redirects_attack_damage_to_substitute_once`
+  ＋`migawari_redirects_counterattack_damage_to_substitute`。
+- **残（次段）**: ① **`イベント=<routine>` SP効果種別＋プレイヤー発動フロー**（生贄 選択→対象/相手ユニットＩＤ
+  束縛→サブルーチン実行）。② 近似（肩代わりダメージは身代わりの装甲で再計算せず防御側向け値を流用）。
+
+**★ 追加（2026-06-20・続き）= マップ攻撃の撃破を `マップ攻撃破壊` で発火（原典忠実・ユーザ決定）**:
+- **VB6 原典ソース発見**: `srcall-2_2_33-111106/Source/Src/`（C# より上流の ground truth）。`Event.bas:1744` で
+  `マップ攻撃破壊` は `破壊` と同列の `DestructionEventLabel`、`Unit.cls:17214` がマップ撃破された**対象**に発火。
+- **是正**: プレイヤー/AI 発のマップ攻撃（`is_event=false`）の撃破は原典どおり `破壊` ではなく
+  **`マップ攻撃破壊 <対象>`** を発火（`fire_map_attack_destruction_labels`、`全滅`/対象ユニット設定は共通）。
+  スクリプトの素の `MapAttack`（`is_event=true`）は進行保証のため従来どおり `破壊` を発火（別個の意図的緩和）。
+  テスト `map_attack_kill_fires_map_destruction_for_player_but_normal_for_script`。
 
 **このセッションで修正した実バグ / 実装**（feature 由来戦闘修正・イベント発火基盤）:
 - **特殊能力パーサが値無し裸名を全捨て**（`data/unit.rs`）: `水上移動`/`ＨＰ回復Lv1`/`分身` 等の
