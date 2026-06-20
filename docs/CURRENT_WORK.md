@@ -10,9 +10,28 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 ## 現在地（2026-06-20）— 公式サンプルシナリオ互換 + 防御能力の方針決定
 
 **ブランチ**: `feat/sample-scenario-smoke`（`master` ではなくフィーチャーブランチ。push 未指示）。
-**テスト**: `cargo test -p src-core` 全緑（約 2007 件）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。
+**テスト**: `cargo test -p src-core` 全緑（約 2009 件）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。
 **主題**: 非再配布パッケージ `srcall-2_2_33-111106/サンプルシナリオ`（公式サンプル）を Rust 移植で
 動作させる。テストは実フォルダを **参照のみ**（無ければ skip・本文 embed なし・`srcall-*/` は `.gitignore`）。
+
+**★ 最新の追加（2026-06-20・続き）= マップ兵器が「使用/攻撃イベント」を発火するよう是正**:
+- **背景**: サンプルの目玉「マップ兵器 鳳翼天翔 のとどめカットイン」は自動インクルード
+  `data/龍神機/Include.eve` の `*使用 大鳥霞 鳳翼天翔:` で使用直前の各陣営数を記録するが、
+  ポートの `event_runtime::map_attack` は 破壊イベントしか発火せず **使用/攻撃イベントを一切
+  発火していなかった**（プレイヤー/AI のマップ兵器使用で `*使用`/`攻撃` が不発）。
+- **是正**: SRC `Unit.MapAttack(w,tx,ty,is_event)`（Unit.cs:27012/27320）準拠で `map_attack` に
+  `is_event` 引数を追加。`is_event=false`（プレイヤー/AI のマップ攻撃コマンド）のときダメージ
+  適用**前**に 使用イベント（武器 1 回）→ 各対象への 攻撃イベント を発火する。スクリプトの素の
+  `MapAttack` コマンドは既定 `is_event=true`（非発火）で、末尾に `通常戦闘` を付けたときだけ
+  `is_event=false` になる（CmdData.cs:14865）。AI 経路（`app.rs::ai_use_map_weapon`）は false で配線。
+  発火で index がずれるため攻撃側/対象を uid で都度引き直す。
+- **検証**: 単体 `map_attack_fires_use_and_attack_events_only_in_normal_battle_mode`（is_event 切替で
+  使用/攻撃 の発火有無）＋ 実データ統合 `sample_map_weapon_use_fires_houyokutenshou_use_event`
+  （鳳神機=大鳥霞 で 鳳翼天翔 マップ攻撃→`*使用 大鳥霞 鳳翼天翔:` が発火し 味方数 を記録）。
+- **残（follow-up・サンプル不要・推測実装回避で見送り）**: C# はマップ兵器でダメージ**後**に
+  使用後/攻撃後/損傷率/マップ攻撃破壊 も発火する（`is_event=false` 時、Unit.cs:28560-28688）。
+  サンプルのとどめ処理はダイアログ経由（Pilot_Dialog.txt）で 使用後/攻撃後 を使わないため未配線。
+  別 fixture が要れば追加する（normal 攻撃の 使用後 は配線済み・map のみ未配線という非対称が残る）。
 
 **このセッションで修正した実バグ / 実装**（feature 由来戦闘修正・イベント発火基盤）:
 - **特殊能力パーサが値無し裸名を全捨て**（`data/unit.rs`）: `水上移動`/`ＨＰ回復Lv1`/`分身` 等の
