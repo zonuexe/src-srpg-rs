@@ -594,15 +594,16 @@ fn push_combat_feature_statuses(unit: &crate::UnitInstance, statuses: &mut Vec<S
             statuses.push(f.name.clone());
         } else if base_match(name, "バリア")
             || base_match(name, "盾")
-            || name.contains("シールド")
+            || name.contains("バリアシールド")
             || name.contains("フィールド")
         {
-            // (A) バリア/シールド/フィールド系の防御能力 (シールド・小型/大型/アクティブ
-            // シールド・バリアシールド・フィールド・プロテクト・フィールド・アクティブ
-            // フィールド 等) は、まとめて既存の `バリア` status (÷2 近似) に合流させる。
-            // SRC では確率・属性・S防御依存だが、現予測モデルでは常時 ÷2 で近似する
-            // (将来 (B) で DefenseMode の確率ロールへ精緻化)。`バリア中和` は攻撃属性で
-            // base 不一致かつ シールド/フィールド を含まないため除外される。
+            // (A) バリア/フィールド系の防御能力 (バリア・バリアシールド・フィールド・
+            // プロテクト・フィールド・アクティブフィールド・盾 等) は、まとめて既存の
+            // `バリア` status (÷2 近似) に合流させる (将来 (B) で属性別吸収へ精緻化)。
+            // **シールド系 (シールド/小型/大型/アクティブシールド) は除外**: これらは
+            // Ｓ防御技能依存の確率発動なので、実行段の apply_shield_defense ((B)) でロール
+            // する (予測の ÷2 には乗せない)。`バリア中和` は攻撃属性なので base 不一致 +
+            // バリアシールド/フィールド 非該当で除外される。
             statuses.push("バリア".to_string());
         }
     }
@@ -3516,6 +3517,8 @@ impl App {
                 let g_max_hp = self
                     .database
                     .effective_max_hp(&self.database.unit_instances[g_idx]);
+                // シールド防御 (B): guard 役が Ｓ防御+シールドを持てば被ダメージ半減。
+                let guard_dmg = self.apply_shield_defense(g_idx, &weapon.class, guard_dmg);
                 // 不死身: 援護防御で身代わりになった guard も撃破させない。
                 let guard_dmg = self.cap_damage_for_immortal(g_idx, g_max_hp, guard_dmg);
                 let guard_old_dmg = self.database.unit_instances[g_idx].damage;
@@ -3563,6 +3566,9 @@ impl App {
                 // 通常ダメージ: defender が受ける (防御選択時は applied_damage で半減済)。
                 // 不死身: 撃破させないよう被ダメージをキャップ (サンプルの「不死身で
                 // 耐える→損傷率 50% で回復＆不死身解除」演出を成立させる)。
+                // シールド防御 (B): 防御側が Ｓ防御+シールドを持てば被ダメージ半減。
+                let applied_damage =
+                    self.apply_shield_defense(def_idx, &weapon.class, applied_damage);
                 let applied_damage =
                     self.cap_damage_for_immortal(def_idx, def_unit.hp, applied_damage);
                 let def_old_dmg = self.database.unit_instances[def_idx].damage;
@@ -3892,6 +3898,71 @@ impl App {
         }
     }
 
+    /// シールド防御 (防御能力 (B) 段階・SRC.NET `Unit.cs::CheckShieldFeature` 準拠):
+    /// 防御側 `def_idx` が **Ｓ防御技能** + シールド系特殊能力 (シールド/小型/大型/アクティブ
+    /// シールド) を持ち、行動可能 (行動不能/麻痺/石化/凍結/睡眠 でない) で武器が 精/殺/浸 で
+    /// ないとき、`Ｓ防御Lv(+大型1/アクティブ2) >= Dice(16)` で発動し被ダメージを半減する
+    /// (小型=2/3、破属性は 3/4・小型破は 5/6)。発動時は最低 10。実行段 (予測ではなく) で
+    /// ロールするため、プレビューは確率的シールドを反映しない (SRC と同じ)。
+    ///
+    /// 発動しなければ `dmg` をそのまま返す。`バリア`/`フィールド` 系 (S防御非依存の吸収/÷2) は
+    /// 対象外で、現状は予測の ÷2 近似 ((A)) のまま。
+    fn apply_shield_defense(&mut self, def_idx: usize, weapon_class: &str, dmg: i64) -> i64 {
+        if dmg <= 0 || self.unit_pilot_skill_level(def_idx, "Ｓ防御") <= 0 {
+            return dmg;
+        }
+        // 精 / 殺 / 浸 属性にはシールド防御不可。
+        if weapon_class.contains('精') || weapon_class.contains('殺') || weapon_class.contains('浸')
+        {
+            return dmg;
+        }
+        // C# 探索順 (シールド→小型→大型→アクティブ) で最初に持つものを使い、発動率と半減率を決める。
+        // 行動不能系の状態異常下では発動しない。
+        let (prob, is_small, fname) = {
+            let u = &self.database.unit_instances[def_idx];
+            if u.has_condition("行動不能")
+                || u.has_condition("麻痺")
+                || u.has_condition("石化")
+                || u.has_condition("凍結")
+                || u.has_condition("睡眠")
+            {
+                return dmg;
+            }
+            let sdef = self.unit_pilot_skill_level(def_idx, "Ｓ防御");
+            let h = |name: &str| crate::feature::has_feature(&u.active_features, name);
+            if h("シールド") {
+                (sdef, false, "シールド")
+            } else if h("小型シールド") {
+                (sdef, true, "小型シールド")
+            } else if h("大型シールド") {
+                (sdef + 1, false, "大型シールド")
+            } else if h("アクティブシールド") {
+                (sdef + 2, false, "アクティブシールド")
+            } else {
+                return dmg;
+            }
+        };
+        // Ｓ防御Lv(+補正) >= Dice(16) で発動。
+        let roll = (self.next_u32() % 16) as i32 + 1;
+        if prob < roll {
+            return dmg;
+        }
+        let is_break = weapon_class.contains('破');
+        let reduced = match (is_break, is_small) {
+            (true, true) => 5 * dmg / 6,
+            (true, false) => 3 * dmg / 4,
+            (false, true) => 2 * dmg / 3,
+            (false, false) => dmg / 2,
+        };
+        let reduced = if (1..10).contains(&reduced) {
+            10
+        } else {
+            reduced
+        };
+        self.push_message(format!("シールド防御({fname}): {dmg} → {reduced} ダメージ"));
+        reduced
+    }
+
     /// 被弾して生存した `target_idx` に対し `損傷率 <unit> <pct>:` 閾値イベントを
     /// 発火する。`old_dmg` はこの被弾前の累積ダメージ。撃破された (除去済み) 場合は
     /// 呼ばない。通常攻撃・援護攻撃・援護防御・反撃の被弾生存経路で共通に使う。
@@ -4030,6 +4101,8 @@ impl App {
             let base = (preview.damage as f64 * 0.75) as i64;
             // 防御特性 (耐性÷2 / 無効化0 / 吸収=回復)。弱点の装甲半減は予測前に適用済み。
             let dmg = self.defense_attribute_damage(def_idx, &weapon.class, base);
+            // シールド防御 (B): 防御側が Ｓ防御+シールドを持てば被ダメージ半減。
+            let dmg = self.apply_shield_defense(def_idx, &weapon.class, dmg);
             // 不死身: 撃破させないよう被ダメージをキャップ。
             let dmg = self.cap_damage_for_immortal(def_idx, def_unit.hp, dmg);
             let def_old_dmg = self.database.unit_instances[def_idx].damage;
@@ -4334,6 +4407,8 @@ impl App {
         let msg = if hit {
             // 防御特性 (耐性÷2 / 無効化0 / 吸収=回復)。弱点の装甲半減は予測前に適用済み。
             let counter_dmg = self.defense_attribute_damage(atk_idx, &weapon.class, preview.damage);
+            // シールド防御 (B): 反撃を受ける側が Ｓ防御+シールドを持てば被ダメージ半減。
+            let counter_dmg = self.apply_shield_defense(atk_idx, &weapon.class, counter_dmg);
             // 不死身: 反撃でも撃破させないよう被ダメージをキャップ。
             let counter_dmg = self.cap_damage_for_immortal(atk_idx, atk_unit.hp, counter_dmg);
             let atk_old_dmg = self.database.unit_instances[atk_idx].damage;
@@ -11918,25 +11993,26 @@ mod tests {
         );
     }
 
-    /// (A) シールド/フィールド系の防御能力はまとめて `バリア` status (÷2 近似) に合流し、
-    /// 超回避Lv* は Lv 解析のため特徴名のまま積まれる。`バリア中和` は除外。
+    /// (A) フィールド系/バリアシールド はまとめて `バリア` status (÷2 近似) に合流し、
+    /// 超回避Lv* は Lv 解析のため特徴名のまま積まれる。**シールド系 (アクティブシールド 等) は
+    /// (B) で実行段ロールするため (A) の ÷2 には乗せない**。`バリア中和` は除外。
     #[test]
     fn combat_feature_statuses_merges_shield_field_and_chougaihi() {
         use crate::feature::ActiveFeature;
         let mut u = crate::UnitInstance::new("X", "P", crate::Party::Enemy, 0, 0);
         u.active_features = vec![
-            ActiveFeature::new("アクティブシールド", ""), // → バリア
             ActiveFeature::new("プロテクト・フィールド", ""), // → バリア
-            ActiveFeature::new("バリアシールドLv3", ""),  // → バリア (シールド 含む)
-            ActiveFeature::new("超回避Lv4", ""),          // → 名前のまま
-            ActiveFeature::new("バリア中和", ""),         // 攻撃属性 → 除外
+            ActiveFeature::new("バリアシールドLv3", ""),      // → バリア (バリアシールド)
+            ActiveFeature::new("アクティブシールド", ""),     // シールド系 → (B)・(A) 除外
+            ActiveFeature::new("超回避Lv4", ""),              // → 名前のまま
+            ActiveFeature::new("バリア中和", ""),             // 攻撃属性 → 除外
         ];
         let mut s = Vec::new();
         push_combat_feature_statuses(&u, &mut s);
         assert_eq!(
             s.iter().filter(|x| x.as_str() == "バリア").count(),
-            3,
-            "アクティブシールド/プロテクト・フィールド/バリアシールド の 3 つが バリア に合流"
+            2,
+            "プロテクト・フィールド/バリアシールド の 2 つのみ バリア に合流 (シールド系は除外)"
         );
         assert!(
             s.contains(&"超回避Lv4".to_string()),
@@ -13966,6 +14042,98 @@ mod tests {
             "抵抗力Lv10 で proc 100→0 になり麻痺は付与されないはず: {applied:?}"
         );
         assert!(!app.database().unit_instances[def_idx].has_condition("麻痺"));
+    }
+
+    /// (B) シールド防御: Ｓ防御技能 + シールド系特殊能力で被ダメージ半減。Ｓ防御Lv16 なら
+    /// prob 16 >= Dice(16) で必ず発動。精/殺/浸 属性は不可。
+    #[test]
+    fn shield_defense_halves_damage_with_high_sdefense() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6);
+        // PILOT に Ｓ防御Lv16 を付与 (必ず発動)。
+        if let Some(pd) = app
+            .database_mut()
+            .pilots
+            .iter_mut()
+            .find(|p| p.name == "PILOT")
+        {
+            pd.features.push(("Ｓ防御Lv16".into(), String::new()));
+        }
+        let target = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "PILOT",
+            crate::Party::Enemy,
+            3,
+            6,
+        ));
+        let def_idx = app.database().idx_by_uid(&target).unwrap();
+        app.database_mut().unit_instances[def_idx]
+            .active_features
+            .push(crate::feature::ActiveFeature::new("シールド", ""));
+
+        // 通常武器 (実) 800 ダメージ → シールド発動で ÷2 = 400。
+        assert_eq!(
+            app.apply_shield_defense(def_idx, "実", 800),
+            400,
+            "Ｓ防御Lv16+シールド で被ダメージ半減"
+        );
+        // 精 属性にはシールド防御不可。
+        assert_eq!(
+            app.apply_shield_defense(def_idx, "精", 800),
+            800,
+            "精 属性にはシールド防御不可"
+        );
+        // Ｓ防御技能が無ければ発動しない。
+        let target2 = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "NOSKILL",
+            crate::Party::Enemy,
+            4,
+            6,
+        ));
+        let def2 = app.database().idx_by_uid(&target2).unwrap();
+        app.database_mut().unit_instances[def2]
+            .active_features
+            .push(crate::feature::ActiveFeature::new("シールド", ""));
+        assert_eq!(
+            app.apply_shield_defense(def2, "実", 800),
+            800,
+            "Ｓ防御技能が無ければシールド防御は発動しない"
+        );
+    }
+
+    /// (B) 小型シールド は 2/3 に軽減 (通常武器)。
+    #[test]
+    fn small_shield_reduces_damage_to_two_thirds() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6);
+        if let Some(pd) = app
+            .database_mut()
+            .pilots
+            .iter_mut()
+            .find(|p| p.name == "PILOT")
+        {
+            pd.features.push(("Ｓ防御Lv16".into(), String::new()));
+        }
+        let target = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "PILOT",
+            crate::Party::Enemy,
+            3,
+            6,
+        ));
+        let def_idx = app.database().idx_by_uid(&target).unwrap();
+        app.database_mut().unit_instances[def_idx]
+            .active_features
+            .push(crate::feature::ActiveFeature::new("小型シールド", ""));
+        // 900 → 2/3 = 600。
+        assert_eq!(
+            app.apply_shield_defense(def_idx, "実", 900),
+            600,
+            "小型シールド は 2/3 に軽減"
+        );
     }
 
     /// 脱属性武器は命中・proc 時に対象の気力を低下させる (吸収は無し)。
