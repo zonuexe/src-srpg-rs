@@ -592,18 +592,16 @@ fn push_combat_feature_statuses(unit: &crate::UnitInstance, statuses: &mut Vec<S
             // 超回避Lv* (回避系): Lv を combat 側で解析するため特徴名をそのまま積む
             // (predict_with_status_terrain が `-(10×Lv)` の命中ペナルティへ近似)。
             statuses.push(f.name.clone());
-        } else if base_match(name, "バリア")
-            || base_match(name, "盾")
+        } else if base_match(name, "盾")
             || name.contains("バリアシールド")
             || name.contains("フィールド")
         {
-            // (A) バリア/フィールド系の防御能力 (バリア・バリアシールド・フィールド・
-            // プロテクト・フィールド・アクティブフィールド・盾 等) は、まとめて既存の
-            // `バリア` status (÷2 近似) に合流させる (将来 (B) で属性別吸収へ精緻化)。
-            // **シールド系 (シールド/小型/大型/アクティブシールド) は除外**: これらは
-            // Ｓ防御技能依存の確率発動なので、実行段の apply_shield_defense ((B)) でロール
-            // する (予測の ÷2 には乗せない)。`バリア中和` は攻撃属性なので base 不一致 +
-            // バリアシールド/フィールド 非該当で除外される。
+            // (A) フィールド系/バリアシールド/盾 は、まとめて既存の `バリア` status
+            // (÷2 近似) に合流させる (将来 (B) で個別精緻化)。
+            // **除外**: ① シールド系 (シールド/小型/大型/アクティブシールド) → Ｓ防御依存の
+            // 確率発動なので実行段 apply_shield_defense ((B))。② バリア/バリアLv* → 属性別
+            // 1000×Lv の確定吸収なので実行段 apply_barrier_absorb ((B))。`バリア中和` は
+            // 攻撃属性で base 不一致 + バリアシールド/フィールド 非該当のため除外される。
             statuses.push("バリア".to_string());
         }
     }
@@ -3517,6 +3515,8 @@ impl App {
                 let g_max_hp = self
                     .database
                     .effective_max_hp(&self.database.unit_instances[g_idx]);
+                // バリア吸収 (B): guard 役が バリアLv* を持てば 1000×Lv を吸収。
+                let guard_dmg = self.apply_barrier_absorb(g_idx, atk_idx, &weapon.class, guard_dmg);
                 // シールド防御 (B): guard 役が Ｓ防御+シールドを持てば被ダメージ半減。
                 let guard_dmg = self.apply_shield_defense(g_idx, &weapon.class, guard_dmg);
                 // 不死身: 援護防御で身代わりになった guard も撃破させない。
@@ -3566,6 +3566,9 @@ impl App {
                 // 通常ダメージ: defender が受ける (防御選択時は applied_damage で半減済)。
                 // 不死身: 撃破させないよう被ダメージをキャップ (サンプルの「不死身で
                 // 耐える→損傷率 50% で回復＆不死身解除」演出を成立させる)。
+                // バリア吸収 (B): 防御側が バリアLv* を持てば 1000×Lv を吸収。
+                let applied_damage =
+                    self.apply_barrier_absorb(def_idx, atk_idx, &weapon.class, applied_damage);
                 // シールド防御 (B): 防御側が Ｓ防御+シールドを持てば被ダメージ半減。
                 let applied_damage =
                     self.apply_shield_defense(def_idx, &weapon.class, applied_damage);
@@ -3963,6 +3966,57 @@ impl App {
         reduced
     }
 
+    /// バリア吸収強度 (防御能力 (B)): 防御側 `def_idx` の `バリア`/`バリアLv*` 特殊能力が
+    /// 武器属性に対し有効なとき `1000×Lv` を返す (複数は最大、該当無しは 0)。対象属性
+    /// (`バリアLv*=別名 対象属性 …` の 2 番目のトークン) は `defense_attr_matches` で
+    /// 字単位照合し、省略時は全属性 (`バリアに関する記述.md` 準拠)。`バリアシールド`/
+    /// `フィールド` 系は base 不一致で対象外 (現状 (A) の ÷2 近似のまま)。
+    fn barrier_absorb_strength(&self, def_idx: usize, weapon_class: &str) -> i64 {
+        let mut best = 0i64;
+        for f in &self.database.unit_instances[def_idx].active_features {
+            if !f.is_active {
+                continue;
+            }
+            let Some(lv) = crate::feature::feature_level(std::slice::from_ref(f), "バリア")
+            else {
+                continue;
+            };
+            let target = f.value.split_whitespace().nth(1).unwrap_or("");
+            if target.is_empty() || Self::defense_attr_matches(weapon_class, target) {
+                best = best.max(1000 * i64::from(lv));
+            }
+        }
+        best
+    }
+
+    /// バリア吸収 (防御能力 (B)・SRC `バリア` 特殊能力): 防御側が `バリアLv*` を持つと、
+    /// 対象属性に該当する攻撃の `1000×Lv` ダメージまでを無効化する (吸収後の残ダメージを
+    /// 返す。完全吸収は 0)。シールドと違い確率ではなく**確定**なので予測でも反映したいが、
+    /// 予測関数のシグネチャ変更を避け実行段で適用する (プレビューは満額表示)。
+    /// 攻撃側 `直撃` / 防御側 `バリア中和` でバリアは無効化される。
+    /// `attacker_idx` はこのダメージを与える側 (反撃時は反撃実行側)。
+    fn apply_barrier_absorb(
+        &self,
+        def_idx: usize,
+        attacker_idx: usize,
+        weapon_class: &str,
+        dmg: i64,
+    ) -> i64 {
+        if dmg <= 0 {
+            return dmg;
+        }
+        if self.database.unit_instances[attacker_idx].has_condition("直撃")
+            || self.database.unit_instances[def_idx].has_condition("バリア中和")
+        {
+            return dmg;
+        }
+        let strength = self.barrier_absorb_strength(def_idx, weapon_class);
+        if strength <= 0 {
+            return dmg;
+        }
+        (dmg - strength).max(0)
+    }
+
     /// 被弾して生存した `target_idx` に対し `損傷率 <unit> <pct>:` 閾値イベントを
     /// 発火する。`old_dmg` はこの被弾前の累積ダメージ。撃破された (除去済み) 場合は
     /// 呼ばない。通常攻撃・援護攻撃・援護防御・反撃の被弾生存経路で共通に使う。
@@ -4101,6 +4155,8 @@ impl App {
             let base = (preview.damage as f64 * 0.75) as i64;
             // 防御特性 (耐性÷2 / 無効化0 / 吸収=回復)。弱点の装甲半減は予測前に適用済み。
             let dmg = self.defense_attribute_damage(def_idx, &weapon.class, base);
+            // バリア吸収 (B): 防御側が バリアLv* を持てば 1000×Lv を吸収。
+            let dmg = self.apply_barrier_absorb(def_idx, sup_idx, &weapon.class, dmg);
             // シールド防御 (B): 防御側が Ｓ防御+シールドを持てば被ダメージ半減。
             let dmg = self.apply_shield_defense(def_idx, &weapon.class, dmg);
             // 不死身: 撃破させないよう被ダメージをキャップ。
@@ -4407,6 +4463,10 @@ impl App {
         let msg = if hit {
             // 防御特性 (耐性÷2 / 無効化0 / 吸収=回復)。弱点の装甲半減は予測前に適用済み。
             let counter_dmg = self.defense_attribute_damage(atk_idx, &weapon.class, preview.damage);
+            // バリア吸収 (B): 反撃を受ける側が バリアLv* を持てば 1000×Lv を吸収
+            // (反撃の攻撃側は def_idx)。
+            let counter_dmg =
+                self.apply_barrier_absorb(atk_idx, def_idx, &weapon.class, counter_dmg);
             // シールド防御 (B): 反撃を受ける側が Ｓ防御+シールドを持てば被ダメージ半減。
             let counter_dmg = self.apply_shield_defense(atk_idx, &weapon.class, counter_dmg);
             // 不死身: 反撃でも撃破させないよう被ダメージをキャップ。
@@ -11967,29 +12027,23 @@ mod tests {
         );
     }
 
-    /// バリア / バリアLv* 特徴は `バリア` status に合流し、戦闘の ÷2 近似
-    /// (predict_with_status_terrain) を発動させる。`バリア中和` (攻撃属性) は
-    /// 合流しない。`バリアシールド` 等のシールド/フィールド系の合流は
-    /// `combat_feature_statuses_merges_shield_field_and_chougaihi` で検証。
+    /// バリア / バリアLv* は (B) の実行段吸収 (apply_barrier_absorb) へ移行したため、
+    /// 予測の ÷2 合流 (`バリア` status push) には **乗らない**。`バリア中和` (攻撃属性) も
+    /// 当然除外。`バリアシールド`/フィールド系の合流は別テストで検証。
     #[test]
-    fn combat_feature_statuses_merges_barrier_feature() {
+    fn barrier_feature_is_not_merged_into_predict_halving() {
         use crate::feature::ActiveFeature;
         let mut u = crate::UnitInstance::new("X", "P", crate::Party::Enemy, 0, 0);
         u.active_features = vec![
-            ActiveFeature::new("バリアLv2", ""),  // → "バリア"
-            ActiveFeature::new("バリア", ""),     // → "バリア"
+            ActiveFeature::new("バリアLv2", ""), // → (B) 吸収・(A) push しない
+            ActiveFeature::new("バリア", ""),    // → (B) 吸収・(A) push しない
             ActiveFeature::new("バリア中和", ""), // 攻撃属性 → 除外
         ];
         let mut s = Vec::new();
         push_combat_feature_statuses(&u, &mut s);
         assert!(
-            s.contains(&"バリア".to_string()),
-            "バリアLv2 は バリア status に合流するはず"
-        );
-        assert_eq!(
-            s.iter().filter(|x| x.as_str() == "バリア").count(),
-            2,
-            "バリアLv2 と バリア が合流し バリア中和 は除外され バリア は 2 つ"
+            !s.iter().any(|x| x == "バリア"),
+            "バリア/バリアLv* は (B) 吸収へ移行し予測の ÷2 には合流しない: {s:?}"
         );
     }
 
@@ -14133,6 +14187,70 @@ mod tests {
             app.apply_shield_defense(def_idx, "実", 900),
             600,
             "小型シールド は 2/3 に軽減"
+        );
+    }
+
+    /// (B) バリア吸収: バリアLv* が 1000×Lv ダメージを吸収する。完全吸収は 0。
+    /// 直撃 (攻撃側) / バリア中和 (防御側) で無効。対象属性が不一致なら吸収しない。
+    #[test]
+    fn barrier_absorb_blocks_up_to_thousand_times_level() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Atk", 2, 6);
+        let atk_idx = first_player_uid(&app);
+        let atk_idx = app.database().idx_by_uid(&atk_idx).unwrap();
+        let target = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Def",
+            "DP",
+            crate::Party::Enemy,
+            3,
+            6,
+        ));
+        let def_idx = app.database().idx_by_uid(&target).unwrap();
+        app.database_mut().unit_instances[def_idx]
+            .active_features
+            .push(crate::feature::ActiveFeature::new("バリアLv2", "")); // 2000 吸収・全属性
+
+        // 1500 < 2000 → 完全吸収 0。
+        assert_eq!(
+            app.apply_barrier_absorb(def_idx, atk_idx, "実", 1500),
+            0,
+            "バリアLv2 は 2000 までを完全吸収"
+        );
+        // 2500 > 2000 → 残 500。
+        assert_eq!(
+            app.apply_barrier_absorb(def_idx, atk_idx, "実", 2500),
+            500,
+            "2000 を超えた分のみ通る"
+        );
+        // 直撃 (攻撃側) でバリア無効。
+        app.database_mut().unit_instances[atk_idx].add_condition(crate::Condition::new("直撃", -1));
+        assert_eq!(
+            app.apply_barrier_absorb(def_idx, atk_idx, "実", 1500),
+            1500,
+            "直撃 でバリアは無効"
+        );
+        app.database_mut().unit_instances[atk_idx].remove_condition("直撃");
+
+        // 対象属性つきバリア (火) は不一致武器を吸収しない。
+        app.database_mut().unit_instances[def_idx]
+            .active_features
+            .clear();
+        app.database_mut().unit_instances[def_idx]
+            .active_features
+            .push(crate::feature::ActiveFeature::new(
+                "バリアLv2",
+                "炎バリア 火",
+            ));
+        assert_eq!(
+            app.apply_barrier_absorb(def_idx, atk_idx, "実", 1500),
+            1500,
+            "対象属性 火 のバリアは 実 武器を吸収しない"
+        );
+        assert_eq!(
+            app.apply_barrier_absorb(def_idx, atk_idx, "火", 1500),
+            0,
+            "対象属性 火 のバリアは 火 武器を吸収する"
         );
     }
 
