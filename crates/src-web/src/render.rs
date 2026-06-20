@@ -13,8 +13,8 @@ use src_core::scene::configuration::{
 };
 use src_core::scene::map_view::{
     MAP_AREA_W, MAP_VIEW_HEIGHT, MAP_VIEW_WIDTH, MESSAGE_BOX_HEIGHT, MESSAGE_BOX_X, MESSAGE_BOX_Y,
-    PORTRAIT_SIZE, STATUS_PANEL_H, STATUS_PANEL_WIDTH, STATUS_PANEL_X, STATUS_PANEL_Y, TILE_SIZE,
-    VIEW_TILES_X, VIEW_TILES_Y,
+    STATUS_PANEL_H, STATUS_PANEL_WIDTH, STATUS_PANEL_X, STATUS_PANEL_Y, TILE_SIZE, VIEW_TILES_X,
+    VIEW_TILES_Y,
 };
 use src_core::scene::pilot_list::{
     self as plist, COLUMNS as PL_COLUMNS, HEADER_TOP, PILOT_LIST_HEIGHT, PILOT_LIST_WIDTH,
@@ -2415,11 +2415,15 @@ fn draw_status_panel(
                 // 攻撃 / 射程 (右寄せ)。
                 ctx.set_text_align("right");
                 let _ = ctx.fill_text(&wd.power.to_string(), col_pow, y);
-                let rng = if wd.min_range == wd.max_range {
+                let mut rng = if wd.min_range == wd.max_range {
                     wd.max_range.to_string()
                 } else {
                     format!("{}-{}", wd.min_range, wd.max_range)
                 };
+                // MAP 兵器 (class に全角Ｍ) は射程末尾に M を付す (オリジナル「1-3M」表記)。
+                if wd.class.contains('Ｍ') {
+                    rng.push('M');
+                }
                 let _ = ctx.fill_text(&rng, col_rng, y);
                 ctx.set_text_align("left");
                 y += 11.0;
@@ -2460,90 +2464,72 @@ fn draw_message_box(
     assets: &Assets,
     queued: usize,
 ) {
-    let w = f64::from(MAP_VIEW_WIDTH);
+    // 右パネル下部の 160px スロットに収まる VB6 風ウィンドウ (青タイトルバー
+    // 「メッセージ」+ 明グレー本体)。旧実装は w=MAP_VIEW_WIDTH(640) でキャンバス外へ
+    // はみ出し、顔・本文が右端に窮屈に詰まっていた。
+    let w = f64::from(STATUS_PANEL_WIDTH);
     let h = f64::from(MESSAGE_BOX_HEIGHT);
+    draw_vb6_dialog(
+        ctx,
+        ox,
+        oy,
+        STATUS_PANEL_WIDTH,
+        MESSAGE_BOX_HEIGHT,
+        "メッセージ",
+    );
 
-    // 背景 + 枠（VB6 メッセージウィンドウ風: 白背景 + 凹型枠）
-    ctx.set_fill_style_str("#f0f0f0");
-    ctx.fill_rect(ox as f64, oy as f64, w, h);
-    ctx.set_stroke_style_str("#808080");
-    ctx.set_line_width(1.0);
-    ctx.stroke_rect(ox as f64 + 0.5, oy as f64 + 0.5, w - 1.0, h - 1.0);
+    let pad = ox as f64 + 6.0;
+    let body_top = oy as f64 + 20.0;
 
-    // 顔グラ (実画像があれば描画、無ければプレースホルダ枠)
-    let p = f64::from(PORTRAIT_SIZE);
-    let face_x = ox as f64 + 8.0;
-    let face_y = oy as f64 + (h - p) / 2.0;
+    // 顔グラ (小, 左上)。実画像があれば本文をその下へ送り、無ければ上端から。
     let face_img = face_hint.and_then(|h| assets.find_image(h));
-    match face_img {
-        Some(img) => {
-            ctx.set_fill_style_str("#000");
-            ctx.fill_rect(face_x, face_y, p, p);
-            let _ = ctx.draw_image_with_html_image_element_and_dw_and_dh(img, face_x, face_y, p, p);
-            ctx.set_stroke_style_str("#444");
-            ctx.set_line_width(1.0);
-            ctx.stroke_rect(face_x + 0.5, face_y + 0.5, p - 1.0, p - 1.0);
-        }
-        None => {
-            ctx.set_fill_style_str("#cfd8dc");
-            ctx.fill_rect(face_x, face_y, p, p);
-            ctx.set_stroke_style_str("#888");
-            ctx.set_line_width(1.0);
-            ctx.set_line_dash(&js_sys::Array::of2(&3.0.into(), &3.0.into()).into())
-                .ok();
-            ctx.stroke_rect(face_x + 0.5, face_y + 0.5, p - 1.0, p - 1.0);
-            ctx.set_line_dash(&js_sys::Array::new().into()).ok();
-            ctx.set_fill_style_str("#888");
-            ctx.set_font(&format!("10px {JP_SANS}"));
-            ctx.set_text_align("center");
-            ctx.set_text_baseline("middle");
-            let _ = ctx.fill_text("face", face_x + p / 2.0, face_y + p / 2.0);
-        }
-    }
+    let text_top = if let Some(img) = face_img {
+        let fs = 32.0;
+        let _ = ctx.draw_image_with_html_image_element_and_dw_and_dh(img, pad, body_top, fs, fs);
+        ctx.set_stroke_style_str("#404040");
+        ctx.set_line_width(1.0);
+        ctx.stroke_rect(pad + 0.5, body_top + 0.5, fs, fs);
+        body_top + fs + 4.0
+    } else {
+        body_top
+    };
 
-    // メッセージ本文
-    ctx.set_fill_style_str("#222");
-    ctx.set_font(&format!("12px {JP_SANS}"));
+    // 本文 (黒文字, 160px 幅で折返し)。
     ctx.set_text_align("left");
     ctx.set_text_baseline("top");
-    let text_x = face_x + p + 12.0;
-    let text_y = oy as f64 + 12.0;
     match last_message {
         Some(msg) => {
-            // 簡易折返し: 35 文字ごと
-            for (i, chunk) in wrap_text(msg, 36).into_iter().take(4).enumerate() {
-                let _ = ctx.fill_text(&chunk, text_x, text_y + 16.0 * i as f64);
+            ctx.set_fill_style_str("#101010");
+            ctx.set_font(&format!("11px {JP_SANS}"));
+            let max_lines = (((oy as f64 + h - 6.0) - text_top) / 14.0).max(1.0) as usize;
+            for (i, chunk) in wrap_text(msg, 26).into_iter().take(max_lines).enumerate() {
+                let _ = ctx.fill_text(&chunk, pad, text_top + 14.0 * i as f64);
             }
         }
         None => {
-            ctx.set_fill_style_str("#888");
-            ctx.set_font(&format!("italic 11px {JP_SANS}"));
-            let _ = ctx.fill_text(
-                "メッセージなし（スペース=フェーズ終了 / a=攻撃 / w=武器 / 矢印=カーソル）",
-                text_x,
-                text_y,
-            );
+            ctx.set_fill_style_str("#6a6a60");
+            ctx.set_font(&format!("italic 10px {JP_SANS}"));
+            let _ = ctx.fill_text("(メッセージなし)", pad, text_top);
         }
     }
 
     // ▼ 進行マーカ（右下に三角）。queued > 0 のときだけ表示。
     if queued > 0 {
-        let mx = ox as f64 + w - 18.0;
-        let my = oy as f64 + h - 14.0;
-        ctx.set_fill_style_str("#3a3a45");
+        let mx = ox as f64 + w - 14.0;
+        let my = oy as f64 + h - 12.0;
+        ctx.set_fill_style_str("#404040");
         ctx.begin_path();
-        ctx.move_to(mx - 6.0, my);
-        ctx.line_to(mx + 6.0, my);
-        ctx.line_to(mx, my + 8.0);
+        ctx.move_to(mx - 5.0, my);
+        ctx.line_to(mx + 5.0, my);
+        ctx.line_to(mx, my + 6.0);
         ctx.close_path();
         ctx.fill();
-        // 件数バッジ
         if queued > 1 {
-            ctx.set_fill_style_str("#3a3a45");
-            ctx.set_font(&format!("bold 10px {JP_SANS}"));
+            ctx.set_fill_style_str("#404040");
+            ctx.set_font(&format!("bold 9px {JP_SANS}"));
             ctx.set_text_align("right");
             ctx.set_text_baseline("bottom");
-            let _ = ctx.fill_text(&format!("{queued}件"), mx - 10.0, my + 8.0);
+            let _ = ctx.fill_text(&format!("{queued}件"), mx - 8.0, my + 6.0);
         }
     }
 }
