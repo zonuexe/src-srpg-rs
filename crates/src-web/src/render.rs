@@ -12,7 +12,7 @@ use src_core::scene::configuration::{
     TITLE_BAR_HEIGHT,
 };
 use src_core::scene::map_view::{
-    MAP_VIEW_HEIGHT, MAP_VIEW_WIDTH, MESSAGE_BOX_HEIGHT, MESSAGE_BOX_X, MESSAGE_BOX_Y,
+    MAP_AREA_W, MAP_VIEW_HEIGHT, MAP_VIEW_WIDTH, MESSAGE_BOX_HEIGHT, MESSAGE_BOX_X, MESSAGE_BOX_Y,
     PORTRAIT_SIZE, STATUS_PANEL_H, STATUS_PANEL_WIDTH, STATUS_PANEL_X, STATUS_PANEL_Y, TILE_SIZE,
     VIEW_TILES_X, VIEW_TILES_Y,
 };
@@ -108,6 +108,8 @@ pub fn draw_scene(
                 // ユニットチップの上、コマンドメニュー/暗幕の下に重ねる。
                 if let Some(anim) = battle_anim {
                     draw_battle_anim(ctx, anim, scroll, assets);
+                    // オリジナル SRC 風の戦闘ウィンドウ (攻防 2 機の HP/EN + 結果)。
+                    draw_combat_window(ctx, database, anim, last_message, assets);
                 }
                 // コマンドメニュー（ユニット / マップ）
                 if let Some(m) = command_menu {
@@ -1121,6 +1123,204 @@ fn draw_battle_anim(
         let _ = ctx.fill_text("MISS", dcx + 1.0, ny + 1.0);
         ctx.set_fill_style_str(&format!("rgba(220,235,255,{alpha:.3})"));
         let _ = ctx.fill_text("MISS", dcx, ny);
+    }
+}
+
+/// 戦闘ウィンドウに表示する 1 機ぶんのスナップショット。
+struct CombatantHud {
+    face: String,
+    level: i32,
+    morale: i32,
+    hp_cur: f64,
+    hp_max: f64,
+    en_cur: f64,
+    en_max: f64,
+}
+
+/// HP/EN の値テキスト + 緑バー (オリジナル戦闘窓風)。値を上、バーを直下に描く。
+fn draw_combat_bar(
+    ctx: &CanvasRenderingContext2d,
+    x: f64,
+    y: f64,
+    w: f64,
+    label: &str,
+    cur: f64,
+    max: f64,
+) {
+    ctx.set_font(&format!("10px {JP_SANS}"));
+    ctx.set_text_align("left");
+    ctx.set_text_baseline("top");
+    ctx.set_fill_style_str("#000000");
+    let _ = ctx.fill_text(
+        &format!("{label} {}/{}", cur.round() as i64, max.round() as i64),
+        x,
+        y,
+    );
+    let by = y + 11.0;
+    let bh = 4.0;
+    ctx.set_fill_style_str("#808080");
+    ctx.fill_rect(x, by, w, bh);
+    let frac = if max <= 0.0 {
+        0.0
+    } else {
+        (cur / max).clamp(0.0, 1.0)
+    };
+    // 残量が少ないと黄→赤に転じる (オリジナルのバー色変化を簡略再現)。
+    let fill = if frac > 0.5 {
+        "#10b020"
+    } else if frac > 0.25 {
+        "#d0b020"
+    } else {
+        "#d03020"
+    };
+    ctx.set_fill_style_str(fill);
+    ctx.fill_rect(x, by, w * frac, bh);
+    ctx.set_stroke_style_str("#404040");
+    ctx.set_line_width(1.0);
+    ctx.stroke_rect(x + 0.5, by + 0.5, w - 1.0, bh - 1.0);
+}
+
+/// 戦闘窓ヘッダの 1 機分 (顔 + Lv/気力 + HP/EN バー) を描く。
+fn draw_combatant_hud(
+    ctx: &CanvasRenderingContext2d,
+    x: f64,
+    top: f64,
+    block_w: f64,
+    hud: &CombatantHud,
+    assets: &Assets,
+) {
+    let fs = 28.0;
+    match assets.find_image(&hud.face) {
+        Some(img) => {
+            let _ = ctx.draw_image_with_html_image_element_and_dw_and_dh(img, x, top, fs, fs);
+        }
+        None => {
+            ctx.set_fill_style_str("#9aa0a8");
+            ctx.fill_rect(x, top, fs, fs);
+        }
+    }
+    ctx.set_stroke_style_str("#404040");
+    ctx.set_line_width(1.0);
+    ctx.stroke_rect(x + 0.5, top + 0.5, fs, fs);
+
+    let tx = x + fs + 6.0;
+    let bw = (x + block_w) - tx;
+    ctx.set_fill_style_str("#000080");
+    ctx.set_font(&format!("bold 10px {JP_SANS}"));
+    ctx.set_text_align("left");
+    ctx.set_text_baseline("top");
+    let _ = ctx.fill_text(&format!("Lv{} M{}", hud.level, hud.morale), tx, top);
+    draw_combat_bar(ctx, tx, top + 12.0, bw, "ＨＰ", hud.hp_cur, hud.hp_max);
+    draw_combat_bar(ctx, tx, top + 30.0, bw, "ＥＮ", hud.en_cur, hud.en_max);
+}
+
+/// 戦闘演出中に重ねる「メッセージ」ウィンドウ (オリジナル SRC 戦闘窓風)。
+/// 上段に攻撃側 / 防御側 2 機の顔・HP/EN 緑バー、下段に発話者 (攻撃側) の顔と
+/// 結果メッセージを表示する。データは `battle_anim` の攻撃側 / 防御側タイルから
+/// live `database` を引いて解決する (撃破され盤面から除去された側は欠落 → 非表示)。
+fn draw_combat_window(
+    ctx: &CanvasRenderingContext2d,
+    database: &GameDatabase,
+    anim: &src_core::BattleAnim,
+    last_message: Option<&str>,
+    assets: &Assets,
+) {
+    let resolve = |pos: (u32, u32)| -> Option<CombatantHud> {
+        let u = database.units_at(pos.0, pos.1).next()?;
+        let hp_max = database.effective_max_hp(u) as f64;
+        let hp_cur = (hp_max - u.displayed_damage).max(0.0);
+        let en_max = database.effective_max_en(u);
+        let en_cur = (en_max - u.en_consumed).max(0);
+        let mp = u.main_pilot_name();
+        let pilot = if mp.is_empty() {
+            None
+        } else {
+            database.effective_pilot_data(mp)
+        };
+        let pilot_inst = u
+            .pilot_ids
+            .first()
+            .and_then(|id| database.pilot_instance_by_id(id));
+        let level = pilot_inst.map(|p| p.level).unwrap_or(1);
+        let face = pilot
+            .as_ref()
+            .and_then(|p| p.bitmap.clone())
+            .or_else(|| pilot.as_ref().map(|p| p.nickname.clone()))
+            .unwrap_or_default();
+        Some(CombatantHud {
+            face,
+            level,
+            morale: u.morale,
+            hp_cur,
+            hp_max,
+            en_cur: en_cur as f64,
+            en_max: en_max as f64,
+        })
+    };
+    let atk = resolve(anim.attacker);
+    let def = resolve(anim.defender);
+    if atk.is_none() && def.is_none() {
+        return;
+    }
+
+    let ox = (i64::from(CANVAS_WIDTH) - i64::from(MAP_VIEW_WIDTH)) / 2;
+    let oy = (i64::from(CANVAS_HEIGHT) - i64::from(MAP_VIEW_HEIGHT)) / 2;
+    // マップ領域 (480px) 内に収め、右のステータスパネルへ被らないようにする。
+    let ww: u32 = MAP_AREA_W - 20;
+    let wh: u32 = 110;
+    let wx = ox + 10;
+    let wy = oy + i64::from(MAP_VIEW_HEIGHT) - i64::from(wh) - 8;
+    draw_vb6_dialog(ctx, wx, wy, ww, wh, "メッセージ");
+
+    // 上段: 攻防 2 機の HUD。
+    let pad = 8.0;
+    let block_w = (f64::from(ww) - pad * 3.0) / 2.0;
+    let hud_top = wy as f64 + 22.0;
+    if let Some(a) = atk.as_ref() {
+        draw_combatant_hud(ctx, wx as f64 + pad, hud_top, block_w, a, assets);
+    }
+    if let Some(d) = def.as_ref() {
+        draw_combatant_hud(
+            ctx,
+            wx as f64 + pad * 2.0 + block_w,
+            hud_top,
+            block_w,
+            d,
+            assets,
+        );
+    }
+
+    // 区切り線。
+    let div_y = hud_top + 46.0;
+    ctx.set_stroke_style_str("#808080");
+    ctx.set_line_width(1.0);
+    ctx.begin_path();
+    ctx.move_to(wx as f64 + pad, div_y + 0.5);
+    ctx.line_to(wx as f64 + f64::from(ww) - pad, div_y + 0.5);
+    ctx.stroke();
+
+    // 下段: 発話者 (攻撃側) の顔 + 結果メッセージ。
+    let msg_y = div_y + 6.0;
+    let face_x = wx as f64 + pad;
+    if let Some(a) = atk.as_ref() {
+        let fs = 28.0;
+        if let Some(img) = assets.find_image(&a.face) {
+            let _ =
+                ctx.draw_image_with_html_image_element_and_dw_and_dh(img, face_x, msg_y, fs, fs);
+            ctx.set_stroke_style_str("#404040");
+            ctx.set_line_width(1.0);
+            ctx.stroke_rect(face_x + 0.5, msg_y + 0.5, fs, fs);
+        }
+    }
+    if let Some(msg) = last_message {
+        ctx.set_fill_style_str("#000000");
+        ctx.set_font(&format!("12px {JP_SANS}"));
+        ctx.set_text_align("left");
+        ctx.set_text_baseline("top");
+        let text_x = face_x + 34.0;
+        for (i, line) in wrap_text(msg, 60).into_iter().take(2).enumerate() {
+            let _ = ctx.fill_text(&line, text_x, msg_y + i as f64 * 15.0);
+        }
     }
 }
 

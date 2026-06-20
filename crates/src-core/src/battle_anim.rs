@@ -69,11 +69,12 @@ pub struct BattleAnim {
 
 impl BattleAnim {
     /// 命中可否から演出の長さ（秒）を決める。命中はやや長く、ミスは短く。
+    /// オリジナル戦闘窓 (攻防の HP/EN バー) を読めるよう、チップ演出よりやや長めに取る。
     pub fn duration_for(hit: bool) -> f64 {
         if hit {
-            0.55
+            0.9
         } else {
-            0.40
+            0.6
         }
     }
 
