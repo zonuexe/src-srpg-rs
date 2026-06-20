@@ -2339,6 +2339,9 @@ fn build_combat_preview_line(
         env_of(dx, dy),
         // 状態異常スナップショットなしのプレビュー行 → 与・被ダメージ修正なし。
         combat::DamageSpiritLevels::default(),
+        // ＥＣＭ エリア補正は HUD プレビュー行では未反映 (盤面走査が要・App ヘルパ依存)。
+        // 実戦闘とその予測 (App::attack_resolve_and_run) では反映される。follow-up。
+        1.0,
     )
     // 散 (散布) 属性武器の距離補正 (命中アップ・ダメージダウン) をプレビューにも反映。
     .apply_scatter(&weapon.class, combat::manhattan((cx, cy), (dx, dy)));

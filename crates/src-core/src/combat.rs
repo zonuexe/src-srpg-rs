@@ -327,6 +327,7 @@ pub fn predict_with_status(
         -1,
         -1,
         dmg_levels,
+        1.0, // ＥＣＭ 補正なし (ラッパ経路は盤面非依存)
     )
 }
 
@@ -356,6 +357,10 @@ pub fn predict_with_status_terrain(
     atk_env: i32,
     def_env: i32,
     dmg_levels: DamageSpiritLevels,
+    // ＥＣＭ エリア補正 (防御能力 (B)): 命中率に掛ける係数 (1.0 = 補正なし)。
+    // 周囲の味方/敵 ＥＣＭ Lv 差から App 側で算出して渡す (`App::ecm_hit_mult`)。
+    // 予測 (プレビュー) にも反映する確定補正。`必中`/`ひらめき` の絶対上書きより前に適用。
+    ecm_hit_mult: f64,
 ) -> CombatPreview {
     let has = |s: &[String], name: &str| s.iter().any(|t| t.contains(name));
 
@@ -413,6 +418,11 @@ pub fn predict_with_status_terrain(
     // 盲目 / 狂戦士 (防御側): これらのユニットへの攻撃の命中率は 1.5 倍 (95 上限)。
     if has(def_statuses, "盲目") || has(def_statuses, "狂戦士") {
         hit_chance = (hit_chance * 3 / 2).min(95);
+    }
+    // ＥＣＭ エリア補正 (防御能力 (B)): 周囲の味方/敵 ＥＣＭ Lv 差による命中低下を掛ける
+    // (1.0 = 補正なし)。`必中`/`ひらめき` の絶対上書きより前に適用する。
+    if ecm_hit_mult < 1.0 {
+        hit_chance = (f64::from(hit_chance) * ecm_hit_mult) as i32;
     }
     // 必中 (attacker) / 捨て身 (defender=無防備) / 行動不能系 (麻痺/睡眠/凍結/石化/行動不能)
     // → 命中 100 (SRC `Unit.cs`: 「動けなければ絶対に命中」)。
@@ -2060,6 +2070,7 @@ mod tests {
             1,
             1,
             DamageSpiritLevels::default(),
+            1.0,
         );
         assert_eq!(base.damage, 1250, "適応なし: 2000 - 750");
         assert_eq!(adapted.damage, 1500, "適応A: 2000×1.2 - 750×1.2");
@@ -2621,6 +2632,34 @@ mod tests {
     // 注: 分身/超回避 は (B) で実行段の完全回避ロール (App::check_dodge_feature) へ移行し、
     // 予測 (hit%) には反映しないため、旧 status_chougaihi_reduces_hit_by_ten_times_level
     // (予測の命中ペナルティ検証) は撤去した。回避ロールは app 側のテストで検証する。
+
+    #[test]
+    fn ecm_hit_mult_scales_predicted_hit() {
+        // ＥＣＭ 補正係数が予測命中率に乗る (必中/ひらめき の上書きより前)。
+        let mk = |mult: f64| {
+            predict_with_status_terrain(
+                &p(200, 0, 100),
+                &u(0, vec![]),
+                &weapon(500, 1, 1, 0),
+                &p(0, 0, 0),
+                &u(0, vec![]),
+                0,
+                0,
+                100,
+                100,
+                &[],
+                &[],
+                -1,
+                -1,
+                DamageSpiritLevels::default(),
+                mult,
+            )
+            .hit_chance
+        };
+        let base = mk(1.0);
+        let ecm = mk(0.5);
+        assert_eq!(ecm, base / 2, "ＥＣＭ 0.5 で命中半減");
+    }
 
     #[test]
     fn status_paralysis_boosts_hit_and_damage() {

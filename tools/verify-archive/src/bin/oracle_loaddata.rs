@@ -260,6 +260,7 @@ fn eval_predict(
         1,
         def_env,
         dmg_levels,
+        1.0, // ＥＣＭ 補正なし (差分ツールは盤面非配置)
     );
     // 散 (散布) 属性武器の距離補正。攻撃側↔防御側の manhattan 距離 (C# placeattack の
     // StandBy 2 マス間隔と一致) で命中アップ・ダメージダウンを適用する。

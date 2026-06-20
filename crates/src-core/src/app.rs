@@ -3398,6 +3398,7 @@ impl App {
             atk_env,
             def_env,
             dmg_levels,
+            self.ecm_hit_mult(def_idx, atk_idx, &weapon.class),
         );
         // 散 (散布) 属性武器の距離補正 (命中アップ・ダメージダウン)。
         let atk_def_dist = combat::manhattan(
@@ -4018,6 +4019,45 @@ impl App {
         (dmg - strength).max(0)
     }
 
+    /// ＥＣＭ エリア補正 (防御能力 (B)・SRC.NET `Unit.cs:10419`): 防御側 `def_idx` の周囲
+    /// (中心からマンハッタン 3 以内かつ各軸 ±2 マス) を走査し、**防御側の味方**の最大
+    /// ＥＣＭ Lv (ecm) と **攻撃側の味方**の最大 ＥＣＭ Lv (eccm) を求め、命中率に掛ける
+    /// 係数 `(100 − f×max(ecm−eccm,0)) / 100` を返す (f は ホーミング `Ｈ` 武器で 10、他 5)。
+    /// 補正が無ければ 1.0。`predict_with_status_terrain` の `ecm_hit_mult` 引数へ渡す。
+    fn ecm_hit_mult(&self, def_idx: usize, attacker_idx: usize, weapon_class: &str) -> f64 {
+        let def = &self.database.unit_instances[def_idx];
+        let (cx, cy, def_party) = (i64::from(def.x), i64::from(def.y), def.party);
+        let atk_party = self.database.unit_instances[attacker_idx].party;
+        let mut ecm = 0i32;
+        let mut eccm = 0i32;
+        for u in &self.database.unit_instances {
+            if u.off_map {
+                continue;
+            }
+            let ddx = (i64::from(u.x) - cx).abs();
+            let ddy = (i64::from(u.y) - cy).abs();
+            if ddx > 2 || ddy > 2 || ddx + ddy > 3 {
+                continue;
+            }
+            let lv = crate::feature::feature_level(&u.active_features, "ＥＣＭ").unwrap_or(0);
+            if lv <= 0 {
+                continue;
+            }
+            if !u.party.is_hostile_to(def_party) {
+                ecm = ecm.max(lv);
+            }
+            if !u.party.is_hostile_to(atk_party) {
+                eccm = eccm.max(lv);
+            }
+        }
+        let diff = (ecm - eccm).max(0);
+        if diff == 0 {
+            return 1.0;
+        }
+        let f = if weapon_class.contains('Ｈ') { 10 } else { 5 };
+        f64::from((100 - f * diff).max(0)) / 100.0
+    }
+
     /// 回避系特殊能力 (防御能力 (B)・SRC.NET `Unit.cs::CheckDodgeFeature` 準拠): 命中する
     /// はずの攻撃を完全回避するか判定する (`true` なら攻撃はミス扱い)。
     /// 分身 は気力 130 以上で 50% (`Dice(2)`)、超回避Lv「n」 は `n >= Dice(10)` ≈ 10n%。
@@ -4184,6 +4224,7 @@ impl App {
             sup_env,
             def_env,
             dmg_levels,
+            self.ecm_hit_mult(def_idx, sup_idx, &weapon.class),
         );
         // 散 属性武器の距離補正 (援護攻撃側 → 防御側)。
         let sup_def_dist = combat::manhattan(
@@ -4496,6 +4537,8 @@ impl App {
             counter_atk_env,
             counter_def_env,
             dmg_levels,
+            // 反撃の被弾側は atk_idx、反撃の攻撃側は def_idx。
+            self.ecm_hit_mult(atk_idx, def_idx, &weapon.class),
         );
         // 散 属性武器の距離補正 (反撃側 dx,dy → 被弾側 target)。
         let counter_dist = combat::manhattan((dx, dy), target);
@@ -14346,6 +14389,53 @@ mod tests {
         );
     }
 
+    /// (B) ＥＣＭ エリア補正: 防御側周囲の味方 ＥＣＭ で命中低下、攻撃側の味方 ＥＣＭ で相殺。
+    /// ホーミング `Ｈ` 武器は影響 2 倍。
+    #[test]
+    fn ecm_aura_reduces_hit_from_nearby_allies() {
+        use crate::feature::ActiveFeature;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        // 防御側 (敵) を (5,5)、攻撃側 (味方) を遠方 (5,9) に配置。
+        let d = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Def",
+            "DP",
+            crate::Party::Enemy,
+            5,
+            5,
+        ));
+        let d = app.database().idx_by_uid(&d).unwrap();
+        let a = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Atk",
+            "AP",
+            crate::Party::Player,
+            5,
+            9,
+        ));
+        let a = app.database().idx_by_uid(&a).unwrap();
+
+        // ＥＣＭ 機が居なければ補正なし。
+        assert_eq!(app.ecm_hit_mult(d, a, "実"), 1.0);
+
+        // 防御側の味方 (敵) が ＥＣＭLv4 を持って隣接 (6,5)。
+        let mut jam = crate::UnitInstance::new("Jam", "JP", crate::Party::Enemy, 6, 5);
+        jam.active_features
+            .push(ActiveFeature::new("ＥＣＭLv4", ""));
+        app.database_mut().register_unit(jam);
+        // 通常武器: (100-5×4)/100 = 0.8。
+        assert!((app.ecm_hit_mult(d, a, "実") - 0.8).abs() < 1e-9);
+        // ホーミング Ｈ: (100-10×4)/100 = 0.6。
+        assert!((app.ecm_hit_mult(d, a, "Ｈ") - 0.6).abs() < 1e-9);
+
+        // 攻撃側の味方 (味方) が同 Lv の ＥＣＭ を防御側付近 (4,5) に持つと相殺 → 1.0。
+        let mut jammer = crate::UnitInstance::new("CJam", "CP", crate::Party::Player, 4, 5);
+        jammer
+            .active_features
+            .push(ActiveFeature::new("ＥＣＭLv4", ""));
+        app.database_mut().register_unit(jammer);
+        assert_eq!(app.ecm_hit_mult(d, a, "実"), 1.0, "攻撃側 ＥＣＭ で相殺");
+    }
+
     /// 脱属性武器は命中・proc 時に対象の気力を低下させる (吸収は無し)。
     #[test]
     fn weapon_datsu_reduces_target_morale() {
@@ -18215,6 +18305,7 @@ Return
                 def_env,
                 // 必中 / 防御側無印 ＝ 与・被ダメージ修正なし。
                 crate::combat::DamageSpiritLevels::default(),
+                1.0, // ＥＣＭ 補正なし
             )
             .damage
         };
@@ -18316,6 +18407,7 @@ Return
                 def_env,
                 // 必中 / 防御側無印 ＝ 与・被ダメージ修正なし。
                 crate::combat::DamageSpiritLevels::default(),
+                1.0, // ＥＣＭ 補正なし
             )
             .damage
         };
