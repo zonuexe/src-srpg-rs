@@ -5888,7 +5888,15 @@ impl App {
             (weapon.critical + (atk_pilot.technique - def_pilot.technique) / 2).clamp(1, 100);
         // 耐性 / 弱点: 武器の属性に対し対象が耐性を持てば発動率半減、弱点を持てば倍。
         let prob = self.adjust_proc_for_resistance(def_idx, &weapon.class, prob);
-        if (self.next_u32() % 100) as i32 >= prob {
+        // 抵抗力Lv* (回避系特殊能力.md): 特殊効果発生確率を 10×Lv% 減少
+        // (C# Unit.cs:12275 `prob - 10 * FeatureLevel("抵抗力")`)。
+        let resist_lv = crate::feature::feature_level(
+            &self.database.unit_instances[def_idx].active_features,
+            "抵抗力",
+        )
+        .unwrap_or(0);
+        let prob = prob - 10 * resist_lv;
+        if prob <= 0 || (self.next_u32() % 100) as i32 >= prob {
             return Vec::new();
         }
         let is_boss = self.database.unit_instances[def_idx].is_boss();
@@ -13916,6 +13924,48 @@ mod tests {
             !app.database().unit_instances[def_idx].has_condition("麻痺"),
             "特殊効果無効化=全 が麻痺付与を防ぐはず"
         );
+    }
+
+    /// 抵抗力Lv* は特殊効果発生確率を 10×Lv% 減少させる (回避系特殊能力.md /
+    /// C# Unit.cs:12275)。Lv10 なら critical100 (proc 100) でも 0 になり付与されない。
+    #[test]
+    fn teikouryoku_reduces_special_effect_proc() {
+        use crate::data::unit::WeaponData;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6);
+        let target = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "PILOT",
+            crate::Party::Enemy,
+            3,
+            6,
+        ));
+        let def_idx = app.database().idx_by_uid(&target).unwrap();
+        app.database_mut().unit_instances[def_idx]
+            .active_features
+            .push(crate::feature::ActiveFeature::new("抵抗力Lv10", ""));
+        let pilot = app.database().pilot_by_name("PILOT").unwrap().clone();
+        let weapon = WeaponData {
+            name: "麻痺銃".into(),
+            power: 100,
+            min_range: 1,
+            max_range: 1,
+            precision: 0,
+            bullet: -1,
+            en_consumption: 0,
+            necessary_morale: 0,
+            adaption: "AAAA".into(),
+            critical: 100,
+            class: "痺".into(),
+            extras: Vec::new(),
+        };
+        let applied = app.apply_weapon_special_effects(def_idx, def_idx, &weapon, &pilot, &pilot);
+        assert!(
+            applied.is_empty(),
+            "抵抗力Lv10 で proc 100→0 になり麻痺は付与されないはず: {applied:?}"
+        );
+        assert!(!app.database().unit_instances[def_idx].has_condition("麻痺"));
     }
 
     /// 脱属性武器は命中・proc 時に対象の気力を低下させる (吸収は無し)。
