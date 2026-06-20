@@ -13410,6 +13410,12 @@ pub(crate) fn map_attack(
         app.consume_weapon_resources(atk_idx, wi);
     }
 
+    // is_event=false の後段イベント (損傷率/使用後/攻撃後) 用に攻撃側 ID を退避。
+    let atk_ev = UnitEventId::from_unit_instance(&app.database().unit_instances[atk_idx]);
+    // 生存対象のスナップショット (損傷率 と 攻撃後 用)。
+    // (UnitEventId, pilot, unit, party, old_dmg, new_dmg, max_hp)
+    let mut survivors: Vec<(UnitEventId, String, String, crate::Party, i64, i64, i64)> = Vec::new();
+
     // 対象を後ろから削除するため位置を巻き戻し
     let mut kills = 0usize;
     for &def_idx in targets.iter().rev() {
@@ -13442,8 +13448,10 @@ pub(crate) fn map_attack(
             &def_statuses,
         );
         // マップ攻撃は必中扱いに近い (ダメージのみ)
+        let old_dmg = app.database().unit_instances[def_idx].damage;
         app.database_mut().unit_instances[def_idx].damage += preview.damage;
-        let remaining = def_unit.hp - app.database().unit_instances[def_idx].damage;
+        let new_dmg = app.database().unit_instances[def_idx].damage;
+        let remaining = def_unit.hp - new_dmg;
         if remaining <= 0 {
             // 精神コマンド「復活」: HP0 でも HP 全快で立ち上がる (1 回で消費)。通常戦闘と
             // 同様にマップ兵器の撃破でも復活を尊重する (撃破・破壊・全滅を発火しない)。
@@ -13458,10 +13466,42 @@ pub(crate) fn map_attack(
                 fire_destruction_labels(app, &vp, &vu, vparty);
                 kills += 1;
             }
+        } else if !is_event {
+            // 生存対象は後段の 損傷率 / 攻撃後 用に記録 (ダメージ適用後の状態で)。
+            let def_ev = UnitEventId::from_unit_instance(&app.database().unit_instances[def_idx]);
+            survivors.push((
+                def_ev,
+                def_pilot.name.clone(),
+                def_unit.name.clone(),
+                def_inst.party,
+                old_dmg,
+                new_dmg,
+                def_unit.hp,
+            ));
         }
     }
     // 勝敗判定 (マップ兵器でラスト1機撃破時の勝利確定)。
     app.check_victory();
+
+    // SRC `Unit.MapAttack` の後段イベント (is_event=false, Unit.cs:28560-28688)。
+    // ダメージ確定後に 損傷率 (生存対象) → 使用後 (攻撃側) → 攻撃後 (生存対象ごと) を発火する。
+    // 破壊/全滅 は撃破ループ内の fire_destruction_labels で発火済み。マップ攻撃破壊 (Help 未記載
+    // の内部イベント) は仕様不明のため未実装。スクリプトの素の MapAttack (is_event=true) では
+    // これらは発火しない (通常攻撃と同じく "イベント上の戦闘" は後段イベント非発火)。
+    if !is_event {
+        // 対象順 (昇順) に揃える (ループは降順で集めている)。
+        survivors.reverse();
+        // 損傷率イベント (HP が減った生存対象)。
+        for (_, pilot, unit, party, old_dmg, new_dmg, max_hp) in &survivors {
+            fire_damage_threshold_labels(app, pilot, unit, *party, *old_dmg, *new_dmg, *max_hp);
+        }
+        // 使用後イベント (攻撃側が生存している場合のみ・内部で生存判定)。
+        fire_after_use_event_labels(app, &atk_ev, weapon_name);
+        // 攻撃後イベント (生存対象ごと・両者生存時のみ)。
+        for (def_ev, ..) in &survivors {
+            fire_after_attack_event_labels(app, &atk_ev, def_ev);
+        }
+    }
     if kills > 0 {
         app.push_message(format!(
             "{} のマップ攻撃 [{}] で {} ユニット撃破",
@@ -18050,6 +18090,89 @@ MapWeapon リオ メガキャノン 6 5
             app.script_var("attacked"),
             "1",
             "通常戦闘 MapAttack は 攻撃 イベントを発火するはず"
+        );
+    }
+
+    /// SRC `Unit.MapAttack` (Unit.cs:28560-28688): プレイヤー/AI 発のマップ攻撃
+    /// (is_event=false) ではダメージ確定後に 損傷率 (生存対象) → 使用後 (攻撃側) →
+    /// 攻撃後 (生存対象ごと) を発火する。スクリプトの素の `MapAttack` (is_event=true) では
+    /// これらの後段イベントは発火しない (通常攻撃と同じく "イベント上の戦闘" は非発火)。
+    #[test]
+    fn map_attack_fires_after_damage_events_only_in_normal_battle_mode() {
+        fn run(tail: &str) -> App {
+            let mut app = App::new();
+            // 対象 ゾルダ(HP20000/装甲400) はメガキャノン(2500) で撃破されず生存する想定
+            // (生存対象でのみ 損傷率 / 攻撃後 / 使用後 が発火する)。
+            let src = format!(
+                "Pilot ガロ ガロ 男性 超能力者 AAAA 100 100 100 100 100 100 100\n\
+                 Pilot リオ リオ 男性 超能力者 AAAA 100 100 100 100 100 100 100\n\
+                 Unit ブレイバー Real 1 0 陸 5 M 1000 100 5000 100 1500 100 AAAA\n\
+                 Unit ゾルダ Mass 1 0 陸 5 M 1000 100 20000 80 400 80 BBBB\n\
+                 Weapon ブレイバー メガキャノン 2500 1 3 +0 0\n\
+                 Place ブレイバー リオ 味方 5 5\n\
+                 Place ゾルダ ガロ 敵 6 5\n\
+                 MapAttack リオ メガキャノン 6 5{tail}\n\
+                 Exit\n\
+                 \n\
+                 損傷率 ガロ 1:\n\
+                 Incr 損傷率発火\n\
+                 Return\n\
+                 \n\
+                 使用後 リオ メガキャノン:\n\
+                 Incr 使用後発火\n\
+                 Return\n\
+                 \n\
+                 攻撃後 リオ ガロ:\n\
+                 Incr 攻撃後発火\n\
+                 Return\n"
+            );
+            let stmts = event::parse(&src).unwrap();
+            execute(&mut app, &stmts).unwrap();
+            app
+        }
+
+        // 既定 (is_event=true): 後段イベント (損傷率 / 使用後 / 攻撃後) は発火しない。
+        let app = run("");
+        assert_eq!(
+            app.script_var("損傷率発火"),
+            "",
+            "script MapAttack は 損傷率 非発火"
+        );
+        assert_eq!(
+            app.script_var("使用後発火"),
+            "",
+            "script MapAttack は 使用後 非発火"
+        );
+        assert_eq!(
+            app.script_var("攻撃後発火"),
+            "",
+            "script MapAttack は 攻撃後 非発火"
+        );
+
+        // `通常戦闘` 指定 (is_event=false): 損傷率 + 使用後 + 攻撃後 が発火。
+        let app = run(" 通常戦闘");
+        // 前提: 対象が生存していること (撃破されると 損傷率/攻撃後 が出ずテストが無意味化)。
+        assert!(
+            app.database()
+                .unit_instances
+                .iter()
+                .any(|u| u.pilot_name == "ガロ"),
+            "対象ゾルダが生存している前提"
+        );
+        assert_eq!(
+            app.script_var("使用後発火"),
+            "1",
+            "通常戦闘 MapAttack は 使用後 イベントを発火するはず"
+        );
+        assert_eq!(
+            app.script_var("攻撃後発火"),
+            "1",
+            "通常戦闘 MapAttack は 攻撃後 イベントを発火するはず"
+        );
+        assert_eq!(
+            app.script_var("損傷率発火"),
+            "1",
+            "通常戦闘 MapAttack は 生存対象に 損傷率 イベントを発火するはず"
         );
     }
 
