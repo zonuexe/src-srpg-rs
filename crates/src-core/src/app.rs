@@ -593,14 +593,14 @@ fn push_combat_feature_statuses(unit: &crate::UnitInstance, statuses: &mut Vec<S
             statuses.push(f.name.clone());
         } else if base_match(name, "盾")
             || name.contains("バリアシールド")
-            || name.contains("フィールド")
+            || name.contains("アクティブフィールド")
         {
-            // (A) フィールド系/バリアシールド/盾 は、まとめて既存の `バリア` status
-            // (÷2 近似) に合流させる (将来 (B) で個別精緻化)。
-            // **除外**: ① シールド系 (シールド/小型/大型/アクティブシールド) → Ｓ防御依存の
-            // 確率発動なので実行段 apply_shield_defense ((B))。② バリア/バリアLv* → 属性別
-            // 1000×Lv の確定吸収なので実行段 apply_barrier_absorb ((B))。`バリア中和` は
-            // 攻撃属性で base 不一致 + バリアシールド/フィールド 非該当のため除外される。
+            // (A) バリアシールド (非標準名)・アクティブフィールド・盾 は、まとめて既存の
+            // `バリア` status (÷2 近似) に合流させる。
+            // **除外**: ① シールド系 → 実行段 apply_shield_defense ((B))。② バリア/バリアLv*・
+            // フィールド/フィールドLv* → 確定吸収 apply_barrier_absorb ((B))。③ 単独の
+            // `プロテクト・フィールド` は値が `解説…` のヘルプ文＝非機能 (どの分岐にも該当せず inert)。
+            // `バリア中和` は攻撃属性で除外される。
             statuses.push("バリア".to_string());
         }
     }
@@ -3974,21 +3974,35 @@ impl App {
     /// 字単位照合し、省略時は全属性 (`バリアに関する記述.md` 準拠)。`バリアシールド`/
     /// `フィールド` 系は base 不一致で対象外 (現状 (A) の ÷2 近似のまま)。
     fn barrier_absorb_strength(&self, def_idx: usize, weapon_class: &str) -> i64 {
-        let mut best = 0i64;
+        let mut total = 0i64;
         for f in &self.database.unit_instances[def_idx].active_features {
-            if !f.is_active {
-                continue;
+            if !f.is_active || f.value.trim_start().starts_with("解説") {
+                continue; // 解説エントリ (ヘルプ文) は防御能力ではない
             }
-            let Some(lv) = crate::feature::feature_level(std::slice::from_ref(f), "バリア")
-            else {
-                continue;
-            };
+            // バリア=1000×Lv / フィールド=500×Lv の確定吸収 (防御系特殊能力.md)。
+            // アクティブフィールド (Ｓ防御/16 確率発動) は確定吸収ではないので別経路。
+            let per_lv =
+                if crate::feature::feature_name_matches_base(&f.name, "アクティブフィールド")
+                {
+                    continue;
+                } else if let Some(lv) =
+                    crate::feature::feature_level(std::slice::from_ref(f), "バリア")
+                {
+                    1000 * i64::from(lv)
+                } else if let Some(lv) =
+                    crate::feature::feature_level(std::slice::from_ref(f), "フィールド")
+                {
+                    500 * i64::from(lv)
+                } else {
+                    continue;
+                };
+            // 対象属性 (`…=別名 対象属性 …` の 2 番目トークン) を字単位照合、省略は全属性。
             let target = f.value.split_whitespace().nth(1).unwrap_or("");
             if target.is_empty() || Self::defense_attr_matches(weapon_class, target) {
-                best = best.max(1000 * i64::from(lv));
+                total += per_lv;
             }
         }
-        best
+        total
     }
 
     /// バリア吸収 (防御能力 (B)・SRC `バリア` 特殊能力): 防御側が `バリアLv*` を持つと、
@@ -12136,26 +12150,29 @@ mod tests {
         );
     }
 
-    /// (A) フィールド系/バリアシールド はまとめて `バリア` status (÷2 近似) に合流する。
-    /// **シールド系 (アクティブシールド) は (B) 実行段ロール**、**超回避Lv* は (B) 回避ロール**、
-    /// **バリア中和 は攻撃属性** なので、いずれも (A) の ÷2 合流には乗らない。
+    /// (A) アクティブフィールド/バリアシールド(非標準名)/盾 はまとめて `バリア` status
+    /// (÷2 近似) に合流する。**シールド系・超回避 は (B) ロール**、**バリア/フィールド は (B)
+    /// 確定吸収**、**単独プロテクト・フィールド(解説)は非機能**、**バリア中和は攻撃属性** なので
+    /// いずれも (A) ÷2 には乗らない。
     #[test]
     fn combat_feature_statuses_merges_shield_field_and_chougaihi() {
         use crate::feature::ActiveFeature;
         let mut u = crate::UnitInstance::new("X", "P", crate::Party::Enemy, 0, 0);
         u.active_features = vec![
-            ActiveFeature::new("プロテクト・フィールド", ""), // → バリア
-            ActiveFeature::new("バリアシールドLv3", ""),      // → バリア (バリアシールド)
-            ActiveFeature::new("アクティブシールド", ""),     // シールド系 → (B)・(A) 除外
-            ActiveFeature::new("超回避Lv4", ""),              // (B) 回避ロール → (A) 除外
-            ActiveFeature::new("バリア中和", ""),             // 攻撃属性 → 除外
+            ActiveFeature::new("アクティブフィールドLv3", ""), // → バリア (確率版は後続増分)
+            ActiveFeature::new("バリアシールドLv3", ""),       // → バリア (非標準名)
+            ActiveFeature::new("アクティブシールド", ""),      // シールド系 → (B)・(A) 除外
+            ActiveFeature::new("フィールドLv1", ""),           // (B) 確定吸収 → (A) 除外
+            ActiveFeature::new("超回避Lv4", ""),               // (B) 回避ロール → (A) 除外
+            ActiveFeature::new("プロテクト・フィールド", "解説 これはヘルプ文"), // 非機能 → 除外
+            ActiveFeature::new("バリア中和", ""),              // 攻撃属性 → 除外
         ];
         let mut s = Vec::new();
         push_combat_feature_statuses(&u, &mut s);
         assert_eq!(
             s.iter().filter(|x| x.as_str() == "バリア").count(),
             2,
-            "プロテクト・フィールド/バリアシールド の 2 つのみ バリア に合流"
+            "アクティブフィールド/バリアシールド の 2 つのみ バリア に合流: {s:?}"
         );
         assert!(
             !s.iter().any(|x| x.contains("超回避") || x.contains("中和")),
@@ -14336,6 +14353,49 @@ mod tests {
             app.apply_barrier_absorb(def_idx, atk_idx, "火", 1500),
             0,
             "対象属性 火 のバリアは 火 武器を吸収する"
+        );
+    }
+
+    /// (B) フィールド吸収: フィールドLv* は 500×Lv を確定吸収 (バリアの半分)。
+    /// 解説エントリ (値が「解説…」) は防御能力として扱わない。バリアとスタックする。
+    #[test]
+    fn field_absorbs_five_hundred_times_level_and_ignores_kaisetsu() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Atk", 2, 6);
+        let atk_idx = first_player_uid(&app);
+        let atk_idx = app.database().idx_by_uid(&atk_idx).unwrap();
+        let target = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Def",
+            "DP",
+            crate::Party::Enemy,
+            3,
+            6,
+        ));
+        let def_idx = app.database().idx_by_uid(&target).unwrap();
+        app.database_mut().unit_instances[def_idx]
+            .active_features
+            .push(crate::feature::ActiveFeature::new("フィールドLv2", "")); // 1000 吸収
+                                                                            // 解説エントリは無視されること。
+        app.database_mut().unit_instances[def_idx]
+            .active_features
+            .push(crate::feature::ActiveFeature::new(
+                "プロテクト・フィールド",
+                "解説 これはヘルプ文",
+            ));
+        // 800 < 1000 → 完全吸収 0。
+        assert_eq!(app.apply_barrier_absorb(def_idx, atk_idx, "実", 800), 0);
+        // 1200 > 1000 → 残 200。
+        assert_eq!(app.apply_barrier_absorb(def_idx, atk_idx, "実", 1200), 200);
+
+        // バリアLv1 (1000) を追加するとスタックして 1000+1000=2000 吸収。
+        app.database_mut().unit_instances[def_idx]
+            .active_features
+            .push(crate::feature::ActiveFeature::new("バリアLv1", ""));
+        assert_eq!(
+            app.apply_barrier_absorb(def_idx, atk_idx, "実", 1900),
+            0,
+            "フィールド 1000 + バリア 1000 = 2000 吸収"
         );
     }
 
