@@ -10,7 +10,7 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 ## 現在地（2026-06-20）— 公式サンプルシナリオ互換 + 防御能力の方針決定
 
 **ブランチ**: `feat/sample-scenario-smoke`（`master` ではなくフィーチャーブランチ。push 未指示）。
-**テスト**: `cargo test -p src-core` 全緑（約 2017 件）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。
+**テスト**: `cargo test -p src-core` 全緑（約 2018 件）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。
 **主題**: 非再配布パッケージ `srcall-2_2_33-111106/サンプルシナリオ`（公式サンプル）を Rust 移植で
 動作させる。テストは実フォルダを **参照のみ**（無ければ skip・本文 embed なし・`srcall-*/` は `.gitignore`）。
 
@@ -93,8 +93,17 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
   フラグ付きで**再帰**させ、再攻撃側は使用イベント再発火と3回目の再攻撃を抑止（VB6 `begin` ラベルは
   使用イベントより後ろ＝再攻撃で 使用 は再発火しないが 攻撃/反撃 は再交戦する）。能力非保持ユニットは
   乱数非消費＝既存 RNG 列不変。テスト `reattack_skill_strikes_twice`。
-- **残（次の sample-used 特殊能力）**: **カウンター**（ロイ=Lv1-4・反撃で先制）／**連続行動・連続ターゲット**。
-  VB6 機構は memory [[project_sample_scenario_goal]] に記録。
+**★ 追加（2026-06-21）= カウンター（先制反撃・パイロット特殊能力）を実装**:
+- ロイ（キャリバーン）が `カウンターLv1-4` を所持。VB6 `COM.bas:1040-1058` 準拠で、攻撃を受ける際に
+  防御側が反撃武器を射程内に持ち先手を取れるなら、**主攻撃の前に**先制反撃する。発動条件（VB6 判定順）:
+  ① 攻撃側武器が `後`（後攻）／防御側反撃武器が `先`（先制）属性、② `カウンター` SP、③ `先読み` 技能
+  `Lv>=Dice(16)`、④ `カウンター` 技能で使用回数残あり（`used<Lv`、使うたび `used_counter_attack` 加算・
+  `begin_phase` で 0 リセット）。先制反撃で攻撃側を撃破すれば主攻撃は不発、主攻撃後の通常反撃は抑止。
+  `try_preemptive_counter`＋`attack_resolve_and_run` の予測前に配線、先制で index がずれ得るため位置で
+  引き直す。能力非保持ユニットは乱数非消費＝既存 RNG 列不変。テスト `counter_skill_strikes_pre_emptively`
+  （先読み の base 機構も同時に実装）。
+- **残（次の sample-used 特殊能力）**: **連続行動・連続ターゲット**。VB6 機構は要調査。
+  みがわり肩代わりダメージの身代わり装甲再計算も残（近似）。
 
 **★ 追加（2026-06-20・続き）= マップ攻撃の撃破を `マップ攻撃破壊` で発火（原典忠実・ユーザ決定）**:
 - **VB6 原典ソース発見**: `srcall-2_2_33-111106/Source/Src/`（C# より上流の ground truth）。`Event.bas:1744` で

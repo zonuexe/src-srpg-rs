@@ -2236,6 +2236,8 @@ impl App {
                 // サポートアタック / サポートガード回数は毎フェイズ 1 リセット
                 u.support_attack_remaining = 1;
                 u.support_guard_remaining = 1;
+                // カウンター (先制反撃) 使用回数も毎フェイズ 0 リセット (SRC UsedCounterAttack)。
+                u.used_counter_attack = 0;
             }
         }
         self.command_menu = None;
@@ -3187,7 +3189,7 @@ impl App {
             .unit_instances
             .iter()
             .position(|u| u.x == cx && u.y == cy);
-        let Some(atk_idx) = atk_idx else {
+        let Some(mut atk_idx) = atk_idx else {
             return false;
         };
 
@@ -3215,7 +3217,7 @@ impl App {
         let atk_totsugeki = self.database.unit_instances[atk_idx].has_condition("突撃");
 
         // 対象ユニット (def_idx) と使用武器を確定する。
-        let (def_idx, weapon) = if let Some(tt) = desired_target {
+        let (mut def_idx, weapon) = if let Some(tt) = desired_target {
             // クリックされたタイルの敵を厳密に対象とする (最寄り敵には流れない)。
             let def_idx = self.database.unit_instances.iter().position(|u| {
                 !u.off_map && u.x == tt.0 && u.y == tt.1 && u.party.is_hostile_to(atk_party)
@@ -3366,6 +3368,43 @@ impl App {
         let after_def = crate::event_runtime::UnitEventId::from_unit_instance(
             &self.database.unit_instances[def_idx],
         );
+
+        // 先制攻撃 (カウンター/先読み, SRC `COM.bas:1040-1058`): 防御側が反撃武器を射程内に
+        // 持ち先手を取れるなら、主攻撃の**前に**防御側が反撃する。`reattack` (再攻撃) では
+        // 先制反撃しない (二重反撃を避ける)。先制反撃で攻撃側が撃破されたら主攻撃は不発。
+        let preempted = if is_reattack {
+            false
+        } else {
+            self.try_preemptive_counter(def_idx, (cx, cy), (def_inst.x, def_inst.y), &weapon.class)
+        };
+        if preempted {
+            let atk_alive = self
+                .database
+                .unit_instances
+                .iter()
+                .any(|u| !u.off_map && u.x == cx && u.y == cy);
+            if !atk_alive {
+                self.check_victory();
+                return true;
+            }
+            // 先制反撃で index がずれ得る (撃破/みがわり) ため位置で引き直す。
+            if let Some(i) = self
+                .database
+                .unit_instances
+                .iter()
+                .position(|u| u.x == cx && u.y == cy)
+            {
+                atk_idx = i;
+            }
+            if let Some(i) = self
+                .database
+                .unit_instances
+                .iter()
+                .position(|u| u.x == def_inst.x && u.y == def_inst.y)
+            {
+                def_idx = i;
+            }
+        }
 
         // 状態異常 / 精神コマンド分の補正は predict_with_status に任せる。
         let atk_morale = self.database.unit_instances[atk_idx].morale;
@@ -3794,7 +3833,9 @@ impl App {
         };
         // 反撃: 防御側が生存しており、攻撃側まで射程内の武器を持っていれば 1 回反撃。
         // ただし回避/防御を選んだ場合は反撃しない (SRC 反撃モード)。反撃 or 自動("")のみ。
-        let allow_counter = def_mode != "回避" && def_mode != "防御" && def_mode != "援護防御";
+        // 先制反撃 (preempted) 済みなら主攻撃後の通常反撃は行わない (SRC: def_mode="先制攻撃")。
+        let allow_counter =
+            !preempted && def_mode != "回避" && def_mode != "防御" && def_mode != "援護防御";
         let still_alive_def = self
             .database
             .unit_instances
@@ -4755,6 +4796,76 @@ impl App {
     /// 正しい `fire_destruction_labels` (破壊 + 全滅) に委譲して一本化する。
     fn fire_destruction_label(&mut self, pilot: &str, unit: &str, party: crate::Party) {
         crate::event_runtime::fire_destruction_labels(self, pilot, unit, party);
+    }
+
+    /// 先制攻撃 (SRC `COM.bas:1040-1058`): 攻撃側が `def_pos` の防御側を攻撃する際、
+    /// 防御側が反撃武器を射程内に持ち、以下のいずれかで先手を取れるなら主攻撃の**前に**
+    /// 防御側が反撃する。成立条件 (いずれか): 攻撃側武器が `後`(後攻) / 防御側反撃武器が
+    /// `先`(先制) 属性、`カウンター` SP (condition)、`先読み` 技能 `Lv>=Dice(16)`、`カウンター`
+    /// 技能の使用回数残あり (`used<Lv`、使うたび加算)。成立したら `true` (= 主攻撃後の通常反撃を
+    /// 抑止)。乱数は `先読み` 技能保持時のみ消費する (能力非保持ユニットの RNG 列を保つ)。
+    fn try_preemptive_counter(
+        &mut self,
+        def_idx: usize,
+        atk_pos: (u32, u32),
+        def_pos: (u32, u32),
+        atk_weapon_class: &str,
+    ) -> bool {
+        if self.database.unit_instances[def_idx].attack_disabled() {
+            return false;
+        }
+        let Some(atk_idx) = self
+            .database
+            .unit_instances
+            .iter()
+            .position(|u| u.x == atk_pos.0 && u.y == atk_pos.1)
+        else {
+            return false;
+        };
+        if !self.database.unit_instances[def_idx]
+            .party
+            .is_hostile_to(self.database.unit_instances[atk_idx].party)
+        {
+            return false;
+        }
+        // 反撃武器が射程内にあるか。
+        let dist = combat::manhattan(def_pos, atk_pos);
+        let Some((_, def_unit)) = self.database.effective_combat_data(def_idx) else {
+            return false;
+        };
+        let Some(cw) = self.best_firable_weapon_in_range(def_idx, &def_unit, dist) else {
+            return false;
+        };
+        let counter_lv = self.unit_pilot_skill_level(def_idx, "カウンター");
+        let foresight_lv = self.unit_pilot_skill_level(def_idx, "先読み");
+        let used = self.database.unit_instances[def_idx].used_counter_attack;
+        let has_counter_sp = self.database.unit_instances[def_idx].has_condition("カウンター");
+        // SRC COM.bas の判定順: 後/先/カウンターSP/先読み(Dice) → カウンター技能(回数消費)。
+        // 先読み の Dice は技能保持時のみ評価 (`||` 短絡で RNG 列を保つ)。
+        let preempt = if atk_weapon_class.contains('後')
+            || cw.class.contains('先')
+            || has_counter_sp
+            || (foresight_lv > 0 && foresight_lv > (self.next_u32() % 16) as i32)
+        {
+            true
+        } else if counter_lv > used {
+            self.database.unit_instances[def_idx].used_counter_attack = used + 1;
+            true
+        } else {
+            false
+        };
+        if !preempt {
+            return false;
+        }
+        self.push_message(format!(
+            "{} の先制攻撃！",
+            self.database
+                .pilot_by_name(&self.database.unit_instances[def_idx].pilot_name)
+                .map(|p| p.nickname.clone())
+                .unwrap_or_else(|| self.database.unit_instances[def_idx].pilot_name.clone())
+        ));
+        self.try_counterattack(def_pos.0, def_pos.1, atk_pos);
+        true
     }
 
     /// `(dx, dy)` の防御側ユニットが `target` へ反撃可能なら 1 度だけ実行。
@@ -17567,6 +17678,63 @@ mod tests {
             cond.unwrap().data,
             ally,
             "みがわり の身代わりが選んだ味方 Ally でない"
+        );
+    }
+
+    /// カウンター (VB6 `COM.bas:1040-1058`): カウンター 技能を持つ防御側は主攻撃の前に
+    /// 先制反撃する。先制反撃で攻撃側を撃破すれば攻撃側の主攻撃は不発 (防御側は無傷)。
+    #[test]
+    fn counter_skill_strikes_pre_emptively() {
+        fn run(with_counter: bool) -> (bool, i64) {
+            let mut app = App::new();
+            enter_mapview_with_demo_map(&mut app);
+            place_player_unit(&mut app, "Hero", 2, 6); // 攻撃側 (HP100)
+            add_weapon(&mut app, "Hero", 20, 3);
+            place_player_unit(&mut app, "FoeData", 9, 9);
+            let foe = spawn_enemy(&mut app, "FoeData", 3, 6); // 防御側
+            add_weapon(&mut app, "FoeData", 500, 3); // 強力な反撃武器 (Hero を一撃)
+            app.set_stage_state(crate::stage::StageState::Battle);
+            if with_counter {
+                if let Some(pd) = app
+                    .database_mut()
+                    .pilots
+                    .iter_mut()
+                    .find(|p| p.name == "PILOT")
+                {
+                    pd.features.push(("カウンターLv1".into(), String::new()));
+                }
+            }
+            click_tile(&mut app, 2, 6);
+            let ai = attack_item_index(&app);
+            click_menu_item(&mut app, ai);
+            click_tile(&mut app, 3, 6);
+            let hero_alive = app
+                .database()
+                .unit_instances
+                .iter()
+                .any(|u| u.unit_data_name == "Hero" && !u.off_map);
+            let foe_dmg = app
+                .database()
+                .unit_by_uid(&foe)
+                .map(|u| u.damage)
+                .unwrap_or(-1);
+            (hero_alive, foe_dmg)
+        }
+        // カウンター無し: Hero が先に攻撃 (Foe 被弾) → Foe が通常反撃で Hero 撃破。
+        let (_, foe_dmg_base) = run(false);
+        assert!(
+            foe_dmg_base > 0,
+            "通常: Hero の主攻撃で Foe が被弾するはず (dmg={foe_dmg_base})"
+        );
+        // カウンター有り: Foe が先制反撃で Hero 撃破 → Hero の主攻撃は不発 (Foe 無傷)。
+        let (hero_alive_cnt, foe_dmg_cnt) = run(true);
+        assert!(
+            !hero_alive_cnt,
+            "カウンター: Hero は Foe の先制反撃で撃破されるはず"
+        );
+        assert_eq!(
+            foe_dmg_cnt, 0,
+            "カウンター: 先制反撃で Hero 撃破→主攻撃不発で Foe 無傷のはず (dmg={foe_dmg_cnt})"
         );
     }
 

@@ -343,6 +343,10 @@ pub struct UnitInstance {
     /// `begin_phase` で 1 にリセット。
     #[serde(default = "default_support_guard")]
     pub support_guard_remaining: i32,
+    /// 当ターン使用済みカウンター (先制反撃) 回数。`カウンター` 技能 Lv 回まで先制反撃でき、
+    /// 攻撃を受けるたびに加算する。`begin_phase` で 0 にリセット (SRC `UsedCounterAttack`)。
+    #[serde(default)]
+    pub used_counter_attack: i32,
     /// マップ外退避フラグ。`Escape` で true に、`Launch` / `Place` で false。
     /// true のあいだ AI / 戦闘 / 描画から除外されるが、`unit_instances` には残るため
     /// `Pilot(unit)` / `Info(...)` で参照可能で、後段の `Launch` で再配置できる。
@@ -506,6 +510,7 @@ impl UnitInstance {
             sp_consumed: 0,
             support_attack_remaining: default_support_attack(),
             support_guard_remaining: default_support_guard(),
+            used_counter_attack: 0,
             off_map: false,
             life_state: String::new(),
             ai_mode: String::new(),
