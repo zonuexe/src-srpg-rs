@@ -158,15 +158,22 @@ fn division_by_zero_yields_zero() {
 }
 
 // ============================================================
-//  (8) 既知のオラクル差異②: `Not` の優先順位 (characterization)
-//  オラクルは `Not` が比較より緩く束縛 (`Not 1 = 2` → `Not(1=2)` = 1)。
-//  本実装は `Not` を最高優先で束縛するため `(Not 1) = 2` = 0 になる。
-//  括弧付き (`Not (1 = 2)`) を使えば一致する (上の test 参照)。実シナリオは
-//  括弧付きが通例のため低影響だが、差異として明示的に pin しておく。
+//  (8) `Not` の優先順位 — オラクルと整合 (2026-06-20 是正)
+//  `Not` は比較より緩く、And/Or より固く束縛する (VB6 / SRC.Sharp 準拠)。
+//  `Not 1 = 2` → `Not (1 = 2)` → `Not 0` → 1。`parse_not` レベルを比較と論理の
+//  間に挿入し parse_factor から Not を外して整合させた (旧: 本実装は 0)。
 // ============================================================
 
 #[test]
-fn known_divergence_not_precedence_without_parens() {
-    // ORACLE DIVERGENCE: 原典は 1。本実装は 0 (Not が比較より先に束縛)。
-    assert_eq!(val("Not 1 = 2"), "0");
+fn not_binds_looser_than_comparison() {
+    // オラクル一致: `Not 1 = 2` = `Not (1 = 2)` = `Not 0` = 1。
+    assert_eq!(val("Not 1 = 2"), "1");
+    // 括弧付きも従来どおり一致。
+    assert_eq!(val("Not (1 = 2)"), "1");
+    assert_eq!(val("Not (1 = 1)"), "0");
+    // `Not` は And/Or より固い: `Not 0 And 1` = `(Not 0) And 1` = 1。
+    assert_eq!(val("Not 0 And 1"), "1");
+    // 単項 `Not` の真偽値 (非ゼロ→0、ゼロ→1) は不変。
+    assert_eq!(val("Not 0"), "1");
+    assert_eq!(val("Not 5"), "0");
 }

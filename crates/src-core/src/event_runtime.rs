@@ -12760,12 +12760,6 @@ fn parse_factor(tokens: &[ExprTok], idx: &mut usize) -> Option<f64> {
             *idx += 1;
             parse_factor(tokens, idx)
         }
-        ExprTok::Not => {
-            // `Not x` — 論理否定: x が 0.0 なら 1.0、それ以外は 0.0
-            *idx += 1;
-            let v = parse_factor(tokens, idx)?;
-            Some(if v == 0.0 { 1.0 } else { 0.0 })
-        }
         ExprTok::LParen => {
             *idx += 1;
             let v = parse_logical(tokens, idx)?;
@@ -12821,20 +12815,34 @@ fn parse_comparison(tokens: &[ExprTok], idx: &mut usize) -> Option<f64> {
     Some(left)
 }
 
+/// `Not` 演算子レベル: 比較より緩く、`And`/`Or` より固く束縛する (VB6 / SRC.Sharp 準拠)。
+/// `Not 1 = 2` → `Not (1 = 2)` → `Not 0` → 1。`Not Not x` も許容 (右再帰)。
+/// `Not` が無ければ比較レベルへ素通しする (非 Not 式の挙動は不変)。
+fn parse_not(tokens: &[ExprTok], idx: &mut usize) -> Option<f64> {
+    if matches!(tokens.get(*idx), Some(ExprTok::Not)) {
+        *idx += 1;
+        let v = parse_not(tokens, idx)?;
+        Some(if v == 0.0 { 1.0 } else { 0.0 })
+    } else {
+        parse_comparison(tokens, idx)
+    }
+}
+
 /// 論理演算子レベル: `And` / `Or` (最低優先度)。
 /// 0.0 を false、それ以外を true として短絡評価する。
+/// オペランドは `parse_not` (比較 < Not < And/Or の優先順) を通す。
 fn parse_logical(tokens: &[ExprTok], idx: &mut usize) -> Option<f64> {
-    let mut left = parse_comparison(tokens, idx)?;
+    let mut left = parse_not(tokens, idx)?;
     while *idx < tokens.len() {
         match tokens[*idx] {
             ExprTok::And => {
                 *idx += 1;
-                let r = parse_comparison(tokens, idx)?;
+                let r = parse_not(tokens, idx)?;
                 left = if left != 0.0 && r != 0.0 { 1.0 } else { 0.0 };
             }
             ExprTok::Or => {
                 *idx += 1;
-                let r = parse_comparison(tokens, idx)?;
+                let r = parse_not(tokens, idx)?;
                 left = if left != 0.0 || r != 0.0 { 1.0 } else { 0.0 };
             }
             _ => break,
