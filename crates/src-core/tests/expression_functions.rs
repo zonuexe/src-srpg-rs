@@ -1365,7 +1365,7 @@ fn barrier_reduces_damage_by_half() {
 }
 
 #[test]
-fn afterimage_reduces_hit_chance() {
+fn afterimage_does_not_affect_predict_hit_chance() {
     use src_core::combat;
     use src_core::data::pilot::{Adaption, PilotData, Sex};
     use src_core::data::unit::{Size, UnitData, WeaponData};
@@ -1453,9 +1453,12 @@ fn afterimage_reduces_hit_chance() {
         &[],
         &["分身".to_string()],
     );
-    assert!(afterimage.hit_chance < normal.hit_chance);
-    // Should be reduced by 40 (clamped at 5..=95)
-    assert!(normal.hit_chance - afterimage.hit_chance <= 40);
+    // 分身 は (B) で実行段の完全回避ロール (App::check_dodge_feature) へ移行したため、
+    // 予測 (hit%) には影響しない (SRC の HitProbability も 分身 を畳み込まない)。
+    assert_eq!(
+        afterimage.hit_chance, normal.hit_chance,
+        "分身 は予測 hit% を変えない (実行段の回避ロールへ移行)"
+    );
 }
 
 #[test]

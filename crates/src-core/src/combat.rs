@@ -340,26 +340,6 @@ pub fn predict_with_status(
 /// シナリオ sp.txt から ([`crate::db::GameDatabase::sp_effect_level`])、または既定テーブル
 /// ([`default_damage_spirit_levels`]) で解決して渡す。鉄壁 (被ダメージ低下Lv7.5→÷4) /
 /// 不屈 (被ダメージ低下Lv9→×0.1) もこの down-mod 経由で処理する (旧来のハードコードを置換)。
-/// `def_statuses` から `<base>Lv<n>` 形式の回避系特殊能力レベルを取り出す。
-/// `push_combat_feature_statuses` (app.rs) が特徴名 (例 `超回避Lv4`) をそのまま status へ
-/// 積むため、ここで Lv を解析する。Lv 省略は 1、該当無しは None。
-fn evasion_status_level(statuses: &[String], base: &str) -> Option<i32> {
-    statuses.iter().find_map(|s| {
-        let rest = s.trim().strip_prefix(base)?;
-        if rest.is_empty() {
-            return Some(1);
-        }
-        let after = rest
-            .strip_prefix("Lv")
-            .or_else(|| rest.strip_prefix("LV"))
-            .or_else(|| rest.strip_prefix("lv"))
-            .or_else(|| rest.strip_prefix("Ｌｖ"))
-            .or_else(|| rest.strip_prefix("ＬＶ"))?;
-        let digits: String = after.chars().filter(char::is_ascii_digit).collect();
-        Some(digits.parse().unwrap_or(1))
-    })
-}
-
 #[allow(clippy::too_many_arguments)]
 pub fn predict_with_status_terrain(
     atk_pilot: &PilotData,
@@ -397,20 +377,11 @@ pub fn predict_with_status_terrain(
     if has(def_statuses, "毒") {
         hit_adj += 10;
     }
-    // 分身: 攻撃側 `直撃` で無効化 (回避系特殊能力の無効化)。
-    if has(def_statuses, "分身") && !has(atk_statuses, "直撃") {
-        hit_adj -= 40;
-    }
+    // 分身 / 超回避 は (B) で**実行段の完全回避ロール** (App::check_dodge_feature) へ移行した
+    // ため、予測 (hit%) には反映しない (SRC の HitProbability も畳み込まない＝CheckDodgeFeature
+    // は別経路)。ステルス は依然 hit% 低下 (-30) として扱う。
     if has(def_statuses, "ステルス") {
         hit_adj -= 30;
-    }
-    // 超回避Lv* (回避系特殊能力.md): SRC は 10×Lv% で完全回避するが、本予測モデル
-    // (単一 hit%) では命中ペナルティ -(10×Lv) で近似する ((A) 段階・将来 DefenseMode で
-    // 確率ロール化)。分身と同じ回避系なので攻撃側 `直撃` で無効化。
-    if !has(atk_statuses, "直撃") {
-        if let Some(lv) = evasion_status_level(def_statuses, "超回避") {
-            hit_adj -= 10 * lv;
-        }
     }
 
     // 地形命中補正: SRC `Unit.cls:6295` / C# `(100 - HitMod)/100`。命中修正 (回避修正) は
@@ -2611,41 +2582,9 @@ mod tests {
     }
 
     #[test]
-    fn status_chokugeki_nullifies_bunshin_and_barrier() {
-        // 分身: 命中 -40 → 直撃 で無効化されベース命中に戻る。
-        let bunshin = predict_with_status(
-            &p(0, 0, 100),
-            &u(0, vec![]),
-            &weapon(500, 1, 1, 0),
-            &p(0, 0, 0),
-            &u(0, vec![]),
-            0,
-            0,
-            100,
-            100,
-            &[],
-            &["分身".to_string()],
-        );
-        let chokugeki = predict_with_status(
-            &p(0, 0, 100),
-            &u(0, vec![]),
-            &weapon(500, 1, 1, 0),
-            &p(0, 0, 0),
-            &u(0, vec![]),
-            0,
-            0,
-            100,
-            100,
-            &["直撃".to_string()],
-            &["分身".to_string()],
-        );
-        assert!(
-            chokugeki.hit_chance > bunshin.hit_chance,
-            "直撃で分身の命中低下が無効: {} > {}",
-            chokugeki.hit_chance,
-            bunshin.hit_chance
-        );
+    fn status_chokugeki_nullifies_barrier() {
         // バリア: ダメージ 1/2 → 直撃 で無効化。
+        // (分身 は (B) で実行段ロール化したため予測テストの対象外。)
         let barrier = predict_with_status(
             &p(0, 0, 100),
             &u(0, vec![]),
@@ -2679,33 +2618,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn status_chougaihi_reduces_hit_by_ten_times_level() {
-        // 超回避Lv* ((A) 近似): 命中 -(10×Lv)。直撃 で無効化。
-        let mk = |def_st: &[String], atk_st: &[String]| {
-            predict_with_status(
-                &p(200, 0, 100),
-                &u(0, vec![]),
-                &weapon(500, 1, 1, 0),
-                &p(0, 0, 0),
-                &u(0, vec![]),
-                0,
-                0,
-                100,
-                100,
-                atk_st,
-                def_st,
-            )
-            .hit_chance
-        };
-        let base = mk(&[], &[]);
-        let lv1 = mk(&["超回避Lv1".to_string()], &[]);
-        let lv2 = mk(&["超回避Lv2".to_string()], &[]);
-        assert_eq!(base - lv1, 10, "超回避Lv1 で命中 -10");
-        assert_eq!(base - lv2, 20, "超回避Lv2 で命中 -20");
-        let chokugeki = mk(&["超回避Lv2".to_string()], &["直撃".to_string()]);
-        assert_eq!(chokugeki, base, "直撃 で 超回避 が無効化される");
-    }
+    // 注: 分身/超回避 は (B) で実行段の完全回避ロール (App::check_dodge_feature) へ移行し、
+    // 予測 (hit%) には反映しないため、旧 status_chougaihi_reduces_hit_by_ten_times_level
+    // (予測の命中ペナルティ検証) は撤去した。回避ロールは app 側のテストで検証する。
 
     #[test]
     fn status_paralysis_boosts_hit_and_damage() {

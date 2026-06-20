@@ -586,11 +586,10 @@ fn push_combat_feature_statuses(unit: &crate::UnitInstance, statuses: &mut Vec<S
             continue;
         }
         let name = f.name.as_str();
-        if matches!(name, "分身" | "ステルス") {
-            statuses.push(f.name.clone());
-        } else if base_match(name, "超回避") {
-            // 超回避Lv* (回避系): Lv を combat 側で解析するため特徴名をそのまま積む
-            // (predict_with_status_terrain が `-(10×Lv)` の命中ペナルティへ近似)。
+        if name == "ステルス" {
+            // ステルス は予測の hit% 低下 (-30) として扱う。
+            // 分身/超回避 は (B) で実行段の完全回避ロール (check_dodge_feature) へ移行した
+            // ため、ここでは積まない (active_features から直接判定する)。
             statuses.push(f.name.clone());
         } else if base_match(name, "盾")
             || name.contains("バリアシールド")
@@ -3423,7 +3422,9 @@ impl App {
         // 命中ロールと同一なので、命中可否・後続の乱数列 (反撃/援護) は一切変わらない。
         let r = self.next_u32();
         let roll = (r % 100) as i32;
-        let hit = roll < effective_hit;
+        // 回避系特殊能力 (B): 命中するはずでも 分身/超回避 で完全回避され得る。
+        let hit =
+            roll < effective_hit && !self.check_dodge_feature(def_idx, atk_idx, &weapon.class);
         // クリティカル判定 (命中時のみ)。技能補正 (超反応/超能力/底力) を base へ加算した後、
         // 防御選択でクリ率が半減する (SRC `戦闘システム詳細.md`「防御」: クリティカル率 ×0.5)。
         let crit_base = preview.critical_chance + self.crit_skill_bonus(atk_idx, def_idx);
@@ -4017,6 +4018,55 @@ impl App {
         (dmg - strength).max(0)
     }
 
+    /// 回避系特殊能力 (防御能力 (B)・SRC.NET `Unit.cs::CheckDodgeFeature` 準拠): 命中する
+    /// はずの攻撃を完全回避するか判定する (`true` なら攻撃はミス扱い)。
+    /// 分身 は気力 130 以上で 50% (`Dice(2)`)、超回避Lv「n」 は `n >= Dice(10)` ≈ 10n%。
+    /// 攻撃側 `直撃` / 防御側の行動不能系状態では発動しない。命中ロールが当たった
+    /// (would-hit) ときだけ呼ぶこと (SRC 同様・無駄な乱数消費を避ける)。
+    /// 予測 (プレビュー) には反映しない＝SRC の HitProbability も 分身/超回避 を畳み込まない。
+    fn check_dodge_feature(
+        &mut self,
+        def_idx: usize,
+        attacker_idx: usize,
+        _weapon_class: &str,
+    ) -> bool {
+        // 直撃 (攻撃側) で回避無効。
+        if self.database.unit_instances[attacker_idx].has_condition("直撃") {
+            return false;
+        }
+        let (morale, has_bunshin, chougaihi_lv) = {
+            let u = &self.database.unit_instances[def_idx];
+            // 能動防御は行動可能でないと発動しない。
+            if u.has_condition("行動不能")
+                || u.has_condition("麻痺")
+                || u.has_condition("石化")
+                || u.has_condition("凍結")
+                || u.has_condition("睡眠")
+            {
+                return false;
+            }
+            (
+                u.morale,
+                crate::feature::has_feature(&u.active_features, "分身"),
+                crate::feature::feature_level(&u.active_features, "超回避").unwrap_or(0),
+            )
+        };
+        // 分身: 気力130以上で 50% (Dice(2))。
+        if has_bunshin && morale >= 130 && (self.next_u32() % 2) == 0 {
+            self.push_message("分身: 攻撃を回避！".to_string());
+            return true;
+        }
+        // 超回避Lv*: Lv >= Dice(10) ≈ 10×Lv%。
+        if chougaihi_lv > 0 {
+            let roll = (self.next_u32() % 10) as i32 + 1;
+            if chougaihi_lv >= roll {
+                self.push_message("超回避: 攻撃を回避！".to_string());
+                return true;
+            }
+        }
+        false
+    }
+
     /// 被弾して生存した `target_idx` に対し `損傷率 <unit> <pct>:` 閾値イベントを
     /// 発火する。`old_dmg` はこの被弾前の累積ダメージ。撃破された (除去済み) 場合は
     /// 呼ばない。通常攻撃・援護攻撃・援護防御・反撃の被弾生存経路で共通に使う。
@@ -4148,7 +4198,9 @@ impl App {
         );
         let preview = preview.apply_scatter(&weapon.class, sup_def_dist);
         let roll = (self.next_u32() % 100) as i32;
-        let hit = roll < preview.hit_chance;
+        // 回避系特殊能力 (B): 援護攻撃も 分身/超回避 で完全回避され得る。
+        let hit =
+            roll < preview.hit_chance && !self.check_dodge_feature(def_idx, sup_idx, &weapon.class);
         // SP コスト消費 (= サポートアタック回数を 1 減らす)
         self.database.unit_instances[sup_idx].support_attack_remaining -= 1;
         if hit {
@@ -4459,7 +4511,10 @@ impl App {
         // 反撃武器の EN・残弾消費 (撃破前=index 失効前に消費)。
         self.consume_weapon_resources(def_idx, weapon_num - 1);
         let roll = (self.next_u32() % 100) as i32;
-        let hit = roll < preview.hit_chance;
+        // 回避系特殊能力 (B): 反撃を受ける側 (atk_idx) が 分身/超回避 で完全回避し得る
+        // (反撃の攻撃側は def_idx)。
+        let hit =
+            roll < preview.hit_chance && !self.check_dodge_feature(atk_idx, def_idx, &weapon.class);
         let msg = if hit {
             // 防御特性 (耐性÷2 / 無効化0 / 吸収=回復)。弱点の装甲半減は予測前に適用済み。
             let counter_dmg = self.defense_attribute_damage(atk_idx, &weapon.class, preview.damage);
@@ -11988,43 +12043,34 @@ mod tests {
         );
     }
 
-    /// パーサ修正の波及検証 (combat): 特徴由来の戦闘修正特殊能力 (分身/ステルス) が
-    /// `push_combat_feature_statuses` で condition 由来 status に合流すること。これにより
-    /// `predict_*` の命中判定 (分身=命中-40 等) にユニットデータの特殊能力が反映される。
-    /// (修正前は combat が conditions のみ参照し、特徴 分身/ステルス は戦闘で死んでいた。)
+    /// `push_combat_feature_statuses` で特徴由来の `ステルス` が予測の hit% 低下 status に
+    /// 合流すること。`分身`/`超回避` は (B) で実行段の回避ロールへ移行したため**合流しない**
+    /// (check_dodge_feature が active_features を直接読む)。
     #[test]
-    fn combat_feature_statuses_merges_active_defense_features() {
+    fn combat_feature_statuses_merges_stealth_only() {
         use crate::feature::ActiveFeature;
         let mut u = crate::UnitInstance::new("X", "P", crate::Party::Enemy, 0, 0);
         u.active_features = vec![
-            ActiveFeature::new("分身", ""),
-            // 戦闘 status 修正ではない特徴 → 合流しない。
-            ActiveFeature::new("水上移動", ""),
-            // 無効化された特徴 → 合流しない。
-            ActiveFeature {
-                name: "ステルス".into(),
-                value: String::new(),
-                is_active: false,
-            },
+            ActiveFeature::new("ステルス", ""),  // → status
+            ActiveFeature::new("分身", ""),      // (B) 回避ロール → 合流しない
+            ActiveFeature::new("超回避Lv4", ""), // (B) 回避ロール → 合流しない
+            ActiveFeature::new("水上移動", ""),  // 非戦闘 → 合流しない
         ];
         let mut s = vec!["集中".to_string()]; // 既存の condition 由来 status
         push_combat_feature_statuses(&u, &mut s);
         assert!(
-            s.contains(&"分身".to_string()),
-            "有効な 分身 特徴は戦闘 status に合流するはず"
+            s.contains(&"ステルス".to_string()),
+            "有効な ステルス 特徴は status に合流するはず"
+        );
+        assert!(
+            !s.iter().any(|x| x == "分身" || x.contains("超回避")),
+            "分身/超回避 は (B) 回避ロールへ移行し status には合流しない: {s:?}"
         );
         assert!(
             !s.contains(&"水上移動".to_string()),
-            "非戦闘特徴 (水上移動) は合流しない"
+            "非戦闘特徴は合流しない"
         );
-        assert!(
-            !s.contains(&"ステルス".to_string()),
-            "無効化された特徴は合流しない"
-        );
-        assert!(
-            s.contains(&"集中".to_string()),
-            "既存 condition 由来 status は保持される"
-        );
+        assert!(s.contains(&"集中".to_string()), "既存 status は保持");
     }
 
     /// バリア / バリアLv* は (B) の実行段吸収 (apply_barrier_absorb) へ移行したため、
@@ -12047,9 +12093,9 @@ mod tests {
         );
     }
 
-    /// (A) フィールド系/バリアシールド はまとめて `バリア` status (÷2 近似) に合流し、
-    /// 超回避Lv* は Lv 解析のため特徴名のまま積まれる。**シールド系 (アクティブシールド 等) は
-    /// (B) で実行段ロールするため (A) の ÷2 には乗せない**。`バリア中和` は除外。
+    /// (A) フィールド系/バリアシールド はまとめて `バリア` status (÷2 近似) に合流する。
+    /// **シールド系 (アクティブシールド) は (B) 実行段ロール**、**超回避Lv* は (B) 回避ロール**、
+    /// **バリア中和 は攻撃属性** なので、いずれも (A) の ÷2 合流には乗らない。
     #[test]
     fn combat_feature_statuses_merges_shield_field_and_chougaihi() {
         use crate::feature::ActiveFeature;
@@ -12058,7 +12104,7 @@ mod tests {
             ActiveFeature::new("プロテクト・フィールド", ""), // → バリア
             ActiveFeature::new("バリアシールドLv3", ""),      // → バリア (バリアシールド)
             ActiveFeature::new("アクティブシールド", ""),     // シールド系 → (B)・(A) 除外
-            ActiveFeature::new("超回避Lv4", ""),              // → 名前のまま
+            ActiveFeature::new("超回避Lv4", ""),              // (B) 回避ロール → (A) 除外
             ActiveFeature::new("バリア中和", ""),             // 攻撃属性 → 除外
         ];
         let mut s = Vec::new();
@@ -12066,15 +12112,11 @@ mod tests {
         assert_eq!(
             s.iter().filter(|x| x.as_str() == "バリア").count(),
             2,
-            "プロテクト・フィールド/バリアシールド の 2 つのみ バリア に合流 (シールド系は除外)"
+            "プロテクト・フィールド/バリアシールド の 2 つのみ バリア に合流"
         );
         assert!(
-            s.contains(&"超回避Lv4".to_string()),
-            "超回避Lv4 は Lv 解析のため特徴名のまま積まれる"
-        );
-        assert!(
-            !s.iter().any(|x| x.contains("中和")),
-            "バリア中和 は合流しない"
+            !s.iter().any(|x| x.contains("超回避") || x.contains("中和")),
+            "超回避/バリア中和 は (A) 合流に乗らない: {s:?}"
         );
     }
 
@@ -14251,6 +14293,56 @@ mod tests {
             app.apply_barrier_absorb(def_idx, atk_idx, "火", 1500),
             0,
             "対象属性 火 のバリアは 火 武器を吸収する"
+        );
+    }
+
+    /// (B) 回避系特殊能力 (分身/超回避) の完全回避ロール check_dodge_feature。
+    /// 超回避Lv10 は `Lv>=Dice(10)` で必発。直撃/行動不能/気力130未満で不発。
+    #[test]
+    fn check_dodge_feature_chougaihi_and_bunshin() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Atk", 2, 6);
+        let atk = first_player_uid(&app);
+        let atk = app.database().idx_by_uid(&atk).unwrap();
+        let t = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Def",
+            "DP",
+            crate::Party::Enemy,
+            3,
+            6,
+        ));
+        let d = app.database().idx_by_uid(&t).unwrap();
+
+        // 超回避Lv10 → Lv>=Dice(10) で必ず回避。
+        app.database_mut().unit_instances[d]
+            .active_features
+            .push(crate::feature::ActiveFeature::new("超回避Lv10", ""));
+        assert!(
+            app.check_dodge_feature(d, atk, "実"),
+            "超回避Lv10 は必ず回避するはず"
+        );
+        // 直撃 (攻撃側) で回避無効。
+        app.database_mut().unit_instances[atk].add_condition(crate::Condition::new("直撃", -1));
+        assert!(!app.check_dodge_feature(d, atk, "実"), "直撃 で回避は無効");
+        app.database_mut().unit_instances[atk].remove_condition("直撃");
+        // 行動不能系 (麻痺) で能動回避不可。
+        app.database_mut().unit_instances[d].add_condition(crate::Condition::new("麻痺", 3));
+        assert!(
+            !app.check_dodge_feature(d, atk, "実"),
+            "麻痺 (行動不能) で回避不可"
+        );
+        app.database_mut().unit_instances[d].remove_condition("麻痺");
+
+        // 分身は気力130未満では発動しない (既定気力100)。
+        app.database_mut().unit_instances[d].active_features.clear();
+        app.database_mut().unit_instances[d]
+            .active_features
+            .push(crate::feature::ActiveFeature::new("分身", ""));
+        assert_eq!(app.database().unit_instances[d].morale, 100);
+        assert!(
+            !app.check_dodge_feature(d, atk, "実"),
+            "分身は気力130未満で不発"
         );
     }
 
