@@ -10,7 +10,7 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 ## 現在地（2026-06-20）— 公式サンプルシナリオ互換 + 防御能力の方針決定
 
 **ブランチ**: `feat/sample-scenario-smoke`（`master` ではなくフィーチャーブランチ。push 未指示）。
-**テスト**: `cargo test -p src-core` 全緑（約 2016 件）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。
+**テスト**: `cargo test -p src-core` 全緑（約 2017 件）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。
 **主題**: 非再配布パッケージ `srcall-2_2_33-111106/サンプルシナリオ`（公式サンプル）を Rust 移植で
 動作させる。テストは実フォルダを **参照のみ**（無ければ skip・本文 embed なし・`srcall-*/` は `.gitignore`）。
 
@@ -84,10 +84,17 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
   過少ダメージだった実バグ。`combat::pierce_armor` を新設し `predict_with_status_terrain` の def_power
   算出（装甲×気力×Defense×適応 の前）に配線。テスト `pierce_weapon_reduces_armor_and_increases_damage`。
 - **残**: `貫通攻撃` SP（攻撃側 condition も装甲半減）は未対応（サンプル未使用）。防御特性の核は VB6 と一致を確認。
-- **★ 監査で判明した次の有力タスク（sample-used・未実装のパイロット特殊能力）**: **再攻撃**（大鳥霞=再攻撃Lv1-3。
-  VB6 `Unit.cls:10239-10270`＝主攻撃後 `slevel=(直感>=相手直感?2*Lv:Lv); slevel>=Dice(32)` で攻撃をもう一度＝
-  `attack_resolve_and_run` を再攻撃ループ化する中規模配線が要る）／**カウンター**（ロイ=Lv1-4・反撃で先制）／
-  **連続行動・連続ターゲット**。VB6 機構は memory [[project_sample_scenario_goal]] に確定記録済。
+- **残**: `貫通攻撃` SP は未対応（サンプル未使用）。
+
+**★ 追加（2026-06-21）= 再攻撃（パイロット特殊能力）を実装**:
+- 大鳥霞（龍神機）が `再攻撃Lv1-3` を所持。VB6 `Unit.cls:10239-10270` 準拠で、主攻撃後に
+  `slevel=(直感>=相手直感?2*Lv:Lv)` が `Dice(32)` 以上なら同じ攻撃をもう一度（武器 `再Ln` 属性は
+  `n>=Dice(16)`、SP効果「再攻撃」condition は無条件）。`attack_resolve_and_run` を `reattack_in_progress`
+  フラグ付きで**再帰**させ、再攻撃側は使用イベント再発火と3回目の再攻撃を抑止（VB6 `begin` ラベルは
+  使用イベントより後ろ＝再攻撃で 使用 は再発火しないが 攻撃/反撃 は再交戦する）。能力非保持ユニットは
+  乱数非消費＝既存 RNG 列不変。テスト `reattack_skill_strikes_twice`。
+- **残（次の sample-used 特殊能力）**: **カウンター**（ロイ=Lv1-4・反撃で先制）／**連続行動・連続ターゲット**。
+  VB6 機構は memory [[project_sample_scenario_goal]] に記録。
 
 **★ 追加（2026-06-20・続き）= マップ攻撃の撃破を `マップ攻撃破壊` で発火（原典忠実・ユーザ決定）**:
 - **VB6 原典ソース発見**: `srcall-2_2_33-111106/Source/Src/`（C# より上流の ground truth）。`Event.bas:1744` で

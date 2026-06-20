@@ -918,7 +918,7 @@ pub fn boss_mobility_boost(rank: i32) -> i32 {
 /// 武器 class 文字列から `<attr>L<number>` 形式のレベル指定を読む
 /// (SRC.NET `Unit.WeaponLevel` 準拠)。例: `class="ＲL3"`, `attr='Ｒ'` → `Some(3.0)`。
 /// `<attr>L` が無ければ `None` (= レベル未指定)。数値部は `0-9 . -` を読む。
-fn weapon_class_level(class: &str, attr: char) -> Option<f64> {
+pub(crate) fn weapon_class_level(class: &str, attr: char) -> Option<f64> {
     let needle = format!("{attr}L");
     let start = class.find(&needle)? + needle.len();
     let num: String = class[start..]

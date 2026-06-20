@@ -288,6 +288,10 @@ pub struct App {
     /// では従来どおり同期一括処理する。transient (フロントが起動時に true へ設定)。
     #[serde(skip)]
     animate_ai: bool,
+    /// 再攻撃 (`attack_resolve_and_run` の再帰呼び出し) 中フラグ。transient。
+    /// true の呼び出しは使用イベント再発火と 3回目の再攻撃を抑止する。
+    #[serde(skip)]
+    reattack_in_progress: bool,
     /// 逐次 AI 実行の進行状態 (animate_ai=true 時のみ)。transient。
     #[serde(skip)]
     ai_runner: Option<AiRunner>,
@@ -647,6 +651,7 @@ impl App {
             talk_pages_speaker: String::new(),
             wait_clock: 0.0,
             animate_ai: false,
+            reattack_in_progress: false,
             ai_runner: None,
             animate_battle: false,
             battle_anim: None,
@@ -3163,6 +3168,9 @@ impl App {
         post_move: bool,
         def_mode: &str,
     ) -> bool {
+        // 再攻撃 (VB6 begin ループ) の再帰呼び出しか。`reattack_in_progress` で受け渡し、
+        // この呼び出し内では使用イベント再発火と 3回目の再攻撃を抑止する。
+        let is_reattack = self.reattack_in_progress;
         if self.scene != Scene::MapView {
             return false;
         }
@@ -3302,7 +3310,10 @@ impl App {
             self.database.unit_instances[atk_idx].charged = false;
         }
         // SRC `使用 <unit> <device>:` (`使用イベント.md`) ─ `攻撃イベント` の前に発火。
-        crate::event_runtime::fire_use_event_labels(self, atk_idx, &weapon.name);
+        // 再攻撃 (VB6 `begin` ラベルは使用イベントより後ろ) では再発火しない。
+        if !is_reattack {
+            crate::event_runtime::fire_use_event_labels(self, atk_idx, &weapon.name);
+        }
 
         // 戦闘イベント系システム変数を設定 (`変数.md`: 対象ユニット使用武器 等)。
         // 攻撃イベント発火前に攻撃側武器を登録し、相手武器は後で更新する。
@@ -3817,8 +3828,75 @@ impl App {
         // ラベル発火後、双方が生存している場合に限り発火。
         crate::event_runtime::fire_after_attack_event_labels(self, &after_atk, &after_def);
 
+        // 再攻撃 (VB6 `Unit.cls:10239-10270`): 主攻撃側が 再攻撃 技能 / 再属性 を持ち、
+        // 防御側が生存していれば確率で同じ攻撃をもう一度実行する (1回限り)。武器の EN/弾が
+        // 尽きていれば 2回目の武器選択で自然に不発になる。`reattack_in_progress` で使用
+        // イベント再発火と 3回目の再攻撃を抑止する。
+        if !is_reattack && !defender_killed {
+            let def_here = self.database.unit_instances.iter().any(|u| {
+                !u.off_map && u.x == def_inst.x && u.y == def_inst.y && u.party == def_inst.party
+            });
+            if let (Some(ai), true) = (self.database.idx_by_uid(&atk_uid), def_here) {
+                if self.rolls_reattack(ai, &atk_pilot, &def_pilot, &weapon) {
+                    self.push_message(format!("{} の再攻撃！", atk_pilot.nickname));
+                    self.map_cursor = Some((
+                        self.database.unit_instances[ai].x,
+                        self.database.unit_instances[ai].y,
+                    ));
+                    self.reattack_in_progress = true;
+                    self.attack_resolve_and_run(
+                        Some((def_inst.x, def_inst.y)),
+                        post_move,
+                        def_mode,
+                    );
+                    self.reattack_in_progress = false;
+                }
+            }
+        }
+
         self.check_victory();
         true
+    }
+
+    /// 再攻撃 (VB6 `Unit.cls:10251-10270`) の発動判定。攻撃側が 再攻撃 技能を持てば
+    /// `slevel = (直感 >= 相手直感 ? 2*Lv : Lv)` が `Dice(32)` 以上で発動。武器 `再Ln`
+    /// 属性は `n` (レベル無しは 1) が `Dice(16)` 以上で発動。SP効果「再攻撃」condition は
+    /// 無条件発動。能力を持たない攻撃側では乱数を消費しない (既存 RNG 列を保つ)。
+    fn rolls_reattack(
+        &mut self,
+        atk_idx: usize,
+        atk_pilot: &crate::data::pilot::PilotData,
+        def_pilot: &crate::data::pilot::PilotData,
+        weapon: &crate::data::unit::WeaponData,
+    ) -> bool {
+        // SP効果「再攻撃」: 無条件で発動 (SRC IsUnderSpecialPowerEffect("再攻撃"))。
+        if self.database.unit_instances[atk_idx].has_condition("再攻撃") {
+            return true;
+        }
+        // 再攻撃 技能。
+        let lv = self.unit_pilot_skill_level(atk_idx, "再攻撃");
+        if lv > 0 {
+            let slevel = if atk_pilot.intuition >= def_pilot.intuition {
+                2 * lv
+            } else {
+                lv
+            };
+            let dice = (self.next_u32() % 32) as i32 + 1; // 1..=32
+            if slevel >= dice {
+                return true;
+            }
+        }
+        // 再 武器属性 (`再Ln`、レベル無しは 1)。
+        if weapon.class.contains('再') {
+            let n = crate::db::weapon_class_level(&weapon.class, '再')
+                .map(|f| f as i32)
+                .unwrap_or(1);
+            let dice = (self.next_u32() % 16) as i32 + 1; // 1..=16
+            if n >= dice {
+                return true;
+            }
+        }
+        false
     }
 
     /// `animation.txt` から戦闘アニメサブルーチンを解決し、script_library に**実在する**
@@ -17489,6 +17567,47 @@ mod tests {
             cond.unwrap().data,
             ally,
             "みがわり の身代わりが選んだ味方 Ally でない"
+        );
+    }
+
+    /// 再攻撃 (VB6 `Unit.cls:10239`): 再攻撃 技能を持つ攻撃側は確率で2回攻撃する。高Lv＋
+    /// 直感同値で `slevel=2*Lv` が `Dice(32)` を必ず上回り、防御側は 2 ヒット分被弾する。
+    #[test]
+    fn reattack_skill_strikes_twice() {
+        fn run(with_reattack: bool) -> i64 {
+            let mut app = App::new();
+            enter_mapview_with_demo_map(&mut app);
+            place_player_unit(&mut app, "Hero", 2, 6);
+            add_weapon(&mut app, "Hero", 20, 3); // 低威力 (2ヒットでも防御側生存)
+            place_player_unit(&mut app, "FoeData", 9, 9);
+            let foe = spawn_enemy(&mut app, "FoeData", 3, 6); // 武器無し=反撃しない
+            app.set_stage_state(crate::stage::StageState::Battle);
+            if with_reattack {
+                // 攻撃側パイロット "PILOT" (pilot_by_name は先頭を返す) に 再攻撃Lv50 を付与。
+                if let Some(pd) = app
+                    .database_mut()
+                    .pilots
+                    .iter_mut()
+                    .find(|p| p.name == "PILOT")
+                {
+                    pd.features.push(("再攻撃Lv50".into(), String::new()));
+                }
+            }
+            click_tile(&mut app, 2, 6);
+            let ai = attack_item_index(&app);
+            click_menu_item(&mut app, ai);
+            click_tile(&mut app, 3, 6);
+            app.database()
+                .unit_by_uid(&foe)
+                .map(|u| u.damage)
+                .unwrap_or(0)
+        }
+        let base = run(false);
+        let twice = run(true);
+        assert!(base > 0, "baseline 単発攻撃が当たっていない (dmg={base})");
+        assert!(
+            twice >= base * 2,
+            "再攻撃で2ヒット分にならない: 単発 {base} vs 再攻撃 {twice}"
         );
     }
 
