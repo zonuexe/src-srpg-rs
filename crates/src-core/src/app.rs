@@ -591,16 +591,12 @@ fn push_combat_feature_statuses(unit: &crate::UnitInstance, statuses: &mut Vec<S
             // 分身/超回避 は (B) で実行段の完全回避ロール (check_dodge_feature) へ移行した
             // ため、ここでは積まない (active_features から直接判定する)。
             statuses.push(f.name.clone());
-        } else if base_match(name, "盾")
-            || name.contains("バリアシールド")
-            || name.contains("アクティブフィールド")
-        {
-            // (A) バリアシールド (非標準名)・アクティブフィールド・盾 は、まとめて既存の
-            // `バリア` status (÷2 近似) に合流させる。
-            // **除外**: ① シールド系 → 実行段 apply_shield_defense ((B))。② バリア/バリアLv*・
-            // フィールド/フィールドLv* → 確定吸収 apply_barrier_absorb ((B))。③ 単独の
-            // `プロテクト・フィールド` は値が `解説…` のヘルプ文＝非機能 (どの分岐にも該当せず inert)。
-            // `バリア中和` は攻撃属性で除外される。
+        } else if base_match(name, "盾") || name.contains("バリアシールド") {
+            // (A) 盾Lv*・バリアシールド(非標準名) のみ既存の `バリア` status (÷2 近似) に合流。
+            // **(B) へ移行済で除外**: シールド系→apply_shield_defense / バリア・フィールド系→
+            // apply_barrier_absorb / アクティブフィールド→apply_active_field_absorb (確率) /
+            // 分身・超回避→check_dodge_feature。単独 `プロテクト・フィールド` は値 `解説…` の
+            // ヘルプ文＝非機能 (どの分岐にも該当せず inert)。`バリア中和` は攻撃属性で除外。
             statuses.push("バリア".to_string());
         }
     }
@@ -3519,6 +3515,9 @@ impl App {
                     .effective_max_hp(&self.database.unit_instances[g_idx]);
                 // バリア吸収 (B): guard 役が バリアLv* を持てば 1000×Lv を吸収。
                 let guard_dmg = self.apply_barrier_absorb(g_idx, atk_idx, &weapon.class, guard_dmg);
+                // アクティブフィールド (B): 確率発動の 500×Lv 吸収。
+                let guard_dmg =
+                    self.apply_active_field_absorb(g_idx, atk_idx, &weapon.class, guard_dmg);
                 // シールド防御 (B): guard 役が Ｓ防御+シールドを持てば被ダメージ半減。
                 let guard_dmg = self.apply_shield_defense(g_idx, &weapon.class, guard_dmg);
                 // 不死身: 援護防御で身代わりになった guard も撃破させない。
@@ -3571,6 +3570,9 @@ impl App {
                 // バリア吸収 (B): 防御側が バリアLv* を持てば 1000×Lv を吸収。
                 let applied_damage =
                     self.apply_barrier_absorb(def_idx, atk_idx, &weapon.class, applied_damage);
+                // アクティブフィールド (B): 確率発動の 500×Lv 吸収。
+                let applied_damage =
+                    self.apply_active_field_absorb(def_idx, atk_idx, &weapon.class, applied_damage);
                 // シールド防御 (B): 防御側が Ｓ防御+シールドを持てば被ダメージ半減。
                 let applied_damage =
                     self.apply_shield_defense(def_idx, &weapon.class, applied_damage);
@@ -4033,6 +4035,57 @@ impl App {
         (dmg - strength).max(0)
     }
 
+    /// アクティブフィールド吸収 (防御能力 (B)・防御系特殊能力.md): フィールドの**確率発動版**。
+    /// 防御側が `アクティブフィールドLv*` + Ｓ防御技能を持ち、`Ｓ防御Lv >= Dice(16)` で発動し
+    /// 対象属性に該当する攻撃の `500×Lv` を吸収する。攻撃側 `直撃` / 防御側 `バリア中和` で無効。
+    /// 確率発動なので予測には乗せず実行段で適用する (`&mut self`)。
+    fn apply_active_field_absorb(
+        &mut self,
+        def_idx: usize,
+        attacker_idx: usize,
+        weapon_class: &str,
+        dmg: i64,
+    ) -> i64 {
+        if dmg <= 0 || self.unit_pilot_skill_level(def_idx, "Ｓ防御") <= 0 {
+            return dmg;
+        }
+        if self.database.unit_instances[attacker_idx].has_condition("直撃")
+            || self.database.unit_instances[def_idx].has_condition("バリア中和")
+        {
+            return dmg;
+        }
+        // アクティブフィールドの吸収強度 (500×Lv、対象属性一致、解説エントリ除外)。複数は最大。
+        let strength = {
+            let mut best = 0i64;
+            for f in &self.database.unit_instances[def_idx].active_features {
+                if !f.is_active || f.value.trim_start().starts_with("解説") {
+                    continue;
+                }
+                if let Some(lv) =
+                    crate::feature::feature_level(std::slice::from_ref(f), "アクティブフィールド")
+                {
+                    let target = f.value.split_whitespace().nth(1).unwrap_or("");
+                    if target.is_empty() || Self::defense_attr_matches(weapon_class, target) {
+                        best = best.max(500 * i64::from(lv));
+                    }
+                }
+            }
+            best
+        };
+        if strength <= 0 {
+            return dmg;
+        }
+        // Ｓ防御Lv >= Dice(16) で発動。
+        let sdef = self.unit_pilot_skill_level(def_idx, "Ｓ防御");
+        let roll = (self.next_u32() % 16) as i32 + 1;
+        if sdef < roll {
+            return dmg;
+        }
+        let reduced = (dmg - strength).max(0);
+        self.push_message(format!("アクティブフィールド: {dmg} → {reduced} ダメージ"));
+        reduced
+    }
+
     /// ＥＣＭ エリア補正 (防御能力 (B)・SRC.NET `Unit.cs:10419`): 防御側 `def_idx` の周囲
     /// (中心からマンハッタン 3 以内かつ各軸 ±2 マス) を走査し、**防御側の味方**の最大
     /// ＥＣＭ Lv (ecm) と **攻撃側の味方**の最大 ＥＣＭ Lv (eccm) を求め、命中率に掛ける
@@ -4264,6 +4317,8 @@ impl App {
             let dmg = self.defense_attribute_damage(def_idx, &weapon.class, base);
             // バリア吸収 (B): 防御側が バリアLv* を持てば 1000×Lv を吸収。
             let dmg = self.apply_barrier_absorb(def_idx, sup_idx, &weapon.class, dmg);
+            // アクティブフィールド (B): 確率発動の 500×Lv 吸収。
+            let dmg = self.apply_active_field_absorb(def_idx, sup_idx, &weapon.class, dmg);
             // シールド防御 (B): 防御側が Ｓ防御+シールドを持てば被ダメージ半減。
             let dmg = self.apply_shield_defense(def_idx, &weapon.class, dmg);
             // 不死身: 撃破させないよう被ダメージをキャップ。
@@ -4579,6 +4634,9 @@ impl App {
             // (反撃の攻撃側は def_idx)。
             let counter_dmg =
                 self.apply_barrier_absorb(atk_idx, def_idx, &weapon.class, counter_dmg);
+            // アクティブフィールド (B): 確率発動の 500×Lv 吸収。
+            let counter_dmg =
+                self.apply_active_field_absorb(atk_idx, def_idx, &weapon.class, counter_dmg);
             // シールド防御 (B): 反撃を受ける側が Ｓ防御+シールドを持てば被ダメージ半減。
             let counter_dmg = self.apply_shield_defense(atk_idx, &weapon.class, counter_dmg);
             // 不死身: 反撃でも撃破させないよう被ダメージをキャップ。
@@ -12150,33 +12208,28 @@ mod tests {
         );
     }
 
-    /// (A) アクティブフィールド/バリアシールド(非標準名)/盾 はまとめて `バリア` status
-    /// (÷2 近似) に合流する。**シールド系・超回避 は (B) ロール**、**バリア/フィールド は (B)
-    /// 確定吸収**、**単独プロテクト・フィールド(解説)は非機能**、**バリア中和は攻撃属性** なので
-    /// いずれも (A) ÷2 には乗らない。
+    /// (A) ÷2 合流に残るのは バリアシールド(非標準名)/盾 のみ。シールド系・超回避・分身は
+    /// (B) ロール、バリア/フィールド/アクティブフィールド は (B) 吸収、単独プロテクト・
+    /// フィールド(解説)は非機能、バリア中和は攻撃属性 なので (A) には乗らない。
     #[test]
     fn combat_feature_statuses_merges_shield_field_and_chougaihi() {
         use crate::feature::ActiveFeature;
         let mut u = crate::UnitInstance::new("X", "P", crate::Party::Enemy, 0, 0);
         u.active_features = vec![
-            ActiveFeature::new("アクティブフィールドLv3", ""), // → バリア (確率版は後続増分)
-            ActiveFeature::new("バリアシールドLv3", ""),       // → バリア (非標準名)
-            ActiveFeature::new("アクティブシールド", ""),      // シールド系 → (B)・(A) 除外
-            ActiveFeature::new("フィールドLv1", ""),           // (B) 確定吸収 → (A) 除外
-            ActiveFeature::new("超回避Lv4", ""),               // (B) 回避ロール → (A) 除外
+            ActiveFeature::new("バリアシールドLv3", ""), // → バリア (非標準名・(A) 残置)
+            ActiveFeature::new("アクティブフィールドLv3", ""), // (B) 確率吸収 → (A) 除外
+            ActiveFeature::new("アクティブシールド", ""), // シールド系 → (B)・(A) 除外
+            ActiveFeature::new("フィールドLv1", ""),     // (B) 確定吸収 → (A) 除外
+            ActiveFeature::new("超回避Lv4", ""),         // (B) 回避ロール → (A) 除外
             ActiveFeature::new("プロテクト・フィールド", "解説 これはヘルプ文"), // 非機能 → 除外
-            ActiveFeature::new("バリア中和", ""),              // 攻撃属性 → 除外
+            ActiveFeature::new("バリア中和", ""),        // 攻撃属性 → 除外
         ];
         let mut s = Vec::new();
         push_combat_feature_statuses(&u, &mut s);
         assert_eq!(
             s.iter().filter(|x| x.as_str() == "バリア").count(),
-            2,
-            "アクティブフィールド/バリアシールド の 2 つのみ バリア に合流: {s:?}"
-        );
-        assert!(
-            !s.iter().any(|x| x.contains("超回避") || x.contains("中和")),
-            "超回避/バリア中和 は (A) 合流に乗らない: {s:?}"
+            1,
+            "バリアシールド の 1 つのみ (A) ÷2 に合流: {s:?}"
         );
     }
 
@@ -14396,6 +14449,63 @@ mod tests {
             app.apply_barrier_absorb(def_idx, atk_idx, "実", 1900),
             0,
             "フィールド 1000 + バリア 1000 = 2000 吸収"
+        );
+    }
+
+    /// (B) アクティブフィールド: Ｓ防御/16 の確率発動で 500×Lv 吸収。Ｓ防御Lv16 なら必発。
+    /// Ｓ防御技能が無ければ発動しない。
+    #[test]
+    fn active_field_absorbs_when_sdefense_high() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Atk", 2, 6);
+        let atk_idx = first_player_uid(&app);
+        let atk_idx = app.database().idx_by_uid(&atk_idx).unwrap();
+        // PILOT に Ｓ防御Lv16 (必発)。
+        if let Some(pd) = app
+            .database_mut()
+            .pilots
+            .iter_mut()
+            .find(|p| p.name == "PILOT")
+        {
+            pd.features.push(("Ｓ防御Lv16".into(), String::new()));
+        }
+        let target = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Def",
+            "PILOT",
+            crate::Party::Enemy,
+            3,
+            6,
+        ));
+        let def_idx = app.database().idx_by_uid(&target).unwrap();
+        app.database_mut().unit_instances[def_idx]
+            .active_features
+            .push(crate::feature::ActiveFeature::new(
+                "アクティブフィールドLv3",
+                "",
+            )); // 1500 吸収
+                // 1200 < 1500 → 完全吸収 0 (Ｓ防御Lv16 で必発)。
+        assert_eq!(
+            app.apply_active_field_absorb(def_idx, atk_idx, "実", 1200),
+            0
+        );
+
+        // Ｓ防御技能が無い防御側では発動しない。
+        let t2 = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Def2",
+            "NOSKILL",
+            crate::Party::Enemy,
+            4,
+            6,
+        ));
+        let d2 = app.database().idx_by_uid(&t2).unwrap();
+        app.database_mut().unit_instances[d2].active_features.push(
+            crate::feature::ActiveFeature::new("アクティブフィールドLv3", ""),
+        );
+        assert_eq!(
+            app.apply_active_field_absorb(d2, atk_idx, "実", 1200),
+            1200,
+            "Ｓ防御技能なしではアクティブフィールド不発"
         );
     }
 
