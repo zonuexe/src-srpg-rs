@@ -48,6 +48,29 @@ impl CombatPreview {
     }
 }
 
+/// 貫通型攻撃 (武器 class に `貫` / `貫Ln`) による防御側装甲の低減。
+/// SRC 原典 VB6 `Unit.cls:6812-6819`: `貫` (レベル無し) は装甲 1/2、`貫Ln` は
+/// 装甲 ×(10-n)/10 (例: `貫L3` → ×0.7)。`貫` を含まなければ素の装甲のまま。
+/// `is_true_value` ゲートの外で適用される＝予測 (プレビュー) にも反映する。
+pub fn pierce_armor(weapon_class: &str, armor: i64) -> i64 {
+    let Some(idx) = weapon_class.find('貫') else {
+        return armor;
+    };
+    let after = &weapon_class[idx + '貫'.len_utf8()..];
+    if let Some(rest) = after.strip_prefix('L') {
+        let n: i64 = rest
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .parse()
+            .unwrap_or(0);
+        if n > 0 {
+            return armor * (10 - n).max(0) / 10;
+        }
+    }
+    armor / 2
+}
+
 /// 散 (散布/scatter) 属性武器の命中補正。SRC.NET `Unit.cs` HitProbability:
 /// 「散属性武器は指定したレベル以上離れるほど命中がアップ」。manhattan 距離が
 /// 1/2/3/4/5+ で +0/+5/+10/+15/+20。武器 class に `散` が無ければ 0。
@@ -491,8 +514,12 @@ pub fn predict_with_status_terrain(
         .unwrap_or(0);
     let def_defense = 100 + 5 * def_endurance_lv;
 
+    // 貫通型攻撃 (武器 class に `貫` / `貫Ln`): 防御側の装甲を低減する
+    // (SRC `Unit.cls:6812-6819`、is_true_value に依らず常時適用＝予測にも反映)。
+    let pierced_armor = pierce_armor(&weapon.class, def_unit.armor);
+
     // 防御力 = armor × morale/100 × Defense/100 × 地形適応
-    let def_power = ((def_unit.armor * i64::from(def_morale) / 100) as f64
+    let def_power = ((pierced_armor * i64::from(def_morale) / 100) as f64
         * (def_defense as f64 / 100.0)
         * def_adapt) as i64;
 
@@ -1580,6 +1607,47 @@ mod tests {
             0,
         );
         assert!(hi.damage > lo.damage);
+    }
+
+    /// 貫 (貫通) 属性: 防御側装甲を `貫`=1/2 / `貫Ln`=×(10-n)/10 に低減する
+    /// (SRC VB6 `Unit.cls:6812-6819`)。`pierce_armor` 単体と予測での増ダメージを検証。
+    #[test]
+    fn pierce_weapon_reduces_armor_and_increases_damage() {
+        assert_eq!(pierce_armor("格貫", 1000), 500, "貫 は装甲半減");
+        assert_eq!(pierce_armor("貫L3", 1000), 700, "貫L3 は装甲 ×0.7");
+        assert_eq!(pierce_armor("貫L10", 1000), 0, "貫L10 は装甲 0");
+        assert_eq!(pierce_armor("格実火", 1000), 1000, "貫 無しは素のまま");
+
+        // 装甲 2000 の防御側へ、同威力の 貫 武器 vs 非貫 武器。貫 はダメージが増える。
+        let armored = u(2000, vec![]);
+        let mut plain = weapon(3000, 1, 1, 0);
+        plain.class = "格".to_string();
+        let mut pierce = weapon(3000, 1, 1, 0);
+        pierce.class = "格貫".to_string();
+        let dmg_plain = predict(
+            &p(0, 0, 200),
+            &u(0, vec![]),
+            &plain,
+            &p(0, 0, 0),
+            &armored,
+            0,
+            0,
+        )
+        .damage;
+        let dmg_pierce = predict(
+            &p(0, 0, 200),
+            &u(0, vec![]),
+            &pierce,
+            &p(0, 0, 0),
+            &armored,
+            0,
+            0,
+        )
+        .damage;
+        assert!(
+            dmg_pierce > dmg_plain,
+            "貫 武器が装甲半減で増ダメージにならない: 非貫 {dmg_plain} vs 貫 {dmg_pierce}"
+        );
     }
 
     /// 潜在力開放 (パイロット技能): 気力 130 以上で与ダメージ ×1.25。130 未満では非発動。
