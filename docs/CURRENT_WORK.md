@@ -45,6 +45,14 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
   無効化（SP コストは発動側で消費済み）。テスト `special_power_nullification_blocks_offensive_spirit`
   （脱力 で無効化あり=気力不変・なし=気力-10）。
 
+**★ 追加（2026-06-20・続き）= `Not` 演算子の優先順位をオラクルと整合**（記録済み乖離 §3 を是正）:
+- 式評価器の `Not` は最高優先（`parse_factor`）で束縛していたが、VB6/SRC.Sharp は比較より緩く
+  `And`/`Or` より固い。`Not 1 = 2` がポート 0／オラクル 1 と乖離していた（`docs/SRC_SHARP_DIVERGENCE.md` §3）。
+- **是正**: 比較（`parse_comparison`）と論理（`parse_logical`）の間に `parse_not` レベルを挿入し
+  `parse_factor` から `Not` を外す。`Not 1 = 2`=1・`Not 0 And 1`=`(Not 0) And 1`=1、単項/括弧付きは不変。
+  非 `Not` 式は素通りで挙動不変。括弧無しオペランド位置の `Not`（`a = Not b`）は実シナリオ/テストで
+  未使用と確認（全て括弧付き）。テスト `not_binds_looser_than_comparison`（旧 characterization を更新）。
+
 **このセッションで修正した実バグ / 実装**（feature 由来戦闘修正・イベント発火基盤）:
 - **特殊能力パーサが値無し裸名を全捨て**（`data/unit.rs`）: `水上移動`/`ＨＰ回復Lv1`/`分身` 等の
   `=` 無し裸名特殊能力を全ユニットで取りこぼしていた → `特殊能力` セクション配下の裸名を取り込む。

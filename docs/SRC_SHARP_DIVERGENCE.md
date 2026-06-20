@@ -96,25 +96,27 @@ VB6 が一次資料のため VB6 に従う。正の値は三者一致。
 
 ---
 
-## 3. `Not` 演算子の優先順位 — 既知の未整合 (低影響・未是正)
+## 3. `Not` 演算子の優先順位 — ✅ 是正済 (2026-06-20・オラクルと整合)
 
 ### 対象
-[`parse_factor`](../crates/src-core/src/event_runtime.rs)（式評価器の `Not`）
+[`parse_not` / `parse_logical` / `parse_factor`](../crates/src-core/src/event_runtime.rs)（式評価器の `Not`）
 
-### Rust 実装
-`Not` を最高優先 (`parse_factor`) で束縛する。`Not 1 = 2` → `(Not 1) = 2` → `0 = 2` → 0。
+### 旧 Rust 実装 (是正前)
+`Not` を最高優先 (`parse_factor`) で束縛していた。`Not 1 = 2` → `(Not 1) = 2` → `0 = 2` → 0。
 
-### SRC.Sharp / VB6
-`Not` は比較より緩く束縛する。`Not 1 = 2` → `Not (1 = 2)` → `Not 0` → 1。
+### SRC.Sharp / VB6 (正)
+`Not` は比較より緩く、`And`/`Or` より固く束縛する。`Not 1 = 2` → `Not (1 = 2)` → `Not 0` → 1。
 
-### 判断
-括弧付き (`Not (a = b)`) では三者一致し、実シナリオは括弧付きが通例のため低影響。
-characterization test で挙動を明示し据え置き（将来 `Not` を比較と論理の間の優先度
-レベルへ移せば整合する）。
+### 是正
+比較 (`parse_comparison`) と論理 (`parse_logical`) の間に `parse_not` レベルを挿入し、
+`parse_factor` から `Not` を外した。これで `Not 1 = 2` = 1（オラクル一致）、`Not 0 And 1`
+= `(Not 0) And 1` = 1、単項 `Not 0`/`Not 5` の真偽値や括弧付き `Not (a = b)` は不変。
+非 `Not` 式は `parse_not` を素通りするため挙動不変。括弧無しオペランド位置の `Not`
+（`a = Not b`）は実シナリオ・テストで未使用と確認済（パラメータ位置の `Not` は全て括弧付き）。
 
 ### 検証
 [`crates/src-core/tests/expression_oracle.rs`](../crates/src-core/tests/expression_oracle.rs)
-の `known_divergence_not_precedence_without_parens`。
+の `not_binds_looser_than_comparison`（旧 `known_divergence_not_precedence_without_parens`）。
 
 ---
 
