@@ -10,7 +10,7 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 ## 現在地（2026-06-20）— 公式サンプルシナリオ互換 + 防御能力の方針決定
 
 **ブランチ**: `feat/sample-scenario-smoke`（`master` ではなくフィーチャーブランチ。push 未指示）。
-**テスト**: `cargo test -p src-core` 全緑（約 2009 件）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。
+**テスト**: `cargo test -p src-core` 全緑（約 2010 件）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。
 **主題**: 非再配布パッケージ `srcall-2_2_33-111106/サンプルシナリオ`（公式サンプル）を Rust 移植で
 動作させる。テストは実フォルダを **参照のみ**（無ければ skip・本文 embed なし・`srcall-*/` は `.gitignore`）。
 
@@ -28,10 +28,12 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 - **検証**: 単体 `map_attack_fires_use_and_attack_events_only_in_normal_battle_mode`（is_event 切替で
   使用/攻撃 の発火有無）＋ 実データ統合 `sample_map_weapon_use_fires_houyokutenshou_use_event`
   （鳳神機=大鳥霞 で 鳳翼天翔 マップ攻撃→`*使用 大鳥霞 鳳翼天翔:` が発火し 味方数 を記録）。
-- **残（follow-up・サンプル不要・推測実装回避で見送り）**: C# はマップ兵器でダメージ**後**に
-  使用後/攻撃後/損傷率/マップ攻撃破壊 も発火する（`is_event=false` 時、Unit.cs:28560-28688）。
-  サンプルのとどめ処理はダイアログ経由（Pilot_Dialog.txt）で 使用後/攻撃後 を使わないため未配線。
-  別 fixture が要れば追加する（normal 攻撃の 使用後 は配線済み・map のみ未配線という非対称が残る）。
+- **ダメージ後の後段イベントも配線済（続き）**: C# `Unit.MapAttack`（is_event=false, Unit.cs:28560-28688）
+  準拠で、ダメージ確定後に 損傷率（生存対象）→ 使用後（攻撃側）→ 攻撃後（生存対象ごと）も発火し、
+  通常攻撃経路と対称化（生存対象をループ中にスナップショット→check_victory 後に昇順発火）。
+  破壊/全滅 は撃破ループ内で既発火。**マップ攻撃破壊**（Help 未記載の内部イベント）は仕様不明のため
+  未実装（推測実装回避）。テスト `map_attack_fires_after_damage_events_only_in_normal_battle_mode`。
+  → **マップ兵器の発火イベントは 使用/攻撃/使用後/攻撃後/損傷率/破壊/全滅 が通常攻撃と対称**。
 
 **このセッションで修正した実バグ / 実装**（feature 由来戦闘修正・イベント発火基盤）:
 - **特殊能力パーサが値無し裸名を全捨て**（`data/unit.rs`）: `水上移動`/`ＨＰ回復Lv1`/`分身` 等の
