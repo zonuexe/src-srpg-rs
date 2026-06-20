@@ -5373,12 +5373,15 @@ impl App {
                 }
             }
             if let Some((center, _)) = best {
+                // AI 発のマップ攻撃コマンド = 通常戦闘扱い (is_event=false)。
+                // SRC `Unit.MapAttack` 同様、ダメージ適用前に 使用/攻撃 イベントを発火。
                 crate::event_runtime::map_attack(
                     self,
                     Some(&caster),
                     &weapon.name,
                     center.0,
                     center.1,
+                    false,
                 );
                 if let Some(i) = self.database.idx_by_uid(&caster) {
                     self.database.unit_instances[i].has_acted = true;

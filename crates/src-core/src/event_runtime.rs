@@ -3238,19 +3238,27 @@ fn exec_command_pc(
             // 武器の max_range 内のすべての対立勢力ユニットに同時にダメージを
             // 与える。反撃 / 経験値 / 資金は無効 (SRC docs)。
             // 引数解釈: 最後の 2 つは X Y (数値), その手前は weapon, 残りがあれば unit。
-            if xargs.len() < 3 {
+            // 末尾に `通常戦闘` を付けると「使用/攻撃イベント」を発火する通常戦闘扱いに
+            // なる (SRC `ExecMapAttackCmd` CmdData.cs:14865 — 既定 is_event=true、
+            // 末尾 `通常戦闘` で is_event=false)。
+            let mut xa: &[String] = &xargs;
+            let is_event = !matches!(xa.last().map(|s| s.as_str()), Some("通常戦闘"));
+            if !is_event {
+                xa = &xa[..xa.len() - 1];
+            }
+            if xa.len() < 3 {
                 return Ok(pc + 1);
             }
-            let n = xargs.len();
-            let cx: u32 = xargs[n - 2].parse().unwrap_or(0);
-            let cy: u32 = xargs[n - 1].parse().unwrap_or(0);
-            let weapon_name = xargs[n - 3].clone();
+            let n = xa.len();
+            let cx: u32 = xa[n - 2].parse().unwrap_or(0);
+            let cy: u32 = xa[n - 1].parse().unwrap_or(0);
+            let weapon_name = xa[n - 3].clone();
             let unit_key = if n >= 4 {
-                Some(xargs[n - 4].clone())
+                Some(xa[n - 4].clone())
             } else {
                 None
             };
-            map_attack(app, unit_key.as_deref(), &weapon_name, cx, cy);
+            map_attack(app, unit_key.as_deref(), &weapon_name, cx, cy, is_event);
             return Ok(pc + 1);
         }
         "mapability" => {
@@ -3267,7 +3275,8 @@ fn exec_command_pc(
             } else {
                 None
             };
-            map_attack(app, unit_key.as_deref(), &weapon_name, cx, cy);
+            // スクリプト経由の MapAbility も既定で is_event=true (イベント非発火)。
+            map_attack(app, unit_key.as_deref(), &weapon_name, cx, cy, true);
             return Ok(pc + 1);
         }
         "organize" => {
@@ -13284,7 +13293,13 @@ pub(crate) fn map_attack(
     weapon_name: &str,
     cx: u32,
     cy: u32,
+    is_event: bool,
 ) {
+    // `is_event`: SRC `Unit.MapAttack(w, tx, ty, is_event)` (Unit.cs:27012) の第4引数。
+    // - false = プレイヤー/AI の「マップ攻撃」コマンド経由 → ダメージ適用前に
+    //   使用イベント (武器 1 回) と 各対象への 攻撃イベント を発火する。
+    // - true  = スクリプトの `MapAttack` コマンド経由 (既定) → これらのイベントは
+    //   発火しない (末尾に `通常戦闘` を付けた場合のみ false になる)。
     // 攻撃側ユニットの解決: unit_key 指定時はそれを引き、無ければ任意の Player ユニットへ。
     let atk_idx = if let Some(k) = unit_key {
         app.database()
@@ -13297,9 +13312,9 @@ pub(crate) fn map_attack(
             .iter()
             .position(|u| u.party == crate::Party::Player)
     };
-    let Some(atk_idx) = atk_idx else { return };
+    let Some(mut atk_idx) = atk_idx else { return };
 
-    let atk_unit_name = app.database().unit_instances[atk_idx]
+    let mut atk_unit_name = app.database().unit_instances[atk_idx]
         .unit_data_name
         .clone();
     let weapon = match app
@@ -13323,7 +13338,7 @@ pub(crate) fn map_attack(
     // 攻撃側と敵対する全陣営 (味方↔ＮＰＣ 同盟は対象外、中立は対象) を攻撃対象に。
     let atk_party = app.database().unit_instances[atk_idx].party;
     // 対象 idx を集めて damage と armor で個別評価。
-    let targets: Vec<usize> = app
+    let mut targets: Vec<usize> = app
         .database()
         .unit_instances
         .iter()
@@ -13335,6 +13350,47 @@ pub(crate) fn map_attack(
     if targets.is_empty() {
         return;
     }
+
+    // SRC `Unit.MapAttack` (Unit.cs:27316): プレイヤー/AI 発のマップ攻撃 (is_event=false)
+    // では、ダメージ適用前に 使用イベント (武器 1 回) → 各対象への 攻撃イベント を発火する。
+    // 反撃/経験値同様、イベントは攻撃の「前」に起こるため、ここでまとめて処理する。
+    if !is_event {
+        let atk_uid = app.database().unit_instances[atk_idx].uid.clone();
+        let target_uids: Vec<String> = targets
+            .iter()
+            .map(|&i| app.database().unit_instances[i].uid.clone())
+            .collect();
+        // 使用イベント (武器 1 回)。サポートアタックの武器では発火しない仕様だが、
+        // マップ攻撃はサポートアタック経路を通らないので無条件で発火してよい。
+        fire_use_event_labels(app, atk_idx, weapon_name);
+        // 各対象への 攻撃イベント。発火で unit_instances の index がずれ得るため
+        // 攻撃側/対象とも uid で都度引き直す (攻撃側が消えたら以降は中断)。
+        for tuid in &target_uids {
+            let Some(ai) = app.database().idx_by_uid(&atk_uid) else {
+                return;
+            };
+            if let Some(ti) = app.database().idx_by_uid(tuid) {
+                fire_attack_event_labels(app, ai, ti);
+            }
+        }
+        // イベントで盤面が変化し得るので攻撃側を引き直し、対象スナップショットを
+        // 現存するものだけへ絞り込む (退避/撃破された対象は除外)。
+        let Some(ai) = app.database().idx_by_uid(&atk_uid) else {
+            return;
+        };
+        atk_idx = ai;
+        atk_unit_name = app.database().unit_instances[atk_idx]
+            .unit_data_name
+            .clone();
+        targets = target_uids
+            .iter()
+            .filter_map(|uid| app.database().idx_by_uid(uid))
+            .collect();
+        if targets.is_empty() {
+            return;
+        }
+    }
+
     // 攻撃側も実効値込みデータを使用 (育成 / 強化パーツ / 状態異常)。
     let Some((atk_pilot, atk_unit_data)) = app.database().effective_combat_data(atk_idx) else {
         return;
@@ -17936,6 +17992,65 @@ MapWeapon リオ メガキャノン 6 5
             .filter(|u| u.party == crate::Party::Enemy)
             .count();
         assert_eq!(alive_enemies, 0);
+    }
+
+    /// SRC `Unit.MapAttack` (Unit.cs:27316): プレイヤー/AI 発のマップ攻撃 (is_event=false)
+    /// ではダメージ適用前に 使用イベント (武器 1 回) + 各対象への 攻撃イベント を発火する。
+    /// スクリプトの `MapAttack` コマンドは既定 is_event=true で発火せず、末尾に
+    /// `通常戦闘` を付けたときだけ is_event=false になって発火する (CmdData.cs:14865)。
+    #[test]
+    fn map_attack_fires_use_and_attack_events_only_in_normal_battle_mode() {
+        fn run(tail: &str) -> App {
+            let mut app = App::new();
+            let src = format!(
+                "Pilot ガロ ガロ 男性 超能力者 AAAA 100 100 100 100 100 100 100\n\
+                 Pilot リオ リオ 男性 超能力者 AAAA 100 100 100 100 100 100 100\n\
+                 Unit ブレイバー Real 1 0 陸 5 M 1000 100 5000 100 1500 100 AAAA\n\
+                 Unit ゾルダ Mass 1 0 陸 5 M 1000 100 9000 80 800 80 BBBB\n\
+                 Weapon ブレイバー メガキャノン 600 1 3 +0 0\n\
+                 Place ブレイバー リオ 味方 5 5\n\
+                 Place ゾルダ ガロ 敵 6 5\n\
+                 MapAttack リオ メガキャノン 6 5{tail}\n\
+                 Exit\n\
+                 \n\
+                 使用 リオ メガキャノン:\n\
+                 Incr used\n\
+                 Return\n\
+                 \n\
+                 攻撃 リオ ガロ:\n\
+                 Incr attacked\n\
+                 Return\n"
+            );
+            let stmts = event::parse(&src).unwrap();
+            execute(&mut app, &stmts).unwrap();
+            app
+        }
+
+        // 既定 (is_event=true): 使用 / 攻撃 とも発火しない。
+        let app = run("");
+        assert_eq!(
+            app.script_var("used"),
+            "",
+            "スクリプト MapAttack は 使用 イベントを発火しないはず"
+        );
+        assert_eq!(
+            app.script_var("attacked"),
+            "",
+            "スクリプト MapAttack は 攻撃 イベントを発火しないはず"
+        );
+
+        // `通常戦闘` 指定 (is_event=false): 使用 (1 回) + 攻撃 (対象 1 機) が発火。
+        let app = run(" 通常戦闘");
+        assert_eq!(
+            app.script_var("used"),
+            "1",
+            "通常戦闘 MapAttack は 使用 イベントを発火するはず"
+        );
+        assert_eq!(
+            app.script_var("attacked"),
+            "1",
+            "通常戦闘 MapAttack は 攻撃 イベントを発火するはず"
+        );
     }
 
     #[test]

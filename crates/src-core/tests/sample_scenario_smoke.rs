@@ -1130,3 +1130,59 @@ fn shared_library_subroutine_callable_after_registration() {
         "登録済みライブラリサブルーチンが暗黙 Call で実行されていない"
     );
 }
+
+#[test]
+fn sample_map_weapon_use_fires_houyokutenshou_use_event() {
+    let root = sample_root();
+    if !root.exists() {
+        eprintln!("[skip] サンプルシナリオ未配置: {}", root.display());
+        return;
+    }
+    // 龍神機 の自動インクルード (`data/龍神機/Include.eve`) は、マップ兵器 鳳翼天翔 の
+    // とどめカットイン演出のために `*使用 大鳥霞 鳳翼天翔:` で「使用直前の各陣営数」を
+    // 記録する。SRC `Unit.MapAttack` 同様、プレイヤー/AI 発のマップ兵器使用は「使用
+    // イベント」を発火する (スクリプトの素の `MapAttack` は is_event=true で発火しないが、
+    // 末尾 `通常戦闘` で is_event=false=通常戦闘扱いになり発火する)。
+    // → マップ兵器使用が 使用イベント を発火することを、実データ (鳳翼天翔=マップ兵器 +
+    //   実 Include.eve の `*使用` ラベル) で検証する。
+    let mut app = load_sample(&root, "srcｻﾝﾌﾟﾙ.map");
+
+    // `*使用 大鳥霞 鳳翼天翔:` が `*` 剥がし後のフル名でグローバル登録されていること
+    // (Include.eve は basename 衝突があるためファイル指定でなくグローバルで照合する)。
+    assert!(
+        app.script_library()
+            .label_pc("使用 大鳥霞 鳳翼天翔")
+            .is_some(),
+        "Include.eve の `*使用 大鳥霞 鳳翼天翔:` が \"使用 大鳥霞 鳳翼天翔\" として登録されていない"
+    );
+
+    // 大鳥霞 を主パイロットにした 鳳神機 (龍神機 の 鳳形態 = 鳳翼天翔 を持つ。鳳翼天翔 は
+    // class Ｍ移格突 のマップ兵器) と、鳳翼天翔 (Ｍ移=攻撃者から目標へ向かう直線) の射程内に
+    // 敵を 1 機配置する。鳳神機(3,3) → 目標(9,3) の水平線上に敵(5,3) を置く。
+    let setup = event::parse(
+        "Create 味方 鳳神機 0 大鳥霞 20 3 3\n\
+         Create 敵 ブレス 0 サラ＝Ｅ＝Ｊ＝ビップ 20 5 3\n",
+    )
+    .expect("setup parse");
+    event_runtime::execute(&mut app, &setup).expect("setup exec");
+
+    // 使用前は記録変数が未設定。
+    assert_eq!(
+        app.script_var("鳳翼天翔使用前[1]"),
+        "",
+        "マップ攻撃前は 鳳翼天翔使用前[1] が未記録のはず"
+    );
+
+    // `通常戦闘` 指定のマップ攻撃 (= プレイヤー/AI 経路, is_event=false) で 使用イベント発火。
+    let fire = event::parse("MapAttack 大鳥霞 鳳翼天翔 9 3 通常戦闘\n").expect("mapattack parse");
+    event_runtime::execute(&mut app, &fire).expect("mapattack exec");
+
+    // `*使用 大鳥霞 鳳翼天翔:` が発火し `Set 鳳翼天翔使用前[1] 味方数` を実行した
+    // (味方は 龍神機 1 機なので 味方数 = 1)。マップ兵器が 使用イベント を発火しない
+    // 旧実装ではこの記録が走らず未設定のままになる。
+    assert_eq!(
+        app.script_var("鳳翼天翔使用前[1]"),
+        "1",
+        "マップ兵器の使用で `*使用 大鳥霞 鳳翼天翔:` が発火し 味方数 を記録するはず"
+    );
+}
