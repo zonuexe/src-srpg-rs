@@ -3973,48 +3973,17 @@ impl App {
     /// バリア吸収強度 (防御能力 (B)): 防御側 `def_idx` の `バリア`/`バリアLv*` 特殊能力が
     /// 武器属性に対し有効なとき `1000×Lv` を返す (複数は最大、該当無しは 0)。対象属性
     /// (`バリアLv*=別名 対象属性 …` の 2 番目のトークン) は `defense_attr_matches` で
-    /// 字単位照合し、省略時は全属性 (`バリアに関する記述.md` 準拠)。`バリアシールド`/
-    /// `フィールド` 系は base 不一致で対象外 (現状 (A) の ÷2 近似のまま)。
-    fn barrier_absorb_strength(&self, def_idx: usize, weapon_class: &str) -> i64 {
-        let mut total = 0i64;
-        for f in &self.database.unit_instances[def_idx].active_features {
-            if !f.is_active || f.value.trim_start().starts_with("解説") {
-                continue; // 解説エントリ (ヘルプ文) は防御能力ではない
-            }
-            // バリア=1000×Lv / フィールド=500×Lv の確定吸収 (防御系特殊能力.md)。
-            // アクティブフィールド (Ｓ防御/16 確率発動) は確定吸収ではないので別経路。
-            let per_lv =
-                if crate::feature::feature_name_matches_base(&f.name, "アクティブフィールド")
-                {
-                    continue;
-                } else if let Some(lv) =
-                    crate::feature::feature_level(std::slice::from_ref(f), "バリア")
-                {
-                    1000 * i64::from(lv)
-                } else if let Some(lv) =
-                    crate::feature::feature_level(std::slice::from_ref(f), "フィールド")
-                {
-                    500 * i64::from(lv)
-                } else {
-                    continue;
-                };
-            // 対象属性 (`…=別名 対象属性 …` の 2 番目トークン) を字単位照合、省略は全属性。
-            let target = f.value.split_whitespace().nth(1).unwrap_or("");
-            if target.is_empty() || Self::defense_attr_matches(weapon_class, target) {
-                total += per_lv;
-            }
-        }
-        total
-    }
-
-    /// バリア吸収 (防御能力 (B)・SRC `バリア` 特殊能力): 防御側が `バリアLv*` を持つと、
-    /// 対象属性に該当する攻撃の `1000×Lv` ダメージまでを無効化する (吸収後の残ダメージを
-    /// 返す。完全吸収は 0)。シールドと違い確率ではなく**確定**なので予測でも反映したいが、
-    /// 予測関数のシグネチャ変更を避け実行段で適用する (プレビューは満額表示)。
-    /// 攻撃側 `直撃` / 防御側 `バリア中和` でバリアは無効化される。
-    /// `attacker_idx` はこのダメージを与える側 (反撃時は反撃実行側)。
+    /// バリア吸収 (防御能力 (B)・SRC `バリア`/`フィールド` 特殊能力): 防御側の バリア=1000×Lv /
+    /// フィールド=500×Lv が、対象属性に該当する攻撃を吸収する (吸収後の残ダメージを返す。
+    /// 完全吸収は 0)。確率ではなく**確定**だが、予測シグネチャ変更を避け実行段で適用する。
+    /// 攻撃側 `直撃` / 防御側 `バリア中和` で無効。`attacker_idx` はダメージを与える側。
+    ///
+    /// **knobs (忠実性)**: 各特殊能力の値 `…=別名 対象属性 ＥＮ消費 必要気力 …` から ＥＮ消費
+    /// (3 番目, 既定 0) と 必要気力 (4 番目, 既定 0) を読み、`気力≧必要気力` かつ `残EN≧ＥＮ消費`
+    /// のときのみ発動し、発動した能力ぶんの ＥＮ を消費する (`&mut self`)。対象属性は 2 番目
+    /// (省略=全)。`アクティブフィールド` は確率発動なので別経路、`解説…` 値はヘルプ文で対象外。
     fn apply_barrier_absorb(
-        &self,
+        &mut self,
         def_idx: usize,
         attacker_idx: usize,
         weapon_class: &str,
@@ -4028,11 +3997,56 @@ impl App {
         {
             return dmg;
         }
-        let strength = self.barrier_absorb_strength(def_idx, weapon_class);
-        if strength <= 0 {
+        let morale = self.database.unit_instances[def_idx].morale;
+        let max_en = self
+            .database
+            .effective_max_en(&self.database.unit_instances[def_idx]);
+        // 発動した能力の吸収強度合計と消費 ＥＮ 合計を、features を借りる scope 内で算出。
+        let (total_strength, total_en) = {
+            let u = &self.database.unit_instances[def_idx];
+            let mut avail_en = max_en - u.en_consumed;
+            let mut strength = 0i64;
+            let mut en_used = 0i32;
+            for f in &u.active_features {
+                if !f.is_active || f.value.trim_start().starts_with("解説") {
+                    continue;
+                }
+                if crate::feature::feature_name_matches_base(&f.name, "アクティブフィールド")
+                {
+                    continue; // 確率発動は apply_active_field_absorb
+                }
+                let per_lv = if let Some(lv) =
+                    crate::feature::feature_level(std::slice::from_ref(f), "バリア")
+                {
+                    1000 * i64::from(lv)
+                } else if let Some(lv) =
+                    crate::feature::feature_level(std::slice::from_ref(f), "フィールド")
+                {
+                    500 * i64::from(lv)
+                } else {
+                    continue;
+                };
+                let toks: Vec<&str> = f.value.split_whitespace().collect();
+                let target = toks.get(1).copied().unwrap_or("");
+                if !(target.is_empty() || Self::defense_attr_matches(weapon_class, target)) {
+                    continue;
+                }
+                let en_cost: i32 = toks.get(2).and_then(|t| t.parse().ok()).unwrap_or(0);
+                let morale_req: i32 = toks.get(3).and_then(|t| t.parse().ok()).unwrap_or(0);
+                if morale < morale_req || avail_en < en_cost {
+                    continue; // 気力不足 / EN 不足では発動しない
+                }
+                avail_en -= en_cost;
+                en_used += en_cost;
+                strength += per_lv;
+            }
+            (strength, en_used)
+        };
+        if total_strength <= 0 {
             return dmg;
         }
-        (dmg - strength).max(0)
+        self.database.unit_instances[def_idx].en_consumed += total_en;
+        (dmg - total_strength).max(0)
     }
 
     /// アクティブフィールド吸収 (防御能力 (B)・防御系特殊能力.md): フィールドの**確率発動版**。
@@ -4054,20 +4068,38 @@ impl App {
         {
             return dmg;
         }
-        // アクティブフィールドの吸収強度 (500×Lv、対象属性一致、解説エントリ除外)。複数は最大。
-        let strength = {
-            let mut best = 0i64;
-            for f in &self.database.unit_instances[def_idx].active_features {
+        // 吸収強度 (500×Lv) + ＥＮ消費 を、対象属性一致 + 気力/EN ゲートを満たす中から最大で選ぶ。
+        // 値: `…=別名 対象属性 ＥＮ消費 必要気力 …` (既定 ＥＮ消費0 / 必要気力0)。解説は除外。
+        let morale = self.database.unit_instances[def_idx].morale;
+        let max_en = self
+            .database
+            .effective_max_en(&self.database.unit_instances[def_idx]);
+        let (strength, en_cost) = {
+            let u = &self.database.unit_instances[def_idx];
+            let avail_en = max_en - u.en_consumed;
+            let mut best = (0i64, 0i32);
+            for f in &u.active_features {
                 if !f.is_active || f.value.trim_start().starts_with("解説") {
                     continue;
                 }
-                if let Some(lv) =
+                let Some(lv) =
                     crate::feature::feature_level(std::slice::from_ref(f), "アクティブフィールド")
-                {
-                    let target = f.value.split_whitespace().nth(1).unwrap_or("");
-                    if target.is_empty() || Self::defense_attr_matches(weapon_class, target) {
-                        best = best.max(500 * i64::from(lv));
-                    }
+                else {
+                    continue;
+                };
+                let toks: Vec<&str> = f.value.split_whitespace().collect();
+                let target = toks.get(1).copied().unwrap_or("");
+                if !(target.is_empty() || Self::defense_attr_matches(weapon_class, target)) {
+                    continue;
+                }
+                let ec: i32 = toks.get(2).and_then(|t| t.parse().ok()).unwrap_or(0);
+                let mr: i32 = toks.get(3).and_then(|t| t.parse().ok()).unwrap_or(0);
+                if morale < mr || avail_en < ec {
+                    continue;
+                }
+                let s = 500 * i64::from(lv);
+                if s > best.0 {
+                    best = (s, ec);
                 }
             }
             best
@@ -4075,12 +4107,13 @@ impl App {
         if strength <= 0 {
             return dmg;
         }
-        // Ｓ防御Lv >= Dice(16) で発動。
+        // Ｓ防御Lv >= Dice(16) で発動。発動時に ＥＮ を消費。
         let sdef = self.unit_pilot_skill_level(def_idx, "Ｓ防御");
         let roll = (self.next_u32() % 16) as i32 + 1;
         if sdef < roll {
             return dmg;
         }
+        self.database.unit_instances[def_idx].en_consumed += en_cost;
         let reduced = (dmg - strength).max(0);
         self.push_message(format!("アクティブフィールド: {dmg} → {reduced} ダメージ"));
         reduced
@@ -14406,6 +14439,54 @@ mod tests {
             app.apply_barrier_absorb(def_idx, atk_idx, "火", 1500),
             0,
             "対象属性 火 のバリアは 火 武器を吸収する"
+        );
+    }
+
+    /// (B knobs) バリア/フィールド吸収は 必要気力 と ＥＮ消費 のゲートを尊重する (忠実性)。
+    #[test]
+    fn barrier_absorb_respects_morale_and_en_gates() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Atk", 2, 6);
+        let atk = first_player_uid(&app);
+        let atk = app.database().idx_by_uid(&atk).unwrap();
+        let target = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Def",
+            "DP",
+            crate::Party::Enemy,
+            3,
+            6,
+        ));
+        let def = app.database().idx_by_uid(&target).unwrap();
+
+        // フィールドLv2 (1000 吸収) だが 必要気力 130 (値の 4 番目)。
+        app.database_mut().unit_instances[def].active_features.push(
+            crate::feature::ActiveFeature::new("フィールドLv2", "魔法障壁 全 0 130"),
+        );
+        app.database_mut().unit_instances[def].morale = 100;
+        assert_eq!(
+            app.apply_barrier_absorb(def, atk, "実", 800),
+            800,
+            "気力 100 < 必要気力 130 で不発"
+        );
+        app.database_mut().unit_instances[def].morale = 130;
+        assert_eq!(
+            app.apply_barrier_absorb(def, atk, "実", 800),
+            0,
+            "気力 130 到達で発動 (800<1000 完全吸収)"
+        );
+
+        // ＥＮ消費 9999 (3 番目) は max EN 0 のユニットでは EN 不足で不発。
+        app.database_mut().unit_instances[def]
+            .active_features
+            .clear();
+        app.database_mut().unit_instances[def].active_features.push(
+            crate::feature::ActiveFeature::new("バリアLv2", "x 全 9999 0"),
+        );
+        assert_eq!(
+            app.apply_barrier_absorb(def, atk, "実", 800),
+            800,
+            "ＥＮ不足でバリア不発"
         );
     }
 
