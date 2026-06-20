@@ -10,7 +10,7 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 ## 現在地（2026-06-20）— 公式サンプルシナリオ互換 + 防御能力の方針決定
 
 **ブランチ**: `feat/sample-scenario-smoke`（`master` ではなくフィーチャーブランチ。push 未指示）。
-**テスト**: `cargo test -p src-core` 全緑（約 2015 件）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。
+**テスト**: `cargo test -p src-core` 全緑（約 2016 件）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。
 **主題**: 非再配布パッケージ `srcall-2_2_33-111106/サンプルシナリオ`（公式サンプル）を Rust 移植で
 動作させる。テストは実フォルダを **参照のみ**（無ければ skip・本文 embed なし・`srcall-*/` は `.gitignore`）。
 
@@ -75,6 +75,15 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
   uid へ解決）。検証 `sacrifice_special_power_makes_selected_ally_a_substitute`（生贄→みがわり end-to-end）。
 - **残（次段）**: 近似（肩代わりダメージは身代わりの装甲で再計算せず防御側向け値を流用）。プレイヤー UI の
   SP メニューからの実発動（対象種別是正で導線は通る）はブラウザ目視のみ。
+
+**★ 追加（2026-06-21）= 貫（貫通）属性を実装（VB6 突合監査で発見した実バグ）**:
+- VB6 原典で **防御特性（弱点/吸収/耐性/無効化）の Rust 実装が正しい**ことを確認した監査中に、**`貫`
+  （貫通）属性が完全未実装**と判明。VB6 `Unit.cls:6812-6819`／C# SRC.NET `Unit.cs:11173`: `貫`=防御側装甲
+  1/2・`貫Ln`=×(10-n)/10。`is_true_value` ゲートの外＝常時適用（予測にも反映）。
+- **サンプルに 貫 武器が存在**（`クウィンテセンス`=`貫間`／`超高速蹴`=`突貫Ｃ`）＝これらが装甲半減せず
+  過少ダメージだった実バグ。`combat::pierce_armor` を新設し `predict_with_status_terrain` の def_power
+  算出（装甲×気力×Defense×適応 の前）に配線。テスト `pierce_weapon_reduces_armor_and_increases_damage`。
+- **残**: `貫通攻撃` SP（攻撃側 condition も装甲半減）は未対応（サンプル未使用）。防御特性の核は VB6 と一致を確認。
 
 **★ 追加（2026-06-20・続き）= マップ攻撃の撃破を `マップ攻撃破壊` で発火（原典忠実・ユーザ決定）**:
 - **VB6 原典ソース発見**: `srcall-2_2_33-111106/Source/Src/`（C# より上流の ground truth）。`Event.bas:1744` で
