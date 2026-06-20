@@ -3502,7 +3502,15 @@ impl App {
         };
 
         let msg = if hit {
-            if let Some(g_idx) = guard_idx {
+            if let Some(sub) = self.apply_migawari(def_idx, atk_idx, &weapon.class, applied_damage)
+            {
+                // みがわり (身代わり, 最優先・SRC Unit.cls:14855): 指定された身代わりユニットが
+                // 防御側のダメージを 1 回肩代わりする。防御側は無傷、condition は消費される。
+                format!(
+                    "みがわり: {} が {} の身代わりになった！ [{}]",
+                    sub, def_pilot.nickname, weapon.name
+                )
+            } else if let Some(g_idx) = guard_idx {
                 // 援護防御: guard unit が 50% ダメージを受ける (防御扱い)
                 let guard_dmg = (preview.damage as f64 * 0.5) as i64;
                 let guard_unit_name = self.database.unit_instances[g_idx].unit_data_name.clone();
@@ -3914,6 +3922,62 @@ impl App {
     ///
     /// 発動しなければ `dmg` をそのまま返す。`バリア`/`フィールド` 系 (S防御非依存の吸収/÷2) は
     /// 対象外で、現状は予測の ÷2 近似 ((A)) のまま。
+    /// みがわり (身代わり, SRC `Unit.cls:14855`): 防御側 `def_idx` が `みがわり` condition
+    /// (data=身代わりユニット uid) を持つとき、攻撃ダメージ `damage` を身代わりユニットへ
+    /// **1 回だけ**肩代わりさせる。肩代わりが成立したら身代わりユニットの愛称を返し
+    /// condition を消費する。身代わりが盤上に居ない / 防御側自身なら `None`（通常処理）。
+    ///
+    /// 身代わりユニットは自身の バリア/フィールド/シールド/不死身 を適用してダメージを
+    /// 受け、HP0 なら（復活が無ければ）撃破・破壊イベント発火・勝敗判定まで処理する。
+    /// 近似: 肩代わりダメージは防御側に向かっていた値をそのまま用い、身代わりの装甲で
+    /// 再計算はしない（SRC は再計算する）。Ｓ防御依存シールド等は身代わり基準で適用。
+    fn apply_migawari(
+        &mut self,
+        def_idx: usize,
+        atk_idx: usize,
+        weapon_class: &str,
+        damage: i64,
+    ) -> Option<String> {
+        let sub_uid = self.database.unit_instances[def_idx]
+            .conditions
+            .iter()
+            .find(|c| c.name == "みがわり" && !c.data.is_empty())
+            .map(|c| c.data.clone())?;
+        let sub_idx = self
+            .database
+            .idx_by_uid(&sub_uid)
+            .filter(|&i| i != def_idx && !self.database.unit_instances[i].off_map)?;
+        // condition を消費（1 回限り）。
+        self.database.unit_instances[def_idx]
+            .conditions
+            .retain(|c| c.name != "みがわり");
+        // 身代わりユニットがダメージを受ける（自身の バリア/フィールド/シールド/不死身）。
+        let sub_max_hp = self
+            .database
+            .effective_max_hp(&self.database.unit_instances[sub_idx]);
+        let dmg = self.apply_barrier_absorb(sub_idx, atk_idx, weapon_class, damage);
+        let dmg = self.apply_active_field_absorb(sub_idx, atk_idx, weapon_class, dmg);
+        let dmg = self.apply_shield_defense(sub_idx, weapon_class, dmg);
+        let dmg = self.cap_damage_for_immortal(sub_idx, sub_max_hp, dmg);
+        let sub_name = self.database.unit_instances[sub_idx].unit_data_name.clone();
+        let sub_nick = self
+            .database
+            .pilot_by_name(&self.database.unit_instances[sub_idx].pilot_name)
+            .map(|p| p.nickname.clone())
+            .unwrap_or_else(|| sub_name.clone());
+        self.database.unit_instances[sub_idx].damage += dmg;
+        if sub_max_hp - self.database.unit_instances[sub_idx].damage <= 0
+            && !self.revive_if_possible(sub_idx)
+        {
+            let p = self.database.unit_instances[sub_idx].pilot_name.clone();
+            let party = self.database.unit_instances[sub_idx].party;
+            self.database.remove_unit_at(sub_idx);
+            crate::event_runtime::fire_destruction_labels(self, &p, &sub_name, party);
+            self.check_victory();
+        }
+        Some(sub_nick)
+    }
+
     fn apply_shield_defense(&mut self, def_idx: usize, weapon_class: &str, dmg: i64) -> i64 {
         if dmg <= 0 || self.unit_pilot_skill_level(def_idx, "Ｓ防御") <= 0 {
             return dmg;
@@ -17189,6 +17253,75 @@ mod tests {
             app.script_var("損傷率反撃"),
             "1",
             "反撃で損傷率イベントが発火していない"
+        );
+    }
+
+    /// `place_player_unit` でユニットデータ (UnitData/PilotData) を登録しつつ、配置された
+    /// player プレースホルダ実体は除去する。これにより同名の敵を `spawn_enemy` したとき、
+    /// 名前によるユニット解決 (`SpecialPower` 等) が敵側を指す。
+    fn register_enemy_data(app: &mut App, name: &str) {
+        place_player_unit(app, name, 9, 9);
+        let idx = app
+            .database()
+            .unit_instances
+            .iter()
+            .position(|u| u.unit_data_name == name)
+            .unwrap();
+        app.database_mut().remove_unit_at(idx);
+    }
+
+    /// みがわり (身代わり, SRC `Unit.cls:14855`): みがわり を持つ防御側が攻撃されると、
+    /// 指定された身代わりユニットが 1 回だけダメージを肩代わりする (防御側は無傷)。
+    /// サンプルの自作 SP 生贄→みがわり (`data/include.eve` の 生贄ルーチンが
+    /// `SpecialPower 相手ユニットＩＤ みがわり 対象ユニットＩＤ` を発行) を検証する。
+    #[test]
+    fn migawari_redirects_attack_damage_to_substitute_once() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6);
+        add_weapon(&mut app, "Hero", 30, 3); // 撃破しない低威力 (HP100/装甲10 → dmg<100)
+        register_enemy_data(&mut app, "Caster");
+        register_enemy_data(&mut app, "Sub");
+        let caster = spawn_enemy(&mut app, "Caster", 3, 6); // 保護対象
+        let sub = spawn_enemy(&mut app, "Sub", 3, 5); // 身代わり
+        app.set_stage_state(crate::stage::StageState::Battle);
+
+        // Sub を Caster の身代わりに (生贄ルーチン相当)。
+        let script = crate::data::event::parse("SpecialPower Sub みがわり Caster\n").unwrap();
+        crate::event_runtime::execute(&mut app, &script).unwrap();
+        assert!(
+            app.database()
+                .unit_by_uid(&caster)
+                .unwrap()
+                .has_condition("みがわり"),
+            "Caster に みがわり condition が付与されていない"
+        );
+
+        let sub_before = app.database().unit_by_uid(&sub).unwrap().damage;
+        let caster_before = app.database().unit_by_uid(&caster).unwrap().damage;
+
+        // Hero が Caster を攻撃 → みがわり が Sub へ肩代わり。
+        click_tile(&mut app, 2, 6);
+        let ai = attack_item_index(&app);
+        click_menu_item(&mut app, ai);
+        click_tile(&mut app, 3, 6);
+
+        let sub_after = app.database().unit_by_uid(&sub).unwrap().damage;
+        let caster_after = app.database().unit_by_uid(&caster).unwrap().damage;
+        assert!(
+            sub_after > sub_before,
+            "身代わり Sub がダメージを肩代わりしていない (dmg {sub_before}->{sub_after})"
+        );
+        assert_eq!(
+            caster_after, caster_before,
+            "保護対象 Caster が被弾している (身代わりのはず: dmg {caster_before}->{caster_after})"
+        );
+        assert!(
+            !app.database()
+                .unit_by_uid(&caster)
+                .unwrap()
+                .has_condition("みがわり"),
+            "みがわり が消費されていない (1 回限りのはず)"
         );
     }
 

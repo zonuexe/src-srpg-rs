@@ -3089,6 +3089,55 @@ fn exec_command_pc(
                 None => return Ok(pc + 1),
             };
 
+            // みがわり (身代わり, SRC `Unit.cls:14855` / `特殊効果攻撃属性.md`): SP 使用者
+            // (unit_idx) が、保護対象 (target_of_power、省略時は使用者自身) の身代わりに
+            // なる。保護対象の `みがわり` condition.data に身代わりユニット (= 使用者) の
+            // uid を保持し、戦闘で 1 回ダメージを肩代わりしたら消える消費型 (lifetime=-1)。
+            // サンプルの自作 SP `生贄` が `SpecialPower 相手ユニットＩＤ みがわり
+            // 対象ユニットＩＤ` で発行する (data/include.eve の 生贄ルーチン)。
+            if power == "みがわり" {
+                let sub_uid = app.database().unit_instances[unit_idx].uid.clone();
+                let protected = target_of_power.as_deref().unwrap_or(&target).to_string();
+                // SP 消費 (使用者のパイロット。PilotInstance 優先、無ければ sp_consumed)。
+                let cost = app
+                    .database()
+                    .special_powers
+                    .iter()
+                    .find(|sp| sp.name == "みがわり")
+                    .map(|sp| sp.sp_consumption)
+                    .unwrap_or_else(|| sp_cost_for("みがわり"));
+                let pid = app.database().unit_instances[unit_idx]
+                    .pilot_ids
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| app.database().unit_instances[unit_idx].pilot_name.clone());
+                if let Some(pi) = app
+                    .database()
+                    .pilot_instances
+                    .iter()
+                    .position(|p| p.id == pid || p.pilot_data_name == pid)
+                {
+                    let _ = app.database_mut().pilot_instances[pi].try_consume_sp(cost);
+                } else {
+                    app.database_mut().unit_instances[unit_idx].sp_consumed += cost;
+                }
+                // 保護対象に みがわり condition を付与 (data=身代わり uid)。重複は最新で置換。
+                if let Some(pidx) = app
+                    .database()
+                    .unit_instances
+                    .iter()
+                    .position(|u| matches_unit_handle(u, &protected))
+                {
+                    let mut cond = Condition::new("みがわり", -1);
+                    cond.data = sub_uid;
+                    app.database_mut().unit_instances[pidx]
+                        .conditions
+                        .retain(|c| c.name != "みがわり");
+                    app.database_mut().unit_instances[pidx].add_condition(cond);
+                }
+                return Ok(pc + 1);
+            }
+
             // Get pilot ID
             let pilot_id = app.database().unit_instances[unit_idx]
                 .pilot_ids
