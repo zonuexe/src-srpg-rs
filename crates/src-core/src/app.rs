@@ -6133,6 +6133,23 @@ impl App {
     /// の condition として付与し (戦闘 / 移動 / 撃破報酬 / 復活判定が名前で参照)、
     /// 瞬間効果 (HP/EN/弾/気力/再行動) は即時に反映する。
     fn apply_spirit_effect(&mut self, target: &str, name: &str) {
+        // 敵対象 (攻撃系) の精神コマンドは、対象が `スペシャルパワー無効化` /
+        // `精神コマンド無効化` を持つと効果が無効化される (SRC `SpecialPowerData.cs:523-540`:
+        // TargetType 敵/全敵/任意/全 の SP は当該 condition を持つユニットに効果なし)。
+        // SP コストは発動側で既に消費済みで、対象への効果だけを無効化する。
+        if matches!(self.spirit_target_kind(name), SpiritTargetKind::SingleEnemy) {
+            let immune = self.database.unit_by_uid(target).map(|u| {
+                (
+                    u.has_condition("スペシャルパワー無効化")
+                        || u.has_condition("精神コマンド無効化"),
+                    u.unit_data_name.clone(),
+                )
+            });
+            if let Some((true, nm)) = immune {
+                self.push_message(format!("{nm} には精神コマンド【{name}】が効かない！"));
+                return;
+            }
+        }
         match name {
             // ── 継続効果: combat.rs / movement / 撃破報酬 / 復活判定が名前で参照 ──
             // (必中/集中/ひらめき/熱血/魂/気合/不屈/鉄壁 は既に combat.rs が解釈。
@@ -11630,6 +11647,53 @@ mod tests {
         assert_eq!(app.database().unit_by_uid(&target).unwrap().damage, 90 - 33);
         // caster (PilotInstance 無し) は sp_consumed に反映。
         assert_eq!(app.database().unit_by_uid(&caster).unwrap().sp_consumed, 25);
+    }
+
+    /// SRC `SpecialPowerData.cs:523-540`: 敵対象 (TargetType 敵/全敵/任意/全) の精神コマンドは、
+    /// 対象が `スペシャルパワー無効化` / `精神コマンド無効化` を持つと無効化される。脱力 (敵単体・
+    /// 気力 -10) で検証する。サンプル決戦1話は全敵に `SetStatus スペシャルパワー無効化` を付与し
+    /// 挑発等の攻撃系精神からザコを守る。
+    #[test]
+    fn special_power_nullification_blocks_offensive_spirit() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        // 敵対象 2 体 (無効化あり / なし)。
+        let immune = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Zako",
+            "ZAKO1",
+            crate::Party::Enemy,
+            5,
+            5,
+        ));
+        let plain = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Zako",
+            "ZAKO2",
+            crate::Party::Enemy,
+            6,
+            5,
+        ));
+        app.database_mut()
+            .unit_by_uid_mut(&immune)
+            .unwrap()
+            .add_condition(crate::Condition::new("スペシャルパワー無効化", -1));
+
+        let m_immune = app.database().unit_by_uid(&immune).unwrap().morale;
+        let m_plain = app.database().unit_by_uid(&plain).unwrap().morale;
+        app.apply_spirit_effect(&immune, "脱力");
+        app.apply_spirit_effect(&plain, "脱力");
+
+        // 無効化あり: 気力不変 (攻撃系精神が効かない)。
+        assert_eq!(
+            app.database().unit_by_uid(&immune).unwrap().morale,
+            m_immune,
+            "スペシャルパワー無効化 を持つ対象には攻撃系精神 (脱力) が効かないはず"
+        );
+        // 無効化なし: 脱力で気力 -10。
+        assert_eq!(
+            app.database().unit_by_uid(&plain).unwrap().morale,
+            m_plain - 10,
+            "無効化なしの対象には脱力 (気力-10) が効くはず"
+        );
     }
 
     /// 損傷した隣接味方が居れば「修理」がメニューに出て、対象クリックで HP 全回復
