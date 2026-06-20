@@ -10,7 +10,7 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 ## 現在地（2026-06-20）— 公式サンプルシナリオ互換 + 防御能力の方針決定
 
 **ブランチ**: `feat/sample-scenario-smoke`（`master` ではなくフィーチャーブランチ。push 未指示）。
-**テスト**: `cargo test -p src-core` 全緑（約 2014 件）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。
+**テスト**: `cargo test -p src-core` 全緑（約 2015 件）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。
 **主題**: 非再配布パッケージ `srcall-2_2_33-111106/サンプルシナリオ`（公式サンプル）を Rust 移植で
 動作させる。テストは実フォルダを **参照のみ**（無ければ skip・本文 embed なし・`srcall-*/` は `.gitignore`）。
 
@@ -66,8 +66,15 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
   （`try_support_attack`）の被弾経路にも `apply_migawari` を最優先で配線（被ダメージ→身代わりへ、防御側 0）。
   援護防御は元々 みがわり が防御側で最優先のため二重肩代わりにならない。検証: `migawari_redirects_attack_damage_to_substitute_once`
   ＋`migawari_redirects_counterattack_damage_to_substitute`。
-- **残（次段）**: ① **`イベント=<routine>` SP効果種別＋プレイヤー発動フロー**（生贄 選択→対象/相手ユニットＩＤ
-  束縛→サブルーチン実行）。② 近似（肩代わりダメージは身代わりの装甲で再計算せず防御側向け値を流用）。
+- **`イベント=<routine>` SP効果種別＋生贄発動フロー 実装済（2026-06-21）**: ① **対象種別是正**（SRC
+  `SpecialPowerData.cls` Execute 準拠で `味方`=単体味方選択／`全味方`=全体。旧実装は `味方` を全体と誤判定）。
+  ② **`SpecialPowerData::event_routine()`**（効果行 `イベント=<ラベル>` を解析）。③ `apply_spirit_to_target` で
+  `対象ユニットＩＤ`=使用者・`相手ユニットＩＤ`=選んだ対象 を束縛しサブルーチンを `trigger_label` 実行。
+  ④ **コマンド引数のシステム変数解決**（`resolve_handle_var`：実ユニットに一致しない裸の handle は同名
+  script_var 値へフォールバック＝生贄ルーチンの `SpecialPower 相手ユニットＩＤ みがわり 対象ユニットＩＤ` が
+  uid へ解決）。検証 `sacrifice_special_power_makes_selected_ally_a_substitute`（生贄→みがわり end-to-end）。
+- **残（次段）**: 近似（肩代わりダメージは身代わりの装甲で再計算せず防御側向け値を流用）。プレイヤー UI の
+  SP メニューからの実発動（対象種別是正で導線は通る）はブラウザ目視のみ。
 
 **★ 追加（2026-06-20・続き）= マップ攻撃の撃破を `マップ攻撃破壊` で発火（原典忠実・ユーザ決定）**:
 - **VB6 原典ソース発見**: `srcall-2_2_33-111106/Source/Src/`（C# より上流の ground truth）。`Event.bas:1744` で
