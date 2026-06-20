@@ -4474,14 +4474,21 @@ impl App {
             let base = (preview.damage as f64 * 0.75) as i64;
             // 防御特性 (耐性÷2 / 無効化0 / 吸収=回復)。弱点の装甲半減は予測前に適用済み。
             let dmg = self.defense_attribute_damage(def_idx, &weapon.class, base);
-            // バリア吸収 (B): 防御側が バリアLv* を持てば 1000×Lv を吸収。
-            let dmg = self.apply_barrier_absorb(def_idx, sup_idx, &weapon.class, dmg);
-            // アクティブフィールド (B): 確率発動の 500×Lv 吸収。
-            let dmg = self.apply_active_field_absorb(def_idx, sup_idx, &weapon.class, dmg);
-            // シールド防御 (B): 防御側が Ｓ防御+シールドを持てば被ダメージ半減。
-            let dmg = self.apply_shield_defense(def_idx, &weapon.class, dmg);
-            // 不死身: 撃破させないよう被ダメージをキャップ。
-            let dmg = self.cap_damage_for_immortal(def_idx, def_unit.hp, dmg);
+            // みがわり (身代わり, 最優先・SRC Unit.cls:14855): 防御側が みがわり を持てば
+            // 身代わりが肩代わりし、防御側への被ダメージは 0 になる。
+            let dmg = if let Some(sub) = self.apply_migawari(def_idx, sup_idx, &weapon.class, dmg) {
+                self.push_message(format!(
+                    "みがわり: {} が {} の身代わりになった！",
+                    sub, def_pilot.nickname
+                ));
+                0
+            } else {
+                // バリア/アクティブフィールド/シールド吸収 → 不死身キャップ。
+                let dmg = self.apply_barrier_absorb(def_idx, sup_idx, &weapon.class, dmg);
+                let dmg = self.apply_active_field_absorb(def_idx, sup_idx, &weapon.class, dmg);
+                let dmg = self.apply_shield_defense(def_idx, &weapon.class, dmg);
+                self.cap_damage_for_immortal(def_idx, def_unit.hp, dmg)
+            };
             let def_old_dmg = self.database.unit_instances[def_idx].damage;
             self.database.unit_instances[def_idx].damage += dmg;
             self.push_message(format!(
@@ -4789,17 +4796,24 @@ impl App {
         let msg = if hit {
             // 防御特性 (耐性÷2 / 無効化0 / 吸収=回復)。弱点の装甲半減は予測前に適用済み。
             let counter_dmg = self.defense_attribute_damage(atk_idx, &weapon.class, preview.damage);
-            // バリア吸収 (B): 反撃を受ける側が バリアLv* を持てば 1000×Lv を吸収
-            // (反撃の攻撃側は def_idx)。
-            let counter_dmg =
-                self.apply_barrier_absorb(atk_idx, def_idx, &weapon.class, counter_dmg);
-            // アクティブフィールド (B): 確率発動の 500×Lv 吸収。
-            let counter_dmg =
-                self.apply_active_field_absorb(atk_idx, def_idx, &weapon.class, counter_dmg);
-            // シールド防御 (B): 反撃を受ける側が Ｓ防御+シールドを持てば被ダメージ半減。
-            let counter_dmg = self.apply_shield_defense(atk_idx, &weapon.class, counter_dmg);
-            // 不死身: 反撃でも撃破させないよう被ダメージをキャップ。
-            let counter_dmg = self.cap_damage_for_immortal(atk_idx, atk_unit.hp, counter_dmg);
+            // みがわり (身代わり, 最優先・SRC Unit.cls:14855): 反撃を受ける側 (atk_idx) が
+            // みがわり を持てば身代わりが肩代わりし、被ダメージは 0 になる。
+            let counter_dmg = if let Some(sub) =
+                self.apply_migawari(atk_idx, def_idx, &weapon.class, counter_dmg)
+            {
+                self.push_message(format!(
+                    "みがわり: {} が {} の身代わりになった！",
+                    sub, atk_unit.name
+                ));
+                0
+            } else {
+                // バリア/アクティブフィールド/シールド吸収 → 不死身キャップ
+                // (反撃の攻撃側は def_idx)。
+                let d = self.apply_barrier_absorb(atk_idx, def_idx, &weapon.class, counter_dmg);
+                let d = self.apply_active_field_absorb(atk_idx, def_idx, &weapon.class, d);
+                let d = self.apply_shield_defense(atk_idx, &weapon.class, d);
+                self.cap_damage_for_immortal(atk_idx, atk_unit.hp, d)
+            };
             let atk_old_dmg = self.database.unit_instances[atk_idx].damage;
             self.database.unit_instances[atk_idx].damage += counter_dmg;
             let remaining = atk_unit.hp - self.database.unit_instances[atk_idx].damage;
@@ -17322,6 +17336,68 @@ mod tests {
                 .unwrap()
                 .has_condition("みがわり"),
             "みがわり が消費されていない (1 回限りのはず)"
+        );
+    }
+
+    /// みがわり は反撃経路でも機能する: みがわり を持つ味方が攻撃して敵に反撃された
+    /// とき、反撃ダメージは身代わりが肩代わりする (通常攻撃のみの実装からの拡張)。
+    #[test]
+    fn migawari_redirects_counterattack_damage_to_substitute() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6); // 保護対象 (反撃を受ける側)
+        add_weapon(&mut app, "Hero", 30, 3); // Hero の攻撃 (敵を撃破しない)
+        place_player_unit(&mut app, "Sub", 2, 5); // 身代わり
+        register_enemy_data(&mut app, "EnemyU");
+        let foe = spawn_enemy(&mut app, "EnemyU", 3, 6);
+        add_weapon(&mut app, "EnemyU", 30, 3); // 敵の反撃武器 (Hero を撃破しない)
+        app.set_stage_state(crate::stage::StageState::Battle);
+
+        let hero = app
+            .database()
+            .unit_instances
+            .iter()
+            .find(|u| u.unit_data_name == "Hero")
+            .map(|u| u.uid.clone())
+            .unwrap();
+        let sub = app
+            .database()
+            .unit_instances
+            .iter()
+            .find(|u| u.unit_data_name == "Sub")
+            .map(|u| u.uid.clone())
+            .unwrap();
+
+        // Sub を Hero の身代わりに。
+        let script = crate::data::event::parse("SpecialPower Sub みがわり Hero\n").unwrap();
+        crate::event_runtime::execute(&mut app, &script).unwrap();
+
+        let sub_before = app.database().unit_by_uid(&sub).unwrap().damage;
+        let hero_before = app.database().unit_by_uid(&hero).unwrap().damage;
+        let _ = foe;
+
+        // Hero が敵を攻撃 → 敵が Hero に反撃 → みがわり が反撃ダメージを Sub へ。
+        click_tile(&mut app, 2, 6);
+        let ai = attack_item_index(&app);
+        click_menu_item(&mut app, ai);
+        click_tile(&mut app, 3, 6);
+
+        let sub_after = app.database().unit_by_uid(&sub).unwrap().damage;
+        let hero_after = app.database().unit_by_uid(&hero).unwrap().damage;
+        assert!(
+            sub_after > sub_before,
+            "身代わり Sub が反撃ダメージを肩代わりしていない (dmg {sub_before}->{sub_after})"
+        );
+        assert_eq!(
+            hero_after, hero_before,
+            "Hero が反撃で被弾している (みがわりのはず: dmg {hero_before}->{hero_after})"
+        );
+        assert!(
+            !app.database()
+                .unit_by_uid(&hero)
+                .unwrap()
+                .has_condition("みがわり"),
+            "みがわり が消費されていない (反撃でも 1 回限り)"
         );
     }
 
