@@ -1846,301 +1846,393 @@ fn draw_status_panel(
     cursor: Option<(u32, u32)>,
     turn: Turn,
     stage: &str,
-    scroll: (u32, u32),
+    _scroll: (u32, u32),
     assets: &Assets,
     selected_weapon_idx: usize,
 ) {
     let w = f64::from(STATUS_PANEL_WIDTH);
     let h = f64::from(STATUS_PANEL_H);
 
-    // 背景 (薄いグレー)
-    ctx.set_fill_style_str("#1f1f24");
+    // ===== オリジナル SRC (Status.cs) 準拠の配色 =====
+    // 背景=明グレー / ラベル=シアン / 値=黒 / 能力名=青 / 無効武器=暗赤 / バー=緑。
+    const BG: &str = "#ece9d8";
+    const LABEL: &str = "#0a7e8c"; // シアン系の項目ラベル
+    const VALUE: &str = "#101010"; // 値・名前 (黒)
+    const ABILITY: &str = "#000096"; // 特殊能力名 (青) — StatusFontColorAbilityName
+    const DISABLED: &str = "#960000"; // 使用不可武器 (暗赤) — StatusFontColorAbilityDisable
+    const HEADER: &str = "#13409a"; // 武器列ヘッダ (青)
+    const MUTED: &str = "#76736a";
+
+    // 背景 + VB6 風の凹枠 (外=暗シャドウ / 内=明ハイライト)。
+    ctx.set_fill_style_str(BG);
     ctx.fill_rect(ox as f64, oy as f64, w, h);
-    ctx.set_stroke_style_str("#5a5a66");
+    ctx.set_stroke_style_str("#ffffff");
     ctx.set_line_width(1.0);
+    ctx.stroke_rect(ox as f64 + 1.5, oy as f64 + 1.5, w - 3.0, h - 3.0);
+    ctx.set_stroke_style_str("#82806f");
     ctx.stroke_rect(ox as f64 + 0.5, oy as f64 + 0.5, w - 1.0, h - 1.0);
 
-    let mut y = oy as f64 + 6.0;
-    let pad_x = ox as f64 + 8.0;
-
-    // 上段: ターン / フェーズ / ステージ
-    ctx.set_fill_style_str("#fff176");
-    ctx.set_font(&format!("bold 12px {JP_SANS}"));
+    let pad_x = ox as f64 + 6.0;
+    let right = ox as f64 + w - 6.0;
+    let mut y = oy as f64 + 4.0;
     ctx.set_text_align("left");
     ctx.set_text_baseline("top");
+
+    // ラベル(シアン)+値(黒) を 1 行に描く小ヘルパ。フォントは呼び出し前に設定する。
+    let lv =
+        |ctx: &CanvasRenderingContext2d, x: f64, y: f64, label: &str, gap: f64, value: &str| {
+            ctx.set_text_align("left");
+            ctx.set_fill_style_str(LABEL);
+            let _ = ctx.fill_text(label, x, y);
+            ctx.set_fill_style_str(VALUE);
+            let _ = ctx.fill_text(value, x + gap, y);
+        };
+
+    // --- ターン / フェーズ (控えめな見出し行) ---
+    ctx.set_fill_style_str(MUTED);
+    ctx.set_font(&format!("10px {JP_SANS}"));
     let _ = ctx.fill_text(
         &format!("T{} {}", turn.number, turn.phase.label()),
         pad_x,
         y,
     );
-    y += 16.0;
-    ctx.set_fill_style_str("#cfd8dc");
-    ctx.set_font(&format!("11px {JP_SANS}"));
-    let stage_text = if stage.is_empty() {
-        "(no stage)"
-    } else {
-        stage
-    };
-    let _ = ctx.fill_text(stage_text, pad_x, y);
-    y += 16.0;
-    let (sx, sy) = scroll;
-    ctx.set_fill_style_str("#888");
-    ctx.set_font(&format!("10px {JP_SANS}"));
-    let map_dim = database
-        .map
-        .as_ref()
-        .map(|m| format!("Map {}x{}  view@{},{}", m.width, m.height, sx, sy))
-        .unwrap_or_else(|| "Map: (none)".into());
-    let _ = ctx.fill_text(&map_dim, pad_x, y);
+    if !stage.is_empty() {
+        ctx.set_text_align("right");
+        let _ = ctx.fill_text(&truncate(stage, 9), right, y);
+        ctx.set_text_align("left");
+    }
     y += 14.0;
 
-    // 区切り線
-    ctx.set_stroke_style_str("#3a3a45");
-    ctx.begin_path();
-    ctx.move_to(pad_x, y + 2.0);
-    ctx.line_to(ox as f64 + w - 8.0, y + 2.0);
-    ctx.stroke();
-    y += 8.0;
-
-    // 中段: カーソル位置のユニット詳細
     let Some((cx, cy)) = cursor else {
-        ctx.set_fill_style_str("#6a6a78");
+        ctx.set_fill_style_str(MUTED);
         ctx.set_font(&format!("italic 11px {JP_SANS}"));
-        let _ = ctx.fill_text("カーソルなし", pad_x, y);
+        let _ = ctx.fill_text("カーソルなし", pad_x, y + 4.0);
         return;
     };
 
-    // 地形情報を 1 行で
-    if let Some(map) = database.map.as_ref() {
-        if cx < map.width && cy < map.height {
-            if let Some(t) = terrain::lookup(map.cell(cx, cy).terrain_id) {
-                ctx.set_fill_style_str("#9ad7ff");
-                ctx.set_font(&format!("11px {JP_SANS}"));
-                let _ = ctx.fill_text(
-                    &format!(
-                        "地形: {} ({},{}) 移動{} 回避{:+}",
-                        t.name, cx, cy, t.move_cost, t.hit_mod
-                    ),
-                    pad_x,
-                    y,
-                );
-                y += 16.0;
-            }
-        }
-    }
-
     let unit_inst = database.units_at(cx, cy).next();
     let Some(u) = unit_inst else {
-        ctx.set_fill_style_str("#6a6a78");
-        ctx.set_font(&format!("italic 11px {JP_SANS}"));
-        let _ = ctx.fill_text("(ユニットなし)", pad_x, y);
+        // ユニットがいないマス: 地形のみ表示。
+        if let Some(map) = database.map.as_ref() {
+            if cx < map.width && cy < map.height {
+                if let Some(t) = terrain::lookup(map.cell(cx, cy).terrain_id) {
+                    ctx.set_font(&format!("11px {JP_SANS}"));
+                    lv(
+                        ctx,
+                        pad_x,
+                        y,
+                        "地形",
+                        34.0,
+                        &format!("{} ({},{})", t.name, cx, cy),
+                    );
+                    y += 16.0;
+                    lv(
+                        ctx,
+                        pad_x,
+                        y,
+                        "移動",
+                        34.0,
+                        &format!("{}  回避 {:+}%", t.move_cost, t.hit_mod),
+                    );
+                }
+            }
+        }
         return;
     };
 
     let unit_def = database.unit_by_name(&u.unit_data_name);
-    let pilot_def = database.pilot_by_name(&u.pilot_name);
+    let main_pilot = u.main_pilot_name();
+    let pilot_data = if main_pilot.is_empty() {
+        None
+    } else {
+        database.effective_pilot_data(main_pilot)
+    };
+    let pilot_inst = u
+        .pilot_ids
+        .first()
+        .and_then(|id| database.pilot_instance_by_id(id));
 
-    // ユニット名 + パイロット顔グラ (右パネル上部にコンパクトに 48×48)
-    ctx.set_fill_style_str("#ffffff");
+    // ===== パイロットブロック =====
+    let face = 42.0;
+    let face_top = y;
+    if let Some(pd) = pilot_data.as_ref() {
+        let hint = pd.bitmap.clone().unwrap_or_else(|| pd.nickname.clone());
+        match assets.find_image(&hint) {
+            Some(img) => {
+                let _ = ctx.draw_image_with_html_image_element_and_dw_and_dh(
+                    img, pad_x, face_top, face, face,
+                );
+            }
+            None => {
+                ctx.set_fill_style_str("#c9c6b5");
+                ctx.fill_rect(pad_x, face_top, face, face);
+            }
+        }
+        ctx.set_stroke_style_str("#82806f");
+        ctx.set_line_width(1.0);
+        ctx.stroke_rect(pad_x + 0.5, face_top + 0.5, face, face);
+    }
+
+    // 顔グラ右: 名前 / レベル / 気力 / ＳＰ
+    let tx = pad_x + face + 5.0;
+    let mut py = face_top;
+    ctx.set_fill_style_str(VALUE);
     ctx.set_font(&format!("bold 12px {JP_SANS}"));
-    let face_size = 48.0;
-    let text_x = pad_x + face_size + 6.0;
-    if let Some(p) = pilot_def {
-        let hint = p.bitmap.clone().unwrap_or_else(|| p.nickname.clone());
-        if let Some(img) = assets.find_image(&hint) {
-            // 顔グラ枠 + 画像
-            ctx.set_stroke_style_str("#444");
-            ctx.set_line_width(1.0);
-            ctx.stroke_rect(pad_x + 0.5, y + 0.5, face_size, face_size);
-            let _ = ctx.draw_image_with_html_image_element_and_dw_and_dh(
-                img, pad_x, y, face_size, face_size,
-            );
-        } else {
-            // 顔グラなしの placeholder
-            ctx.set_fill_style_str("#3a3a45");
-            ctx.fill_rect(pad_x, y, face_size, face_size);
+    let pname = pilot_data
+        .as_ref()
+        .map(|p| p.nickname.clone())
+        .unwrap_or_else(|| "(無人)".to_string());
+    let _ = ctx.fill_text(&truncate(&pname, 6), tx, py);
+    py += 13.0;
+    ctx.set_font(&format!("10px {JP_SANS}"));
+    // レベル (撃墜数は未実装 → (0) プレースホルダ)。
+    let level = pilot_inst.map(|p| p.level).unwrap_or(1);
+    lv(ctx, tx, py, "Lv", 22.0, &format!("{level} (0)"));
+    py += 12.0;
+    // 気力 + 性格 (例: 100 (強気))。
+    let personality = pilot_data.as_ref().and_then(|p| p.personality.clone());
+    let morale_text = match personality.as_deref() {
+        Some(per) if !per.is_empty() => format!("{} ({per})", u.morale),
+        _ => u.morale.to_string(),
+    };
+    lv(ctx, tx, py, "気力", 24.0, &morale_text);
+    py += 12.0;
+    if let Some(pd) = pilot_data.as_ref() {
+        let sp_max = pd.sp.unwrap_or(0);
+        if sp_max > 0 {
+            let sp_cur = pilot_inst.map(|p| p.sp_remaining).unwrap_or(sp_max);
+            lv(ctx, tx, py, "SP", 22.0, &format!("{sp_cur}/{sp_max}"));
+            py += 12.0;
         }
     }
-    let _ = ctx.fill_text(
-        &format!("[{}] {}", u.party.short_label(), u.unit_data_name),
-        text_x,
-        y,
-    );
-    y += 14.0;
-    if let Some(p) = pilot_def {
-        ctx.set_fill_style_str("#cfd8dc");
-        ctx.set_font(&format!("11px {JP_SANS}"));
-        let _ = ctx.fill_text(&format!("Pilot: {}", p.nickname), text_x, y);
-        y += 14.0;
-    }
-    // 顔グラ右下まで使う場合は y を顔グラ下端に同期
-    if pilot_def.is_some() {
-        y = y.max(oy as f64 + 90.0 - 12.0);
+    y = (face_top + face).max(py) + 4.0;
+
+    // パイロット能力値 (2 列)。
+    if let Some(pd) = pilot_data.as_ref() {
+        ctx.set_font(&format!("10px {JP_SANS}"));
+        let col2 = pad_x + (w - 12.0) / 2.0;
+        lv(ctx, pad_x, y, "格闘", 28.0, &pd.infight.to_string());
+        lv(ctx, col2, y, "射撃", 28.0, &pd.shooting.to_string());
+        y += 12.0;
+        lv(ctx, pad_x, y, "命中", 28.0, &pd.hit.to_string());
+        lv(ctx, col2, y, "回避", 28.0, &pd.dodge.to_string());
+        y += 12.0;
+        lv(ctx, pad_x, y, "技量", 28.0, &pd.technique.to_string());
+        lv(ctx, col2, y, "反応", 28.0, &pd.intuition.to_string());
+        y += 13.0;
+
+        // 特殊能力 (スペシャルパワー + 技能) — 能力名は青。
+        let mut abilities: Vec<String> = pd.features.iter().map(|(n, _)| n.clone()).collect();
+        if let Some(pi) = pilot_inst {
+            for s in &pi.skills {
+                if !abilities.iter().any(|a| a == s) {
+                    abilities.push(s.clone());
+                }
+            }
+        }
+        if !abilities.is_empty() {
+            ctx.set_fill_style_str(ABILITY);
+            ctx.set_font(&format!("10px {JP_SANS}"));
+            for line in wrap_text(&abilities.join(" "), 26).into_iter().take(2) {
+                let _ = ctx.fill_text(&line, pad_x, y);
+                y += 12.0;
+            }
+        }
+        // 霊力 (plana)。
+        if let Some(pi) = pilot_inst {
+            if pi.plana > 0 {
+                ctx.set_font(&format!("10px {JP_SANS}"));
+                lv(ctx, pad_x, y, "霊力", 28.0, &pi.plana.to_string());
+                y += 12.0;
+            }
+        }
     }
 
-    // HP / EN バー (HP は damage に向けて補間中の displayed_damage を使う)
+    // 区切り線。
+    let divider = |ctx: &CanvasRenderingContext2d, y: f64| {
+        ctx.set_stroke_style_str("#b9b6a3");
+        ctx.set_line_width(1.0);
+        ctx.begin_path();
+        ctx.move_to(pad_x, y + 0.5);
+        ctx.line_to(right, y + 0.5);
+        ctx.stroke();
+    };
+    y += 2.0;
+    divider(ctx, y);
+    y += 5.0;
+
+    // ===== 機体ブロック =====
     if let Some(d) = unit_def {
-        let current_hp = (d.hp as f64 - u.displayed_damage).max(0.0);
-        draw_bar(
-            ctx,
-            pad_x,
-            y,
-            w - 16.0,
-            10.0,
-            current_hp,
-            d.hp as f64,
-            "#e53935",
-            "HP",
-        );
-        y += 14.0;
-        draw_bar(
-            ctx,
-            pad_x,
-            y,
-            w - 16.0,
-            10.0,
-            d.en as f64,
-            d.en as f64,
-            "#1e88e5",
-            "EN",
-        );
-        y += 14.0;
-        // 装甲 / 運動 / 移動 / サイズ
-        ctx.set_fill_style_str("#e0e0e0");
+        ctx.set_fill_style_str(VALUE);
+        ctx.set_font(&format!("bold 11px {JP_SANS}"));
+        let _ = ctx.fill_text(&truncate(&d.name, 11), pad_x, y);
+        y += 13.0;
+        // 現在地形 + 回避補正。
+        if let Some(map) = database.map.as_ref() {
+            if cx < map.width && cy < map.height {
+                let tid = map.cell(cx, cy).terrain_id;
+                if let Some(t) = terrain::lookup(tid) {
+                    let hit = database.terrain_hit_mod(tid);
+                    let eff = if hit != 0 {
+                        format!("  回避{hit:+}%")
+                    } else {
+                        String::new()
+                    };
+                    ctx.set_fill_style_str(LABEL);
+                    ctx.set_font(&format!("10px {JP_SANS}"));
+                    let _ = ctx.fill_text(&format!("{}{}", t.name, eff), pad_x, y);
+                    y += 13.0;
+                }
+            }
+        }
+        // HP / EN (ラベル+値 + 緑バー)。
+        let bar = |ctx: &CanvasRenderingContext2d, y: f64, label: &str, cur: f64, max: f64| {
+            ctx.set_font(&format!("10px {JP_SANS}"));
+            lv(
+                ctx,
+                pad_x,
+                y,
+                label,
+                26.0,
+                &format!("{}/{}", cur.round() as i64, max.round() as i64),
+            );
+            let by = y + 11.0;
+            let bw = w - 12.0;
+            let bh = 4.0;
+            ctx.set_fill_style_str("#cfccba");
+            ctx.fill_rect(pad_x, by, bw, bh);
+            let frac = if max <= 0.0 {
+                0.0
+            } else {
+                (cur / max).clamp(0.0, 1.0)
+            };
+            ctx.set_fill_style_str("#1c9e3a");
+            ctx.fill_rect(pad_x, by, bw * frac, bh);
+            ctx.set_stroke_style_str("#82806f");
+            ctx.set_line_width(1.0);
+            ctx.stroke_rect(pad_x + 0.5, by + 0.5, bw - 1.0, bh - 1.0);
+        };
+        let hp_max = database.effective_max_hp(u);
+        let hp_cur = (hp_max as f64 - u.displayed_damage).max(0.0);
+        let en_max = database.effective_max_en(u);
+        let en_cur = (en_max - u.en_consumed).max(0);
+        bar(ctx, y, "ＨＰ", hp_cur, hp_max as f64);
+        y += 17.0;
+        bar(ctx, y, "ＥＮ", en_cur as f64, en_max as f64);
+        y += 17.0;
+        // 装甲 / 運動性 / 移動力 / サイズ / 適応。
         ctx.set_font(&format!("10px {JP_SANS}"));
-        let _ = ctx.fill_text(
-            &format!("装甲 {}  運動 {}  移動 {}", d.armor, d.mobility, d.speed),
+        let col2 = pad_x + (w - 12.0) / 2.0;
+        lv(
+            ctx,
             pad_x,
             y,
+            "装甲",
+            28.0,
+            &database.effective_armor(u).to_string(),
+        );
+        lv(
+            ctx,
+            col2,
+            y,
+            "運動",
+            28.0,
+            &database.effective_mobility(u).to_string(),
         );
         y += 12.0;
-        let _ = ctx.fill_text(
-            &format!(
-                "適応 {}  サイズ {}  移地 {}",
-                d.adaption.as_str(),
-                d.size.label(),
-                d.transportation
-            ),
+        lv(
+            ctx,
             pad_x,
             y,
+            "移動",
+            28.0,
+            &database.effective_speed(u).to_string(),
         );
-        y += 14.0;
-    }
-
-    // パイロット能力値（コンパクト 2 列）
-    if let Some(p) = pilot_def {
-        ctx.set_fill_style_str("#cfd8dc");
-        ctx.set_font(&format!("10px {JP_SANS}"));
-        let col = w / 2.0 - 4.0;
-        let mut row_y = y;
-        let _ = ctx.fill_text(&format!("格闘 {}", p.infight), pad_x, row_y);
-        let _ = ctx.fill_text(&format!("射撃 {}", p.shooting), pad_x + col, row_y);
-        row_y += 12.0;
-        let _ = ctx.fill_text(&format!("命中 {}", p.hit), pad_x, row_y);
-        let _ = ctx.fill_text(&format!("回避 {}", p.dodge), pad_x + col, row_y);
-        row_y += 12.0;
-        let _ = ctx.fill_text(&format!("反応 {}", p.intuition), pad_x, row_y);
-        let _ = ctx.fill_text(&format!("技量 {}", p.technique), pad_x + col, row_y);
-        row_y += 12.0;
-        if let Some(sp) = p.sp {
-            let _ = ctx.fill_text(&format!("SP {}", sp), pad_x, row_y);
-            row_y += 12.0;
-        }
-        y = row_y + 4.0;
-    }
-
-    // 武器一覧 (compact) + 選択中ハイライト
-    if let Some(d) = unit_def {
-        if !d.weapons.is_empty() {
-            ctx.set_stroke_style_str("#3a3a45");
-            ctx.begin_path();
-            ctx.move_to(pad_x, y);
-            ctx.line_to(ox as f64 + w - 8.0, y);
-            ctx.stroke();
-            y += 6.0;
-            ctx.set_fill_style_str("#9ad7ff");
-            ctx.set_font(&format!("bold 10px {JP_SANS}"));
-            let label = if selected_weapon_idx == 0 {
-                "武器 (W で選択: 自動)".to_string()
-            } else {
-                format!("武器 (W: 固定 #{selected_weapon_idx})")
-            };
-            let _ = ctx.fill_text(&label, pad_x, y);
-            y += 12.0;
+        lv(ctx, col2, y, "ｻｲｽﾞ", 28.0, d.size.label());
+        y += 12.0;
+        lv(ctx, pad_x, y, "適応", 28.0, d.adaption.as_str());
+        y += 13.0;
+        // 機体特殊能力 (例: 霊力変換器) — 能力名青。
+        let ufeatures: Vec<String> = d.features.iter().map(|(n, _)| n.clone()).collect();
+        if !ufeatures.is_empty() {
+            ctx.set_fill_style_str(ABILITY);
             ctx.set_font(&format!("10px {JP_SANS}"));
-            let panel_bottom = oy as f64 + h - 30.0;
-            for (i, w_def) in d.weapons.iter().enumerate() {
-                if y + 12.0 > panel_bottom {
-                    ctx.set_fill_style_str("#e0e0e0");
-                    let _ = ctx.fill_text("…", pad_x, y);
-                    break;
-                }
-                let active = selected_weapon_idx == i + 1;
-                if active {
-                    ctx.set_fill_style_str("rgba(255,235,59,0.18)");
-                    ctx.fill_rect(pad_x - 2.0, y - 1.0, w - 12.0, 12.0);
-                }
-                ctx.set_fill_style_str(if active { "#fff176" } else { "#e0e0e0" });
-                let line = format!(
-                    "{}{:<10}P{} {}-{}",
-                    if active { "▶ " } else { "  " },
-                    truncate(&w_def.name, 10),
-                    w_def.power,
-                    w_def.min_range,
-                    w_def.max_range
-                );
+            for line in wrap_text(&ufeatures.join(" "), 26).into_iter().take(2) {
                 let _ = ctx.fill_text(&line, pad_x, y);
                 y += 12.0;
             }
         }
     }
 
-    // 戦闘予測（パネル末尾）
-    if let Some(preview_line) = build_combat_preview_line(database, Some(u), cx, cy) {
-        let bottom = oy as f64 + h - 4.0;
-        ctx.set_fill_style_str("#fff176");
-        ctx.set_font(&format!("bold 10px {JP_SANS}"));
+    // ===== 武器ブロック (攻撃 / 射程 を右寄せ 2 カラム) =====
+    // 戦闘予測行はパネル末尾に出すので、表示される場合のみ 1 行ぶん確保する。
+    let preview = build_combat_preview_line(database, Some(u), cx, cy);
+    if let Some(d) = unit_def {
+        if !d.weapons.is_empty() {
+            y += 1.0;
+            divider(ctx, y);
+            y += 4.0;
+            let col_pow = right - 46.0; // 攻撃列 (右寄せ基準)
+            let col_rng = right; // 射程列 (右端)
+            ctx.set_fill_style_str(HEADER);
+            ctx.set_font(&format!("bold 10px {JP_SANS}"));
+            ctx.set_text_align("right");
+            let _ = ctx.fill_text("攻撃", col_pow, y);
+            let _ = ctx.fill_text("射程", col_rng, y);
+            ctx.set_text_align("left");
+            y += 12.0;
+
+            ctx.set_font(&format!("10px {JP_SANS}"));
+            let reserve = if preview.is_some() { 13.0 } else { 3.0 };
+            let panel_bottom = oy as f64 + h - reserve;
+            for (i, wd) in d.weapons.iter().enumerate() {
+                if y + 11.0 > panel_bottom {
+                    ctx.set_fill_style_str(MUTED);
+                    ctx.set_text_align("left");
+                    let _ = ctx.fill_text("…", pad_x, y);
+                    break;
+                }
+                let active = selected_weapon_idx == i + 1;
+                // 現在使用不可 (必要気力未達 / 残弾切れ) → 暗赤。
+                let ammo_out = wd.bullet > 0
+                    && u.weapons
+                        .get(i)
+                        .map(|uw| uw.bullet_remaining <= 0)
+                        .unwrap_or(false);
+                let disabled = wd.necessary_morale > u.morale || ammo_out;
+                if active {
+                    ctx.set_fill_style_str("rgba(40,90,200,0.14)");
+                    ctx.fill_rect(pad_x - 2.0, y - 1.0, w - 8.0, 12.0);
+                }
+                // 名称 (左)。
+                ctx.set_fill_style_str(if disabled { DISABLED } else { VALUE });
+                ctx.set_text_align("left");
+                let prefix = if active { "▶" } else { "" };
+                let _ = ctx.fill_text(&format!("{prefix}{}", truncate(&wd.name, 7)), pad_x, y);
+                // 攻撃 / 射程 (右寄せ)。
+                ctx.set_text_align("right");
+                let _ = ctx.fill_text(&wd.power.to_string(), col_pow, y);
+                let rng = if wd.min_range == wd.max_range {
+                    wd.max_range.to_string()
+                } else {
+                    format!("{}-{}", wd.min_range, wd.max_range)
+                };
+                let _ = ctx.fill_text(&rng, col_rng, y);
+                ctx.set_text_align("left");
+                y += 11.0;
+            }
+        }
+    }
+
+    // 戦闘予測 (パネル末尾, 控えめに)。
+    if let Some(preview_line) = preview {
+        let bottom = oy as f64 + h - 3.0;
+        ctx.set_fill_style_str("#0a6a78");
+        ctx.set_font(&format!("9px {JP_SANS}"));
         ctx.set_text_align("left");
         ctx.set_text_baseline("bottom");
         let _ = ctx.fill_text(&preview_line, pad_x, bottom);
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn draw_bar(
-    ctx: &CanvasRenderingContext2d,
-    x: f64,
-    y: f64,
-    w: f64,
-    h: f64,
-    current: f64,
-    max: f64,
-    color: &str,
-    label: &str,
-) {
-    // 背景
-    ctx.set_fill_style_str("#33333a");
-    ctx.fill_rect(x, y, w, h);
-    let frac = if max <= 0.0 {
-        0.0
-    } else {
-        (current / max).clamp(0.0, 1.0)
-    };
-    ctx.set_fill_style_str(color);
-    ctx.fill_rect(x, y, w * frac, h);
-    ctx.set_stroke_style_str("#000");
-    ctx.set_line_width(1.0);
-    ctx.stroke_rect(x + 0.5, y + 0.5, w - 1.0, h - 1.0);
-    // ラベル
-    ctx.set_fill_style_str("#fff");
-    ctx.set_font(&format!("bold 9px {JP_SANS}"));
-    ctx.set_text_align("left");
-    ctx.set_text_baseline("middle");
-    let _ = ctx.fill_text(
-        &format!("{label} {}/{}", current.round() as i64, max.round() as i64),
-        x + 4.0,
-        y + h / 2.0,
-    );
 }
 
 fn truncate(s: &str, max_chars: usize) -> String {
