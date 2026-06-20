@@ -580,16 +580,29 @@ fn default_time_of_day() -> String {
 /// ユニットデータの特殊能力 (分身/ステルス) が戦闘の命中判定に反映されない
 /// (`predict_with_status_terrain` は条件名のみを見るため)。
 fn push_combat_feature_statuses(unit: &crate::UnitInstance, statuses: &mut Vec<String>) {
+    use crate::feature::feature_name_matches_base as base_match;
     for f in &unit.active_features {
         if !f.is_active {
             continue;
         }
-        if matches!(f.name.as_str(), "分身" | "ステルス") {
+        let name = f.name.as_str();
+        if matches!(name, "分身" | "ステルス") {
             statuses.push(f.name.clone());
-        } else if crate::feature::feature_name_matches_base(&f.name, "バリア") {
-            // バリア / バリアLv* 特徴 → 既存の `バリア` status (predict_with_status_terrain
-            // の ÷2 近似) を発動させる。`バリアシールド`/`バリア中和` 等の別能力は base 不一致
-            // で除外される (feature_name_matches_base は `<base>` 完全一致 / `<base>Lv<n>` のみ)。
+        } else if base_match(name, "超回避") {
+            // 超回避Lv* (回避系): Lv を combat 側で解析するため特徴名をそのまま積む
+            // (predict_with_status_terrain が `-(10×Lv)` の命中ペナルティへ近似)。
+            statuses.push(f.name.clone());
+        } else if base_match(name, "バリア")
+            || base_match(name, "盾")
+            || name.contains("シールド")
+            || name.contains("フィールド")
+        {
+            // (A) バリア/シールド/フィールド系の防御能力 (シールド・小型/大型/アクティブ
+            // シールド・バリアシールド・フィールド・プロテクト・フィールド・アクティブ
+            // フィールド 等) は、まとめて既存の `バリア` status (÷2 近似) に合流させる。
+            // SRC では確率・属性・S防御依存だが、現予測モデルでは常時 ÷2 で近似する
+            // (将来 (B) で DefenseMode の確率ロールへ精緻化)。`バリア中和` は攻撃属性で
+            // base 不一致かつ シールド/フィールド を含まないため除外される。
             statuses.push("バリア".to_string());
         }
     }
@@ -11872,16 +11885,17 @@ mod tests {
     }
 
     /// バリア / バリアLv* 特徴は `バリア` status に合流し、戦闘の ÷2 近似
-    /// (predict_with_status_terrain) を発動させる。`バリアシールド`/`バリア中和` は
-    /// 別能力なので合流しない (base 名一致のみ)。
+    /// (predict_with_status_terrain) を発動させる。`バリア中和` (攻撃属性) は
+    /// 合流しない。`バリアシールド` 等のシールド/フィールド系の合流は
+    /// `combat_feature_statuses_merges_shield_field_and_chougaihi` で検証。
     #[test]
     fn combat_feature_statuses_merges_barrier_feature() {
         use crate::feature::ActiveFeature;
         let mut u = crate::UnitInstance::new("X", "P", crate::Party::Enemy, 0, 0);
         u.active_features = vec![
-            ActiveFeature::new("バリアLv2", ""),         // → "バリア"
-            ActiveFeature::new("バリアシールドLv3", ""), // 別能力 → 除外
-            ActiveFeature::new("バリア中和", ""),        // 別能力 → 除外
+            ActiveFeature::new("バリアLv2", ""),  // → "バリア"
+            ActiveFeature::new("バリア", ""),     // → "バリア"
+            ActiveFeature::new("バリア中和", ""), // 攻撃属性 → 除外
         ];
         let mut s = Vec::new();
         push_combat_feature_statuses(&u, &mut s);
@@ -11891,8 +11905,38 @@ mod tests {
         );
         assert_eq!(
             s.iter().filter(|x| x.as_str() == "バリア").count(),
-            1,
-            "バリアシールド/バリア中和 は除外され バリア は 1 つだけ"
+            2,
+            "バリアLv2 と バリア が合流し バリア中和 は除外され バリア は 2 つ"
+        );
+    }
+
+    /// (A) シールド/フィールド系の防御能力はまとめて `バリア` status (÷2 近似) に合流し、
+    /// 超回避Lv* は Lv 解析のため特徴名のまま積まれる。`バリア中和` は除外。
+    #[test]
+    fn combat_feature_statuses_merges_shield_field_and_chougaihi() {
+        use crate::feature::ActiveFeature;
+        let mut u = crate::UnitInstance::new("X", "P", crate::Party::Enemy, 0, 0);
+        u.active_features = vec![
+            ActiveFeature::new("アクティブシールド", ""), // → バリア
+            ActiveFeature::new("プロテクト・フィールド", ""), // → バリア
+            ActiveFeature::new("バリアシールドLv3", ""),  // → バリア (シールド 含む)
+            ActiveFeature::new("超回避Lv4", ""),          // → 名前のまま
+            ActiveFeature::new("バリア中和", ""),         // 攻撃属性 → 除外
+        ];
+        let mut s = Vec::new();
+        push_combat_feature_statuses(&u, &mut s);
+        assert_eq!(
+            s.iter().filter(|x| x.as_str() == "バリア").count(),
+            3,
+            "アクティブシールド/プロテクト・フィールド/バリアシールド の 3 つが バリア に合流"
+        );
+        assert!(
+            s.contains(&"超回避Lv4".to_string()),
+            "超回避Lv4 は Lv 解析のため特徴名のまま積まれる"
+        );
+        assert!(
+            !s.iter().any(|x| x.contains("中和")),
+            "バリア中和 は合流しない"
         );
     }
 
