@@ -3973,6 +3973,49 @@ impl App {
     /// バリア吸収強度 (防御能力 (B)): 防御側 `def_idx` の `バリア`/`バリアLv*` 特殊能力が
     /// 武器属性に対し有効なとき `1000×Lv` を返す (複数は最大、該当無しは 0)。対象属性
     /// (`バリアLv*=別名 対象属性 …` の 2 番目のトークン) は `defense_attr_matches` で
+    /// 相殺/中和 (バリア・フィールドのオプション・防御系特殊能力.md): 攻撃側 `attacker_idx` が
+    /// 防御側に **隣接 (マンハッタン1)** していて、防御側のバリア/フィールドと **同名 (別名=値の
+    /// 1 番目トークンが一致)** のバリア/フィールドを持つとき、その Lv を返す (複数は最大)。
+    /// 相殺=完全無効 / 中和=この Lv 分だけ効果減少、に使う。条件を満たさなければ None。
+    /// SRC.NET `Unit.cs::IsSameCategory` (別名一致) + 隣接判定 準拠。
+    fn same_named_adjacent_barrier_level(
+        &self,
+        attacker_idx: usize,
+        def_idx: usize,
+        alias: &str,
+    ) -> Option<i32> {
+        if alias.is_empty() {
+            return None;
+        }
+        let a = &self.database.unit_instances[attacker_idx];
+        let d = &self.database.unit_instances[def_idx];
+        if a.off_map || d.off_map {
+            return None;
+        }
+        let dist =
+            (i64::from(a.x) - i64::from(d.x)).abs() + (i64::from(a.y) - i64::from(d.y)).abs();
+        if dist != 1 {
+            return None;
+        }
+        let mut best: Option<i32> = None;
+        for f in &a.active_features {
+            if !f.is_active {
+                continue;
+            }
+            let lv = crate::feature::feature_level(std::slice::from_ref(f), "バリア")
+                .or_else(|| crate::feature::feature_level(std::slice::from_ref(f), "フィールド"))
+                .or_else(|| {
+                    crate::feature::feature_level(std::slice::from_ref(f), "アクティブフィールド")
+                });
+            if let Some(lv) = lv {
+                if f.value.split_whitespace().next().unwrap_or("") == alias {
+                    best = Some(best.map_or(lv, |b| b.max(lv)));
+                }
+            }
+        }
+        best
+    }
+
     /// バリア吸収 (防御能力 (B)・SRC `バリア`/`フィールド` 特殊能力): 防御側の バリア=1000×Lv /
     /// フィールド=500×Lv が、対象属性に該当する攻撃を吸収する (吸収後の残ダメージを返す。
     /// 完全吸収は 0)。確率ではなく**確定**だが、予測シグネチャ変更を避け実行段で適用する。
@@ -4015,14 +4058,14 @@ impl App {
                 {
                     continue; // 確率発動は apply_active_field_absorb
                 }
-                let per_lv = if let Some(lv) =
+                let (base_mult, lv) = if let Some(lv) =
                     crate::feature::feature_level(std::slice::from_ref(f), "バリア")
                 {
-                    1000 * i64::from(lv)
+                    (1000i64, lv)
                 } else if let Some(lv) =
                     crate::feature::feature_level(std::slice::from_ref(f), "フィールド")
                 {
-                    500 * i64::from(lv)
+                    (500i64, lv)
                 } else {
                     continue;
                 };
@@ -4036,9 +4079,28 @@ impl App {
                 if morale < morale_req || avail_en < en_cost {
                     continue; // 気力不足 / EN 不足では発動しない
                 }
+                // 相殺/中和 (オプション・トークン 5 番目以降): 隣接する同名バリア/フィールドを
+                // 持つ攻撃側で、相殺=完全無効 / 中和=攻撃側 Lv 分だけ効果減少。
+                let mut eff_lv = lv;
+                let sousai = toks.iter().skip(4).any(|t| t.contains("相殺"));
+                let chuwa = toks.iter().skip(4).any(|t| t.contains("中和"));
+                if sousai || chuwa {
+                    let alias = toks.first().copied().unwrap_or("");
+                    if let Some(atk_lv) =
+                        self.same_named_adjacent_barrier_level(attacker_idx, def_idx, alias)
+                    {
+                        if sousai {
+                            continue; // 相殺: 完全無効
+                        }
+                        eff_lv = (lv - atk_lv).max(0);
+                        if eff_lv <= 0 {
+                            continue;
+                        }
+                    }
+                }
                 avail_en -= en_cost;
                 en_used += en_cost;
-                strength += per_lv;
+                strength += base_mult * i64::from(eff_lv);
             }
             (strength, en_used)
         };
@@ -14439,6 +14501,65 @@ mod tests {
             app.apply_barrier_absorb(def_idx, atk_idx, "火", 1500),
             0,
             "対象属性 火 のバリアは 火 武器を吸収する"
+        );
+    }
+
+    /// (B knobs) 相殺/中和: 隣接する同名 (別名一致) バリアを持つ攻撃側に対し、相殺=完全無効 /
+    /// 中和=攻撃側 Lv 分だけ効果減少。
+    #[test]
+    fn barrier_sousai_and_chuwa_with_adjacent_same_named() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Atk", 3, 6);
+        let atk = first_player_uid(&app);
+        let atk = app.database().idx_by_uid(&atk).unwrap();
+        let target = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Def",
+            "DP",
+            crate::Party::Enemy,
+            4,
+            6, // (3,6) と隣接
+        ));
+        let def = app.database().idx_by_uid(&target).unwrap();
+
+        // --- 相殺 --- defender: バリアLv3=魔法障壁 … 相殺 (3000 吸収・相殺オプション)。
+        app.database_mut().unit_instances[def].active_features.push(
+            crate::feature::ActiveFeature::new("バリアLv3", "魔法障壁 全 0 0 相殺"),
+        );
+        // 攻撃側が同名 (魔法障壁) バリアを隣接所持 → 相殺で防御側バリア無効。
+        app.database_mut().unit_instances[atk].active_features.push(
+            crate::feature::ActiveFeature::new("バリアLv1", "魔法障壁 全 0 0"),
+        );
+        assert_eq!(
+            app.apply_barrier_absorb(def, atk, "実", 2000),
+            2000,
+            "相殺: 隣接同名バリアで防御側バリアが無効化"
+        );
+        // 攻撃側が同名バリアを持たなければ通常どおり吸収 (3000>2000 → 0)。
+        app.database_mut().unit_instances[atk]
+            .active_features
+            .clear();
+        assert_eq!(
+            app.apply_barrier_absorb(def, atk, "実", 2000),
+            0,
+            "攻撃側に同名バリアが無ければ通常吸収"
+        );
+
+        // --- 中和 --- defender: バリアLv3=魔法障壁 … 中和。攻撃側 バリアLv1=魔法障壁 隣接
+        // → eff_lv = 3-1 = 2 → 2000 吸収。
+        app.database_mut().unit_instances[def]
+            .active_features
+            .clear();
+        app.database_mut().unit_instances[def].active_features.push(
+            crate::feature::ActiveFeature::new("バリアLv3", "魔法障壁 全 0 0 中和"),
+        );
+        app.database_mut().unit_instances[atk].active_features.push(
+            crate::feature::ActiveFeature::new("バリアLv1", "魔法障壁 全 0 0"),
+        );
+        assert_eq!(
+            app.apply_barrier_absorb(def, atk, "実", 2500),
+            500,
+            "中和: Lv3-1=2 → 2000 吸収、残 500"
         );
     }
 
