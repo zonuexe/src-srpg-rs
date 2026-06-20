@@ -10,7 +10,7 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 ## 現在地（2026-06-20）— 公式サンプルシナリオ互換 + 防御能力の方針決定
 
 **ブランチ**: `feat/sample-scenario-smoke`（`master` ではなくフィーチャーブランチ。push 未指示）。
-**テスト**: `cargo test -p src-core` 全緑（約 2011 件）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。
+**テスト**: `cargo test -p src-core` 全緑（約 2012 件）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。
 **主題**: 非再配布パッケージ `srcall-2_2_33-111106/サンプルシナリオ`（公式サンプル）を Rust 移植で
 動作させる。テストは実フォルダを **参照のみ**（無ければ skip・本文 embed なし・`srcall-*/` は `.gitignore`）。
 
@@ -52,6 +52,20 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
   `parse_factor` から `Not` を外す。`Not 1 = 2`=1・`Not 0 And 1`=`(Not 0) And 1`=1、単項/括弧付きは不変。
   非 `Not` 式は素通りで挙動不変。括弧無しオペランド位置の `Not`（`a = Not b`）は実シナリオ/テストで
   未使用と確認（全て括弧付き）。テスト `not_binds_looser_than_comparison`（旧 characterization を更新）。
+
+**★ 追加（2026-06-20・続き）= 自作SP「生贄→みがわり（身代わり）」の戦闘リダイレクト（A1+B1+C1）**:
+- サンプルの目玉「自作スペシャルパワー」。`生贄`(SP, `イベント=生贄ルーチン`)→`data/include.eve` の
+  `生贄ルーチン`→`SpecialPower 相手ユニットＩＤ みがわり 対象ユニットＩＤ`。意味は「選んだ味方が
+  使用者の身代わりになり、使用者が攻撃されると1回だけ代わりに受ける」（SRC `Unit.cls:14855`）。
+- **A1（身代わり関係の保持）**: `SpecialPower X みがわり Y` を `specialpower` ハンドラで特例化。保護対象 Y の
+  `みがわり` condition の `data` に身代わり X の uid を格納（消費型 lifetime=-1）。SP は使用者から消費。
+- **B1（戦闘リダイレクト）**: 通常攻撃のダメージ適用直前に最優先で `apply_migawari` を挿入。保護対象が
+  `みがわり` を持てば身代わりへ100%肩代わり（身代わりの バリア/フィールド/シールド/不死身 を適用、HP0で
+  撃破・破壊イベント・勝敗判定）し condition 消費。援護防御の先例に倣う。
+- **C1（範囲＝みがわり戦闘のみ）**: 通常攻撃経路で synthetic 検証（`migawari_redirects_attack_damage_to_substitute_once`）。
+- **残（次段）**: ① **反撃/援護攻撃/援護防御 経路への展開**（現状は通常攻撃のみ）。② **`イベント=<routine>` SP効果種別＋
+  プレイヤー発動フロー**（生贄 選択→対象/相手ユニットＩＤ 束縛→サブルーチン実行）。③ 近似（肩代わりダメージは
+  身代わりの装甲で再計算せず防御側向け値を流用）。
 
 **このセッションで修正した実バグ / 実装**（feature 由来戦闘修正・イベント発火基盤）:
 - **特殊能力パーサが値無し裸名を全捨て**（`data/unit.rs`）: `水上移動`/`ＨＰ回復Lv1`/`分身` 等の
