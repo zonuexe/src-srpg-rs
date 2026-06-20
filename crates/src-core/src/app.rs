@@ -6188,8 +6188,12 @@ impl App {
         if let Some(sp) = self.database.special_powers.iter().find(|s| s.name == name) {
             match sp.target_type.as_str() {
                 "自分" | "自分のみ" => return SpiritTargetKind::SelfOnly,
-                "全体" | "味方全体" | "味方" => return SpiritTargetKind::AllAllies,
-                "単体" | "味方単体" | "指定" => return SpiritTargetKind::SingleAlly,
+                // SRC `SpecialPowerData.cls` Execute 準拠: `全味方`/`全体` のみ全体、
+                // `味方`/`単体`/`指定` は単体選択 (旧実装は `味方` を全体と誤判定していた)。
+                "全体" | "味方全体" | "全味方" => return SpiritTargetKind::AllAllies,
+                "単体" | "味方単体" | "指定" | "味方" => {
+                    return SpiritTargetKind::SingleAlly
+                }
                 "敵単体" | "敵" | "敵指定" => return SpiritTargetKind::SingleEnemy,
                 _ => {}
             }
@@ -7425,9 +7429,29 @@ impl App {
     }
 
     /// 精神コマンドの対象が確定したときに SP を消費し効果を適用する。
+    /// 精神コマンド `name` が `イベント=<routine>` 効果を持つならサブルーチン名を返す
+    /// (自作SP `生贄`→`生贄ルーチン`)。SRC `SpecialPowerData.cls` Execute の "イベント"。
+    fn spirit_event_routine(&self, name: &str) -> Option<String> {
+        self.database
+            .special_powers
+            .iter()
+            .find(|s| s.name == name)
+            .and_then(|s| s.event_routine())
+            .map(|s| s.to_string())
+    }
+
     fn apply_spirit_to_target(&mut self, caster: &str, target: &str, spirit: &str, cost: i32) {
         self.consume_unit_sp(caster, cost);
         self.apply_spirit_effect(target, spirit);
+        // イベント= SP効果種別 (自作SP): 対象/相手ユニットＩＤ を束縛してサブルーチンを実行
+        // (SRC `SpecialPowerData.cls` Execute の "イベント" 効果)。`生贄`→`生贄ルーチン` が
+        // `SpecialPower 相手ユニットＩＤ みがわり 対象ユニットＩＤ` で選んだ味方を身代わりにする。
+        // 対象ユニットＩＤ = 使用者, 相手ユニットＩＤ = 選んだ対象 (combat の束縛と同じ向き)。
+        if let Some(routine) = self.spirit_event_routine(spirit) {
+            self.set_script_var("対象ユニットＩＤ".to_string(), caster.to_string());
+            self.set_script_var("相手ユニットＩＤ".to_string(), target.to_string());
+            crate::event_runtime::trigger_label(self, &routine);
+        }
         let target_nick = self
             .database
             .unit_by_uid(target)
@@ -17398,6 +17422,73 @@ mod tests {
                 .unwrap()
                 .has_condition("みがわり"),
             "みがわり が消費されていない (反撃でも 1 回限り)"
+        );
+    }
+
+    /// 自作SP「生贄」(`イベント=生贄ルーチン`) をプレイヤーが味方に使うと、その味方が
+    /// 使用者の身代わり (みがわり) になる end-to-end フロー。SRC `SpecialPowerData.cls`
+    /// Execute の "イベント" 効果。サンプル `data/include.eve` の生贄ルーチン相当を駆動。
+    #[test]
+    fn sacrifice_special_power_makes_selected_ally_a_substitute() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6); // 生贄 使用者 (保護される)
+        place_player_unit(&mut app, "Ally", 2, 5); // 選んだ味方 (身代わりになる)
+
+        // 生贄 + みがわり の SP データを sp.txt 形式で登録。
+        let sp = crate::data::special_power::parse(
+            "生贄, いけにえ\n\
+             贄, 20, 味方, 即効, -, -, みがわり\n\
+             イベント=生贄ルーチン\n\
+             \n\
+             みがわり\n\
+             身, 10, 味方, みがわり, -, -, みがわり\n",
+        )
+        .unwrap();
+        app.database_mut().extend_special_powers(sp);
+        // 生贄ルーチン (data/include.eve 相当) を登録。
+        let lib = crate::data::event::parse(
+            "生贄ルーチン:\nSpecialPower 相手ユニットＩＤ みがわり 対象ユニットＩＤ\nReturn\n",
+        )
+        .unwrap();
+        app.script_library_mut()
+            .append_with_name(&lib, "include.eve");
+
+        // 生贄 の対象は「味方単体選択」(SRC 準拠の対象種別是正)。
+        assert!(
+            matches!(app.spirit_target_kind("生贄"), SpiritTargetKind::SingleAlly),
+            "生贄 (対象=味方) は単体味方選択のはず (旧実装は全体と誤判定)"
+        );
+
+        let hero = app
+            .database()
+            .unit_instances
+            .iter()
+            .find(|u| u.unit_data_name == "Hero")
+            .map(|u| u.uid.clone())
+            .unwrap();
+        let ally = app
+            .database()
+            .unit_instances
+            .iter()
+            .find(|u| u.unit_data_name == "Ally")
+            .map(|u| u.uid.clone())
+            .unwrap();
+
+        // Hero が Ally を対象に 生贄 を発動 (= 単体選択確定 → apply_spirit_to_target)。
+        app.apply_spirit_to_target(&hero, &ally, "生贄", 20);
+
+        // Hero (対象ユニットＩＤ=使用者) に みがわり が付き、身代わりは Ally (相手ユニットＩＤ)。
+        let hero_u = app.database().unit_by_uid(&hero).unwrap();
+        let cond = hero_u.conditions.iter().find(|c| c.name == "みがわり");
+        assert!(
+            cond.is_some(),
+            "生贄 使用者 Hero に みがわり が付与されていない (イベント=生贄ルーチン 未実行?)"
+        );
+        assert_eq!(
+            cond.unwrap().data,
+            ally,
+            "みがわり の身代わりが選んだ味方 Ally でない"
         );
     }
 

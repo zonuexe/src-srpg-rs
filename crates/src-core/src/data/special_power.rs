@@ -33,6 +33,22 @@ pub struct SpecialPowerData {
     pub effects: Vec<(String, f64)>,
 }
 
+impl SpecialPowerData {
+    /// `イベント=<routine>` 効果が指定するサブルーチン名。SRC では「システム側で
+    /// 用意されていない効果のスペシャルパワーを自作する」ために、効果行に
+    /// `イベント=<ラベル>` と書くと発動時にそのサブルーチンが呼ばれる
+    /// (`SpecialPowerData.cls` Execute の "イベント" 効果種別)。サンプルの `生贄`
+    /// (`イベント=生贄ルーチン`) が代表例。`parse_effects` は `イベント=生贄ルーチン` を
+    /// `("イベント=生贄ルーチン", 0.0)` として保持するので、ここで接頭辞を剥がす。
+    pub fn event_routine(&self) -> Option<&str> {
+        self.effects.iter().find_map(|(e, _)| {
+            e.strip_prefix("イベント=")
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        })
+    }
+}
+
 pub fn parse(src: &str) -> Result<Vec<SpecialPowerData>, ParseError> {
     let lines = read_data_lines(src);
     let records = split_records(&lines);

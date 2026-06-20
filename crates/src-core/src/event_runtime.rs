@@ -3074,9 +3074,12 @@ fn exec_command_pc(
             if xargs.len() < 2 {
                 return Ok(pc + 1);
             }
-            let target = xargs[0].clone();
+            // SRC はコマンド引数のユニット指定にシステム変数 (相手ユニットＩＤ 等) を許す。
+            // 裸の変数名 (生贄ルーチンの `SpecialPower 相手ユニットＩＤ みがわり 対象ユニットＩＤ`)
+            // は実ユニットに一致しなければ同名 script_var の値 (uid) へフォールバック解決する。
+            let target = resolve_handle_var(app, xargs[0].clone());
             let power = xargs[1].clone();
-            let target_of_power = xargs.get(2).cloned();
+            let target_of_power = xargs.get(2).cloned().map(|t| resolve_handle_var(app, t));
 
             // Find the unit
             let unit_idx = match app
@@ -6767,6 +6770,28 @@ fn unit_alive(app: &App, key: &str) -> bool {
         .unit_instances
         .iter()
         .any(|u| matches_unit_handle(u, key))
+}
+
+/// コマンド引数のユニット指定を解決する。`handle` が実ユニット (uid/unit名/pilot名) に
+/// 一致すればそのまま、一致しなければ同名 script_var の値へフォールバックする。SRC は
+/// コマンド引数のユニット位置にシステム変数 (`相手ユニットＩＤ` 等) を許すため、裸の
+/// 変数名 (生贄ルーチンの `SpecialPower 相手ユニットＩＤ みがわり 対象ユニットＩＤ`) を
+/// uid へ解決できる。実ユニット名を優先するので通常の literal 指定は壊れない。
+fn resolve_handle_var(app: &App, handle: String) -> String {
+    if app
+        .database()
+        .unit_instances
+        .iter()
+        .any(|u| matches_unit_handle(u, &handle))
+    {
+        return handle;
+    }
+    let v = app.script_var(&handle);
+    if v.is_empty() {
+        handle
+    } else {
+        v.to_string()
+    }
 }
 
 /// `RecoverHP unit [spec]` の本処理。
