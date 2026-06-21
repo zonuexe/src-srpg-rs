@@ -109,6 +109,46 @@ pub(crate) fn menu_choice_at(prompt: &str, num_options: usize, x: i32, y: i32) -
     None
 }
 
+// ── 反撃ウィンドウのレイアウト ────────────────────────────────────────────
+// `render::draw_reaction_window` の描画ジオメトリと **完全に一致** させること
+// (両者がずれると選択肢とクリック位置が食い違う)。中央寄せの明色ウィンドウ。
+
+/// 反撃ウィンドウ幅 (px)。
+pub const REACTION_WIN_W: f64 = 470.0;
+/// 反撃ウィンドウ高さ (px)。
+pub const REACTION_WIN_H: f64 = 236.0;
+/// 反撃ウィンドウ上端 Y (px)。下寄りに置きマップ上の戦闘を隠しすぎない。
+pub const REACTION_WIN_Y: f64 = 224.0;
+/// ウィンドウ上端からの選択肢先頭 Y オフセット (px)。上にタイトル + 2 機ヘッダ。
+pub const REACTION_OPT_TOP: f64 = 98.0;
+/// 選択肢 1 行の高さ (px)。
+pub const REACTION_OPT_H: f64 = 22.0;
+/// ウィンドウ内側パディング (px)。
+pub const REACTION_PAD: f64 = 10.0;
+
+/// 反撃ウィンドウの左端 X (中央寄せ)。
+pub fn reaction_win_x() -> f64 {
+    (f64::from(crate::CANVAS_WIDTH) - REACTION_WIN_W) / 2.0
+}
+
+/// 反撃ウィンドウの選択肢行クリック判定。`(x, y)` が選択肢 `i` の行内なら
+/// `Some(i+1)` (1-based)。行外 / ウィンドウ外は `None`。描画ジオメトリと共有。
+pub fn reaction_choice_at(num_options: usize, x: i32, y: i32) -> Option<u32> {
+    let wx = reaction_win_x();
+    let opt_top = REACTION_WIN_Y + REACTION_OPT_TOP;
+    let (fx, fy) = (f64::from(x), f64::from(y));
+    if fx < wx + REACTION_PAD || fx > wx + REACTION_WIN_W - REACTION_PAD {
+        return None;
+    }
+    for i in 0..num_options.min(6) {
+        let top = opt_top + (i as f64) * REACTION_OPT_H;
+        if fy >= top && fy < top + REACTION_OPT_H {
+            return Some((i + 1) as u32);
+        }
+    }
+    None
+}
+
 /// src-web `render::wrap_text` と同じ折返し規則 (全角=2幅 / ascii=1幅 / 累積幅が
 /// `max_width` 以上で改行 / `\n` で改行) での行数。Menu prompt の表示行数算出用。
 fn wrapped_line_count(s: &str, max_width: usize) -> usize {
@@ -149,6 +189,21 @@ mod tests {
         assert_eq!(menu_choice_at("どの難易度？", opts, 100, 310), Some(1));
         assert_eq!(menu_choice_at("どの難易度？", opts, 100, 330), Some(2));
         assert_eq!(menu_choice_at("どの難易度？", opts, 100, 350), Some(3));
+    }
+
+    // 反撃ウィンドウ: WIN_Y=224, OPT_TOP=98 → opt_top=322。各 22px:
+    // [322,344) [344,366) [366,388)。中央寄せ wx=(640-470)/2=85, pad=10。
+    #[test]
+    fn reaction_choice_at_maps_option_rows() {
+        let x = reaction_win_x() as i32 + 50; // 枠内
+        assert_eq!(reaction_choice_at(3, x, 322), Some(1));
+        assert_eq!(reaction_choice_at(3, x, 343), Some(1));
+        assert_eq!(reaction_choice_at(3, x, 344), Some(2));
+        assert_eq!(reaction_choice_at(3, x, 366), Some(3));
+        // 選択肢の上 / 件数を越えた下 / 横枠外。
+        assert_eq!(reaction_choice_at(3, x, 300), None);
+        assert_eq!(reaction_choice_at(3, x, 390), None);
+        assert_eq!(reaction_choice_at(3, 10, 322), None);
     }
 
     #[test]

@@ -62,6 +62,7 @@ pub fn draw_scene(
     battle_anim: Option<&src_core::BattleAnim>,
     move_anim: Option<&src_core::MoveAnim>,
     unit_detail: Option<&StatusDetail>,
+    reaction_data: Option<&src_core::scene::reaction::ReactionWindowData>,
 ) {
     clear(ctx, "#2a2a30"); // 周囲のレターボックスは暗色
     match scene {
@@ -120,6 +121,11 @@ pub fn draw_scene(
         Scene::PilotList => draw_pilot_list(ctx, database, assets),
         Scene::UnitList => draw_unit_list(ctx, database, assets),
         Scene::UnitDetail => draw_unit_detail(ctx, unit_detail, assets),
+    }
+    // 反撃手段選択中はオリジナル風の戦闘窓を最優先で描画 (素の Menu より上)。
+    if let Some(rd) = reaction_data {
+        draw_reaction_window(ctx, database, rd, assets);
+        return;
     }
     // Dialog (Talk / Confirm) は全シーンより上に描画
     if let Some(d) = pending_dialog {
@@ -1129,12 +1135,60 @@ fn draw_battle_anim(
 /// 戦闘ウィンドウに表示する 1 機ぶんのスナップショット。
 struct CombatantHud {
     face: String,
+    /// パイロット愛称 (反撃窓の「機体 パイロット」行用)。
+    name: String,
+    /// 機体名 (同上)。
+    unit: String,
     level: i32,
     morale: i32,
     hp_cur: f64,
     hp_max: f64,
     en_cur: f64,
     en_max: f64,
+}
+
+/// タイル位置から戦闘 HUD を解決する (顔・Lv・気力・HP/EN・名前)。盤上に
+/// ユニットが居なければ `None` (撃破され除去された側など)。
+fn resolve_combatant_hud(database: &GameDatabase, pos: (u32, u32)) -> Option<CombatantHud> {
+    let u = database.units_at(pos.0, pos.1).next()?;
+    let hp_max = database.effective_max_hp(u) as f64;
+    let hp_cur = (hp_max - u.displayed_damage).max(0.0);
+    let en_max = database.effective_max_en(u);
+    let en_cur = (en_max - u.en_consumed).max(0);
+    let mp = u.main_pilot_name();
+    let pilot = if mp.is_empty() {
+        None
+    } else {
+        database.effective_pilot_data(mp)
+    };
+    let pilot_inst = u
+        .pilot_ids
+        .first()
+        .and_then(|id| database.pilot_instance_by_id(id));
+    let level = pilot_inst.map(|p| p.level).unwrap_or(1);
+    let name = pilot
+        .as_ref()
+        .map(|p| p.nickname.clone())
+        .unwrap_or_default();
+    let face = pilot
+        .as_ref()
+        .and_then(|p| p.bitmap.clone())
+        .or_else(|| pilot.as_ref().map(|p| p.nickname.clone()))
+        .unwrap_or_default();
+    Some(CombatantHud {
+        face,
+        name,
+        unit: database
+            .unit_by_name(&u.unit_data_name)
+            .map(|d| d.name.clone())
+            .unwrap_or_default(),
+        level,
+        morale: u.morale,
+        hp_cur,
+        hp_max,
+        en_cur: en_cur as f64,
+        en_max: en_max as f64,
+    })
 }
 
 /// HP/EN の値テキスト + 緑バー (オリジナル戦闘窓風)。値を上、バーを直下に描く。
@@ -1225,38 +1279,7 @@ fn draw_combat_window(
     last_message: Option<&str>,
     assets: &Assets,
 ) {
-    let resolve = |pos: (u32, u32)| -> Option<CombatantHud> {
-        let u = database.units_at(pos.0, pos.1).next()?;
-        let hp_max = database.effective_max_hp(u) as f64;
-        let hp_cur = (hp_max - u.displayed_damage).max(0.0);
-        let en_max = database.effective_max_en(u);
-        let en_cur = (en_max - u.en_consumed).max(0);
-        let mp = u.main_pilot_name();
-        let pilot = if mp.is_empty() {
-            None
-        } else {
-            database.effective_pilot_data(mp)
-        };
-        let pilot_inst = u
-            .pilot_ids
-            .first()
-            .and_then(|id| database.pilot_instance_by_id(id));
-        let level = pilot_inst.map(|p| p.level).unwrap_or(1);
-        let face = pilot
-            .as_ref()
-            .and_then(|p| p.bitmap.clone())
-            .or_else(|| pilot.as_ref().map(|p| p.nickname.clone()))
-            .unwrap_or_default();
-        Some(CombatantHud {
-            face,
-            level,
-            morale: u.morale,
-            hp_cur,
-            hp_max,
-            en_cur: en_cur as f64,
-            en_max: en_max as f64,
-        })
-    };
+    let resolve = |pos: (u32, u32)| resolve_combatant_hud(database, pos);
     let atk = resolve(anim.attacker);
     let def = resolve(anim.defender);
     if atk.is_none() && def.is_none() {
@@ -1322,6 +1345,92 @@ fn draw_combat_window(
             let _ = ctx.fill_text(&line, text_x, msg_y + i as f64 * 15.0);
         }
     }
+}
+
+/// 反撃手段選択ウィンドウ (オリジナル SRC 戦闘窓風)。中央寄せの明色 VB6 窓に、
+/// タイトル (反撃：<武器> 攻撃力=N 命中率=N%) + 攻防 2 機の HUD + 防御側
+/// 「機体 パイロット」+ 各選択肢 (反撃/回避/防御/援護防御) を命中率付きで描く。
+/// 選択肢行のジオメトリは src-core `dialog::reaction_choice_at` と共有する。
+fn draw_reaction_window(
+    ctx: &CanvasRenderingContext2d,
+    database: &GameDatabase,
+    data: &src_core::scene::reaction::ReactionWindowData,
+    assets: &Assets,
+) {
+    use src_core::dialog::{
+        reaction_win_x, REACTION_OPT_H, REACTION_OPT_TOP, REACTION_PAD, REACTION_WIN_H,
+        REACTION_WIN_W, REACTION_WIN_Y,
+    };
+    let cw = f64::from(CANVAS_WIDTH);
+    let ch = f64::from(CANVAS_HEIGHT);
+    // 半透明バックドロップ。
+    ctx.set_fill_style_str("rgba(0,0,0,0.30)");
+    ctx.fill_rect(0.0, 0.0, cw, ch);
+
+    let wx = reaction_win_x();
+    let wy = REACTION_WIN_Y;
+    let ww = REACTION_WIN_W;
+    let wh = REACTION_WIN_H;
+    draw_vb6_dialog(
+        ctx,
+        wx as i64,
+        wy as i64,
+        ww as u32,
+        wh as u32,
+        &format!(
+            "反撃：{} 攻撃力={} 命中率={}%",
+            truncate(&data.weapon, 8),
+            data.power,
+            data.base_hit
+        ),
+    );
+
+    let pad = REACTION_PAD;
+    // 2 機ヘッダ (攻撃側 左 / 防御側 右)。
+    let hud_top = wy + 22.0;
+    let block_w = (ww - pad * 3.0) / 2.0;
+    if let Some(a) = resolve_combatant_hud(database, data.attacker) {
+        draw_combatant_hud(ctx, wx + pad, hud_top, block_w, &a, assets);
+    }
+    let def_hud = resolve_combatant_hud(database, data.defender);
+    if let Some(d) = def_hud.as_ref() {
+        draw_combatant_hud(ctx, wx + pad * 2.0 + block_w, hud_top, block_w, d, assets);
+        // 防御側「機体 パイロット」行。
+        ctx.set_fill_style_str("#101010");
+        ctx.set_font(&format!("bold 12px {JP_SANS}"));
+        ctx.set_text_align("left");
+        ctx.set_text_baseline("top");
+        let _ = ctx.fill_text(&format!("{} {}", d.unit, d.name), wx + pad, wy + 74.0);
+    }
+
+    // 選択肢 (反撃/回避/防御/援護防御) + 命中率。クリック判定と同一ジオメトリ。
+    let opt_top = wy + REACTION_OPT_TOP;
+    ctx.set_text_baseline("middle");
+    for (i, opt) in data.options.iter().take(6).enumerate() {
+        let oy = opt_top + i as f64 * REACTION_OPT_H;
+        let mid = oy + REACTION_OPT_H / 2.0;
+        // 先頭 (既定=反撃) の行をうっすらハイライト。
+        if i == 0 {
+            ctx.set_fill_style_str("rgba(40,90,200,0.12)");
+            ctx.fill_rect(wx + pad - 2.0, oy, ww - pad * 2.0 + 4.0, REACTION_OPT_H);
+        }
+        ctx.set_text_align("left");
+        ctx.set_fill_style_str("#1840c0");
+        ctx.set_font(&format!("bold 13px {JP_SANS}"));
+        let _ = ctx.fill_text(&format!("[{}]", i + 1), wx + pad + 4.0, mid);
+        ctx.set_fill_style_str("#101010");
+        ctx.set_font(&format!("13px {JP_SANS}"));
+        let _ = ctx.fill_text(&opt.label, wx + pad + 38.0, mid);
+        ctx.set_text_align("right");
+        ctx.set_fill_style_str("#0a6a78");
+        let _ = ctx.fill_text(&format!("命中 {}%", opt.hit_pct), wx + ww - pad - 4.0, mid);
+    }
+
+    ctx.set_text_align("right");
+    ctx.set_text_baseline("bottom");
+    ctx.set_fill_style_str("#6a6a60");
+    ctx.set_font(&format!("11px {JP_SANS}"));
+    let _ = ctx.fill_text("番号キー / クリックで選択", wx + ww - pad, wy + wh - 6.0);
 }
 
 #[allow(clippy::too_many_arguments)]

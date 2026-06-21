@@ -14,6 +14,7 @@ pub mod title;
 
 pub mod map_view;
 pub mod pilot_list;
+pub mod reaction;
 pub mod unit_detail;
 pub mod unit_list;
 

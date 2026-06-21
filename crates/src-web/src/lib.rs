@@ -1314,6 +1314,8 @@ fn redraw(ctx: &SharedCtx, app: &SharedApp, assets: &SharedAssets) {
     } else {
         None
     };
+    // 反撃手段選択中なら戦闘窓ビューモデルを構築。
+    let reaction_data = app_ref.reaction_window_data();
     render::draw_scene(
         ctx,
         app_ref.scene(),
@@ -1337,5 +1339,6 @@ fn redraw(ctx: &SharedCtx, app: &SharedApp, assets: &SharedAssets) {
         app_ref.battle_anim(),
         app_ref.move_anim(),
         unit_detail.as_ref(),
+        reaction_data.as_ref(),
     );
 }

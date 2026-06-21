@@ -2824,6 +2824,22 @@ impl App {
                 // クリック処理: Hotpoint 付きの Menu はヒット判定で確定、
                 // それ以外 (Talk / Confirm / 普通の Menu) はクリックで Advance。
                 Input::ClickAt { x, y } => {
+                    // 反撃ウィンドウ表示中は専用ジオメトリで選択肢行をクリック判定する
+                    // (プレーン Menu とは別配置のため menu_choice_at は使えない)。
+                    if self.pending_reaction.is_some() {
+                        let n =
+                            if let Some(crate::dialog::PendingDialog::Menu { options, .. }) =
+                                &self.pending_dialog
+                            {
+                                options.len()
+                            } else {
+                                0
+                            };
+                        return match crate::dialog::reaction_choice_at(n, x, y) {
+                            Some(c) => self.respond_dialog(c),
+                            None => false,
+                        };
+                    }
                     let is_hotpoint_menu = matches!(
                         self.pending_dialog,
                         Some(crate::dialog::PendingDialog::Menu {
@@ -6163,6 +6179,111 @@ impl App {
         self.attack_resolve_and_run(Some(pr.target_tile), false, &mode);
         // ランナーは pending_dialog が消えたので次 tick で継続する。
         true
+    }
+
+    /// `atk_idx` が `def_idx` を攻撃するときの使用武器・攻撃力・基準命中率 (%) を
+    /// 予測する。`attack_resolve_and_run` と同じ武器選定 (`pick_attack_weapon`) と
+    /// 命中予測 (`predict_with_status_terrain` + 散布補正) を使い、反撃ウィンドウの
+    /// 命中率表示に用いる (読み取り専用、盤面は変更しない)。射程内に使用可能武器が
+    /// 無ければ `None`。
+    fn attack_hit_forecast(&self, atk_idx: usize, def_idx: usize) -> Option<(String, i64, i32)> {
+        let (atk_pilot, atk_unit) = self.database.effective_combat_data(atk_idx)?;
+        let (def_pilot, def_unit) = self.database.effective_combat_data(def_idx)?;
+        // 借用を解放するため戦闘文脈をローカルへ複製。
+        let (ax, ay, atk_morale, atk_charged, atk_totsugeki, atk_statuses) = {
+            let a = &self.database.unit_instances[atk_idx];
+            let mut s: Vec<String> = a.conditions.iter().map(|c| c.name.clone()).collect();
+            push_combat_feature_statuses(a, &mut s);
+            (a.x, a.y, a.morale, a.charged, a.has_condition("突撃"), s)
+        };
+        let (dx, dy, def_morale, def_statuses) = {
+            let d = &self.database.unit_instances[def_idx];
+            let mut s: Vec<String> = d.conditions.iter().map(|c| c.name.clone()).collect();
+            push_combat_feature_statuses(d, &mut s);
+            (d.x, d.y, d.morale, s)
+        };
+        let dist = combat::manhattan((ax, ay), (dx, dy));
+        let weapon = Self::pick_attack_weapon(
+            &atk_unit,
+            dist,
+            None,
+            atk_charged,
+            false,
+            atk_totsugeki,
+            |w| self.weapon_firable(atk_idx, w),
+            |w| self.weapon_skill_ok(atk_idx, w),
+        )?;
+        let terrain_id = self.database.map.as_ref()?.cell(dx, dy).terrain_id;
+        let def_hit_mod = self.database.terrain_hit_mod(terrain_id);
+        let def_damage_mod = self.database.terrain_damage_mod(terrain_id);
+        let dmg_levels = self
+            .database
+            .damage_spirit_levels(&atk_statuses, &def_statuses);
+        let preview = combat::predict_with_status_terrain(
+            &atk_pilot,
+            &atk_unit,
+            &weapon,
+            &def_pilot,
+            &def_unit,
+            def_hit_mod,
+            def_damage_mod,
+            atk_morale,
+            def_morale,
+            &atk_statuses,
+            &def_statuses,
+            self.terrain_env_at(ax, ay),
+            self.terrain_env_at(dx, dy),
+            dmg_levels,
+            self.ecm_hit_mult(def_idx, atk_idx, &weapon.class),
+        )
+        .apply_scatter(&weapon.class, dist);
+        Some((
+            weapon.name.clone(),
+            weapon.power,
+            preview.hit_chance.clamp(0, 100),
+        ))
+    }
+
+    /// 反撃手段選択中なら、ウィンドウ表示用データを構築する (front が描画)。
+    /// `pending_reaction` が無い / 攻防ユニットを解決できない場合は `None`。
+    pub fn reaction_window_data(&self) -> Option<crate::scene::reaction::ReactionWindowData> {
+        use crate::scene::reaction::{ReactionOption, ReactionWindowData};
+        let pr = self.pending_reaction.as_ref()?;
+        let atk_idx = self.database.idx_by_uid(&pr.atk_uid)?;
+        let def_idx = self
+            .database
+            .unit_instances
+            .iter()
+            .position(|u| !u.off_map && (u.x, u.y) == pr.target_tile)?;
+        let (weapon, power, base_hit) = self.attack_hit_forecast(atk_idx, def_idx)?;
+        let attacker = {
+            let a = &self.database.unit_instances[atk_idx];
+            (a.x, a.y)
+        };
+        let options = pr
+            .modes
+            .iter()
+            .map(|m| {
+                // 回避は命中半減 (SRC 反撃モード / attack_resolve_and_run の def_mode="回避")。
+                let hit = if m == "回避" {
+                    (base_hit / 2).max(0)
+                } else {
+                    base_hit
+                };
+                ReactionOption {
+                    label: m.clone(),
+                    hit_pct: hit,
+                }
+            })
+            .collect();
+        Some(ReactionWindowData {
+            attacker,
+            defender: pr.target_tile,
+            weapon,
+            power,
+            base_hit,
+            options,
+        })
     }
 
     // ── 精神コマンド (SP コマンド) ───────────────────────────────────────────
