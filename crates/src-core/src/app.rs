@@ -87,6 +87,18 @@ struct PendingReaction {
     modes: Vec<String>,
 }
 
+/// 攻撃側の武器選択を待つ間 `pending_weapon_select` に保持する。応答時に選んだ
+/// 武器を `selected_weapon_idx` に固定して `target` の敵を攻撃・解決する。
+#[derive(Debug, Clone)]
+struct PendingWeaponSelect {
+    /// 攻撃側 (プレイヤー) ユニット uid。
+    atk_uid: String,
+    /// 攻撃目標タイル。
+    target: (u32, u32),
+    /// 移動後攻撃か (キャンセル復帰用フラグ)。
+    post_move: bool,
+}
+
 /// 精神コマンド (SP コマンド) のサブメニュー選択を待つ間 `pending_spirit` に保持。
 /// メニュー選択 (1-based) → `commands[idx-1]` の (コマンド名, 消費SP) を発動する。
 #[derive(Debug, Clone)]
@@ -315,6 +327,13 @@ pub struct App {
     /// 反撃モード待機中の戦闘文脈 (味方が攻撃され選択待ちのとき Some)。transient。
     #[serde(skip)]
     pending_reaction: Option<PendingReaction>,
+    /// 武器選択ウィンドウ (UI モード時の攻撃フロー)。`true`(既定) で目標確定後に
+    /// 武器選択窓を出す。`false` で従来の自動 / W キー武器による即解決。transient。
+    #[serde(skip)]
+    weapon_window_enabled: bool,
+    /// 武器選択待機中の攻撃文脈 (Some のとき武器選択待ち)。transient。
+    #[serde(skip)]
+    pending_weapon_select: Option<PendingWeaponSelect>,
     /// 精神コマンドのサブメニュー選択待ち文脈 (Some のとき発動待ち)。transient。
     #[serde(skip)]
     pending_spirit: Option<PendingSpirit>,
@@ -658,6 +677,8 @@ impl App {
             move_anim: None,
             auto_counter: false,
             pending_reaction: None,
+            weapon_window_enabled: true,
+            pending_weapon_select: None,
             pending_spirit: None,
             pending_transform: None,
             pending_ability: None,
@@ -955,6 +976,17 @@ impl App {
         self.auto_counter
     }
 
+    /// 「武器選択ウィンドウ」の現在値 (true=攻撃時に武器選択窓を出す)。
+    pub fn weapon_window(&self) -> bool {
+        self.weapon_window_enabled
+    }
+
+    /// 「武器選択ウィンドウ」を切り替える (マップコマンド用)。戻り値は新しい値。
+    pub fn toggle_weapon_window(&mut self) -> bool {
+        self.weapon_window_enabled = !self.weapon_window_enabled;
+        self.weapon_window_enabled
+    }
+
     /// `Wait Until target_secs`: 基準時刻から `target_secs` 秒経過時まで待つ。
     /// 直前の位置 (`wait_clock`) からの増分を返し、タイムラインを進める。
     /// 既に過ぎている場合は 0 を返す。
@@ -1166,6 +1198,10 @@ impl App {
         if self.pending_reaction.is_some() {
             return self.resolve_reaction(choice);
         }
+        // 武器選択メニューは選んだ武器で攻撃解決へ委譲。
+        if self.pending_weapon_select.is_some() {
+            return self.resolve_weapon_select(choice);
+        }
         let Some(d) = self.pending_dialog.take() else {
             return false;
         };
@@ -1249,6 +1285,10 @@ impl App {
     /// 対象は `Menu(store_value)` / `WaitClick` のみ。Talk / Confirm / Input は
     /// 右クリックを無視 (誤って進めない)。
     pub fn respond_dialog_right_click(&mut self) -> bool {
+        // 武器選択窓は右クリックで取り消し (目標を選び直せる AttackSelect へ戻る)。
+        if self.cancel_weapon_select() {
+            return true;
+        }
         // 対象は Hotpoint 付き `Wait Click` (store_value Menu + hotpoints) と、
         // 描画なしの `WaitClick` のみ。Talk / Confirm / Ask / Input は右クリックを
         // 無視する (左クリック判定 `is_hotpoint_menu` と同じ条件で線引き)。
@@ -2836,6 +2876,21 @@ impl App {
                                 0
                             };
                         return match crate::dialog::reaction_choice_at(n, x, y) {
+                            Some(c) => self.respond_dialog(c),
+                            None => false,
+                        };
+                    }
+                    // 武器選択窓も専用ジオメトリで武器行をクリック判定する。
+                    if self.pending_weapon_select.is_some() {
+                        let n =
+                            if let Some(crate::dialog::PendingDialog::Menu { options, .. }) =
+                                &self.pending_dialog
+                            {
+                                options.len()
+                            } else {
+                                0
+                            };
+                        return match crate::dialog::weapon_select_choice_at(n, x, y) {
                             Some(c) => self.respond_dialog(c),
                             None => false,
                         };
@@ -6284,6 +6339,267 @@ impl App {
             base_hit,
             options,
         })
+    }
+
+    // ── 武器選択ウィンドウ (攻撃側) ───────────────────────────────────────────
+
+    /// `weapon` を `dist` の目標へ `post_move` 状況で使用可能か (射程 / チャージ /
+    /// 移動後 / 突撃 / 資源 / 必要技能)。武器選択窓の行表示・選択可否に使う。
+    fn weapon_usable_vs(
+        &self,
+        atk_idx: usize,
+        weapon: &crate::data::unit::WeaponData,
+        dist: u32,
+        post_move: bool,
+    ) -> bool {
+        let u = &self.database.unit_instances[atk_idx];
+        let totsugeki = u.has_condition("突撃");
+        combat::weapon_in_range(weapon, dist)
+            && (u.charged || !combat::is_charge_weapon(weapon))
+            && Self::weapon_usable_post_move(weapon, post_move, totsugeki)
+            && self.weapon_firable(atk_idx, weapon)
+            && self.weapon_skill_ok(atk_idx, weapon)
+    }
+
+    /// `atk_uid` がタイル `target` の敵対ユニットを `post_move` 状況で攻撃可能か
+    /// (射程内に使用可能な武器が 1 つでもあるか)。武器選択窓を出すか即解決するかの判定。
+    fn can_attack_target(&self, atk_uid: &str, target: (u32, u32), post_move: bool) -> bool {
+        let Some(atk_idx) = self.database.idx_by_uid(atk_uid) else {
+            return false;
+        };
+        let atk = &self.database.unit_instances[atk_idx];
+        let (atk_party, ax, ay) = (atk.party, atk.x, atk.y);
+        let hostile = self
+            .database
+            .unit_instances
+            .iter()
+            .any(|u| !u.off_map && (u.x, u.y) == target && u.party.is_hostile_to(atk_party));
+        if !hostile {
+            return false;
+        }
+        let Some((_, atk_unit)) = self.database.effective_combat_data(atk_idx) else {
+            return false;
+        };
+        let dist = combat::manhattan((ax, ay), target);
+        atk_unit
+            .weapons
+            .iter()
+            .any(|w| self.weapon_usable_vs(atk_idx, w, dist, post_move))
+    }
+
+    /// プレイヤー攻撃の後始末 (行動終了 / 行動終了・接触イベント / Browse 復帰)。
+    /// 即解決経路と武器選択経路の両方から呼ぶ。
+    fn finish_player_attack(&mut self, uid: &str) {
+        if let Some(u) = self.database.unit_by_uid_mut(uid) {
+            u.has_acted = true;
+        }
+        if let Some(i) = self.database.idx_by_uid(uid) {
+            crate::event_runtime::fire_action_end_labels(self, i);
+            crate::event_runtime::fire_contact_event_labels(self, i);
+        }
+        self.action_mode = crate::command_menu::ActionMode::Browse;
+        self.command_menu = None;
+    }
+
+    /// 武器選択ウィンドウを開始する。武器名一覧を `PendingDialog::Menu` に積み
+    /// (番号キー / クリックのルーティング用)、`pending_weapon_select` を保持する。
+    /// 武装が無ければ即解決へフォールバック。
+    fn begin_weapon_select(&mut self, atk_uid: String, target: (u32, u32), post_move: bool) {
+        let names: Vec<String> = self
+            .database
+            .idx_by_uid(&atk_uid)
+            .and_then(|i| self.database.unit_instances.get(i))
+            .and_then(|u| self.database.unit_by_name(&u.unit_data_name))
+            .map(|d| d.weapons.iter().map(|w| w.name.clone()).collect())
+            .unwrap_or_default();
+        if names.is_empty() {
+            if self.attack_unit_at(&atk_uid, target, post_move) {
+                self.finish_player_attack(&atk_uid);
+            }
+            return;
+        }
+        self.pending_weapon_select = Some(PendingWeaponSelect {
+            atk_uid,
+            target,
+            post_move,
+        });
+        self.set_pending_dialog(crate::dialog::PendingDialog::Menu {
+            prompt: "武器選択".to_string(),
+            options: names,
+            var_name: String::new(),
+            store_value: false,
+            option_keys: Vec::new(),
+            non_cancellable: false,
+        });
+    }
+
+    /// 武器選択窓の行データを構築する (機体の武装順)。命中率は
+    /// `predict_with_status_terrain` (+散布補正) を読み取り専用で評価する。
+    fn build_weapon_rows(
+        &self,
+        atk_idx: usize,
+        def_idx: usize,
+        post_move: bool,
+    ) -> Vec<crate::scene::weapon_select::WeaponSelectRow> {
+        use crate::scene::weapon_select::WeaponSelectRow;
+        let (Some((atk_pilot, atk_unit)), Some((def_pilot, def_unit))) = (
+            self.database.effective_combat_data(atk_idx),
+            self.database.effective_combat_data(def_idx),
+        ) else {
+            return Vec::new();
+        };
+        let (ax, ay, atk_morale, atk_statuses) = {
+            let a = &self.database.unit_instances[atk_idx];
+            let mut s: Vec<String> = a.conditions.iter().map(|c| c.name.clone()).collect();
+            push_combat_feature_statuses(a, &mut s);
+            (a.x, a.y, a.morale, s)
+        };
+        let (dx, dy, def_morale, def_statuses) = {
+            let d = &self.database.unit_instances[def_idx];
+            let mut s: Vec<String> = d.conditions.iter().map(|c| c.name.clone()).collect();
+            push_combat_feature_statuses(d, &mut s);
+            (d.x, d.y, d.morale, s)
+        };
+        let dist = combat::manhattan((ax, ay), (dx, dy));
+        let terrain_id = self
+            .database
+            .map
+            .as_ref()
+            .map(|m| m.cell(dx, dy).terrain_id);
+        let def_hit_mod = terrain_id.map_or(0, |t| self.database.terrain_hit_mod(t));
+        let def_damage_mod = terrain_id.map_or(0, |t| self.database.terrain_damage_mod(t));
+        let atk_env = self.terrain_env_at(ax, ay);
+        let def_env = self.terrain_env_at(dx, dy);
+        let dmg_levels = self
+            .database
+            .damage_spirit_levels(&atk_statuses, &def_statuses);
+        let atk_inst = &self.database.unit_instances[atk_idx];
+        atk_unit
+            .weapons
+            .iter()
+            .enumerate()
+            .map(|(i, w)| {
+                let usable = self.weapon_usable_vs(atk_idx, w, dist, post_move);
+                let hit_pct = if usable {
+                    combat::predict_with_status_terrain(
+                        &atk_pilot,
+                        &atk_unit,
+                        w,
+                        &def_pilot,
+                        &def_unit,
+                        def_hit_mod,
+                        def_damage_mod,
+                        atk_morale,
+                        def_morale,
+                        &atk_statuses,
+                        &def_statuses,
+                        atk_env,
+                        def_env,
+                        dmg_levels,
+                        self.ecm_hit_mult(def_idx, atk_idx, &w.class),
+                    )
+                    .apply_scatter(&w.class, dist)
+                    .hit_chance
+                    .clamp(0, 100)
+                } else {
+                    0
+                };
+                let uw = atk_inst.weapons.iter().find(|uw| uw.weapon_index == i);
+                let ammo = if w.bullet > 0 {
+                    let rem = uw.map_or(w.bullet, |x| x.bullet_remaining.max(0));
+                    format!("残{}/{}", rem, w.bullet)
+                } else if w.en_consumption > 0 {
+                    format!("EN{}", w.en_consumption)
+                } else {
+                    "-".to_string()
+                };
+                WeaponSelectRow {
+                    name: w.name.clone(),
+                    power: w.power,
+                    hit_pct,
+                    critical: w.critical,
+                    ammo,
+                    adaption: w.adaption.clone(),
+                    class: w.class.clone(),
+                    usable,
+                }
+            })
+            .collect()
+    }
+
+    /// 武器選択中なら、ウィンドウ表示用データを構築する (front が描画)。
+    pub fn weapon_select_window_data(
+        &self,
+    ) -> Option<crate::scene::weapon_select::WeaponSelectWindowData> {
+        use crate::scene::weapon_select::WeaponSelectWindowData;
+        let pws = self.pending_weapon_select.as_ref()?;
+        let atk_idx = self.database.idx_by_uid(&pws.atk_uid)?;
+        let atk_party = self.database.unit_instances[atk_idx].party;
+        let def_idx = self.database.unit_instances.iter().position(|u| {
+            !u.off_map && (u.x, u.y) == pws.target && u.party.is_hostile_to(atk_party)
+        })?;
+        let attacker = {
+            let a = &self.database.unit_instances[atk_idx];
+            (a.x, a.y)
+        };
+        let rows = self.build_weapon_rows(atk_idx, def_idx, pws.post_move);
+        Some(WeaponSelectWindowData {
+            attacker,
+            defender: pws.target,
+            rows,
+        })
+    }
+
+    /// 武器選択メニュー応答を処理する (`respond_dialog` から委譲)。`choice` は
+    /// 1-based。選んだ武器が使用不可なら無視 (窓継続)。使用可能なら固定して攻撃・解決。
+    fn resolve_weapon_select(&mut self, choice: u32) -> bool {
+        let Some(pws) = self.pending_weapon_select.clone() else {
+            return false;
+        };
+        let Some(atk_idx) = self.database.idx_by_uid(&pws.atk_uid) else {
+            self.pending_weapon_select = None;
+            self.pending_dialog = None;
+            return false;
+        };
+        let widx = choice as usize; // 1-based 武器番号
+                                    // 選んだ武器の使用可否を検証 (× 行は無視)。
+        let usable = self
+            .database
+            .effective_combat_data(atk_idx)
+            .and_then(|(_, u)| u.weapons.get(widx.wrapping_sub(1)).cloned())
+            .map(|w| {
+                let dist = {
+                    let a = &self.database.unit_instances[atk_idx];
+                    combat::manhattan((a.x, a.y), pws.target)
+                };
+                self.weapon_usable_vs(atk_idx, &w, dist, pws.post_move)
+            })
+            .unwrap_or(false);
+        if widx == 0 || !usable {
+            return true; // 無効選択 → 窓を継続
+        }
+        self.pending_weapon_select = None;
+        self.pending_dialog = None;
+        // 選んだ武器を固定して攻撃 (1回限り; 終了後に W キー設定へ戻す)。
+        let prev = self.selected_weapon_idx;
+        self.selected_weapon_idx = widx;
+        let attacked = self.attack_unit_at(&pws.atk_uid, pws.target, pws.post_move);
+        self.selected_weapon_idx = prev;
+        if attacked {
+            self.finish_player_attack(&pws.atk_uid);
+        }
+        true
+    }
+
+    /// 武器選択をキャンセルする (右クリック / Esc)。AttackSelect 状態は維持し、
+    /// 目標を選び直せるようにする。
+    fn cancel_weapon_select(&mut self) -> bool {
+        if self.pending_weapon_select.take().is_some() {
+            self.pending_dialog = None;
+            true
+        } else {
+            false
+        }
     }
 
     // ── 精神コマンド (SP コマンド) ───────────────────────────────────────────
@@ -9905,18 +10221,16 @@ impl App {
             ActionMode::AttackSelect { uid, snapshot } => {
                 // クリックしたタイルのユニットを攻撃 (Phase D で対象解決を厳密化)。
                 let post_move = snapshot.is_some();
-                if self.attack_unit_at(&uid, target, post_move) {
-                    // 攻撃したら行動終了 → has_acted、メニュー閉じる
-                    if let Some(u) = self.database.unit_by_uid_mut(&uid) {
-                        u.has_acted = true;
-                    }
-                    if let Some(i) = self.database.idx_by_uid(&uid) {
-                        crate::event_runtime::fire_action_end_labels(self, i);
-                        // SRC `接触 <unit1> <unit2>:` ─ 行動終了後に隣接ペアで発火。
-                        crate::event_runtime::fire_contact_event_labels(self, i);
-                    }
-                    self.action_mode = ActionMode::Browse;
-                    self.command_menu = None;
+                // UI モード + 武器選択ウィンドウ有効時は、攻撃可能な目標なら武器選択窓を
+                // 出して解決を保留する (応答後に resolve_weapon_select が解決)。
+                if self.animate_battle
+                    && self.weapon_window_enabled
+                    && self.can_attack_target(&uid, target, post_move)
+                {
+                    self.begin_weapon_select(uid.clone(), target, post_move);
+                } else if self.attack_unit_at(&uid, target, post_move) {
+                    // 攻撃したら行動終了 → has_acted、メニュー閉じる。
+                    self.finish_player_attack(&uid);
                 }
                 true
             }
@@ -10240,6 +10554,7 @@ impl App {
             MapAction::UnitList,
             MapAction::Settings,
             MapAction::ToggleAutoCounter,
+            MapAction::ToggleWeaponWindow,
         ];
         // 「作戦目的」はシナリオが `勝利条件:` ラベルを定義している場合のみ表示する。
         if self.has_victory_condition_event() {
@@ -10397,6 +10712,18 @@ impl App {
                                 "ＯＮ (自動反撃)"
                             } else {
                                 "ＯＦＦ (手動選択)"
+                            }
+                        ));
+                        true
+                    }
+                    MapAction::ToggleWeaponWindow => {
+                        let on = self.toggle_weapon_window();
+                        self.push_message(format!(
+                            "武器選択ウィンドウ: {}",
+                            if on {
+                                "ＯＮ (攻撃時に選択)"
+                            } else {
+                                "ＯＦＦ (自動/Wキー)"
                             }
                         ));
                         true

@@ -63,6 +63,7 @@ pub fn draw_scene(
     move_anim: Option<&src_core::MoveAnim>,
     unit_detail: Option<&StatusDetail>,
     reaction_data: Option<&src_core::scene::reaction::ReactionWindowData>,
+    weapon_select_data: Option<&src_core::scene::weapon_select::WeaponSelectWindowData>,
 ) {
     clear(ctx, "#2a2a30"); // 周囲のレターボックスは暗色
     match scene {
@@ -125,6 +126,11 @@ pub fn draw_scene(
     // 反撃手段選択中はオリジナル風の戦闘窓を最優先で描画 (素の Menu より上)。
     if let Some(rd) = reaction_data {
         draw_reaction_window(ctx, database, rd, assets);
+        return;
+    }
+    // 武器選択中も同様に専用窓を描画。
+    if let Some(wd) = weapon_select_data {
+        draw_weapon_select_window(ctx, database, wd, assets);
         return;
     }
     // Dialog (Talk / Confirm) は全シーンより上に描画
@@ -1431,6 +1437,115 @@ fn draw_reaction_window(
     ctx.set_fill_style_str("#6a6a60");
     ctx.set_font(&format!("11px {JP_SANS}"));
     let _ = ctx.fill_text("番号キー / クリックで選択", wx + ww - pad, wy + wh - 6.0);
+}
+
+/// 武器選択ウィンドウ (オリジナル SRC 武器選択窓風)。中央寄せの明色 VB6 窓に、
+/// タイトル + 攻防 2 機の HUD + 武器表 (名称/攻撃/命中/CT/弾EN/適応/分類)。
+/// ×=使用不可 (グレー)。行のジオメトリは src-core `dialog::weapon_select_choice_at`
+/// と共有する。
+fn draw_weapon_select_window(
+    ctx: &CanvasRenderingContext2d,
+    database: &GameDatabase,
+    data: &src_core::scene::weapon_select::WeaponSelectWindowData,
+    assets: &Assets,
+) {
+    use src_core::dialog::{
+        weapon_win_x, WEAPON_PAD, WEAPON_ROW_H, WEAPON_ROW_TOP, WEAPON_WIN_H, WEAPON_WIN_W,
+        WEAPON_WIN_Y,
+    };
+    let cw = f64::from(CANVAS_WIDTH);
+    let ch = f64::from(CANVAS_HEIGHT);
+    ctx.set_fill_style_str("rgba(0,0,0,0.30)");
+    ctx.fill_rect(0.0, 0.0, cw, ch);
+
+    let wx = weapon_win_x();
+    let wy = WEAPON_WIN_Y;
+    let ww = WEAPON_WIN_W;
+    let wh = WEAPON_WIN_H;
+    draw_vb6_dialog(ctx, wx as i64, wy as i64, ww as u32, wh as u32, "武器選択");
+
+    let pad = WEAPON_PAD;
+    // 上段: 攻防 2 機の HUD。
+    let hud_top = wy + 22.0;
+    let block_w = (ww - pad * 3.0) / 2.0;
+    if let Some(a) = resolve_combatant_hud(database, data.attacker) {
+        draw_combatant_hud(ctx, wx + pad, hud_top, block_w, &a, assets);
+    }
+    if let Some(d) = resolve_combatant_hud(database, data.defender) {
+        draw_combatant_hud(ctx, wx + pad * 2.0 + block_w, hud_top, block_w, &d, assets);
+    }
+
+    // 列 X (名称=左, 数値=右寄せ, 適応/分類=左)。
+    let col_name = wx + 14.0;
+    let col_pow = wx + 318.0;
+    let col_hit = wx + 380.0;
+    let col_ct = wx + 428.0;
+    let col_ammo = wx + 502.0;
+    let col_adp = wx + 512.0;
+    let col_cls = wx + 556.0;
+
+    // 表ヘッダ。
+    let hdr_y = wy + 74.0;
+    ctx.set_font(&format!("bold 11px {JP_SANS}"));
+    ctx.set_fill_style_str("#13409a");
+    ctx.set_text_baseline("top");
+    ctx.set_text_align("left");
+    let _ = ctx.fill_text("名称", col_name, hdr_y);
+    let _ = ctx.fill_text("適応", col_adp, hdr_y);
+    let _ = ctx.fill_text("分類", col_cls, hdr_y);
+    ctx.set_text_align("right");
+    let _ = ctx.fill_text("攻撃", col_pow, hdr_y);
+    let _ = ctx.fill_text("命中", col_hit, hdr_y);
+    let _ = ctx.fill_text("CT", col_ct, hdr_y);
+    let _ = ctx.fill_text("弾/EN", col_ammo, hdr_y);
+    // ヘッダ下の区切り線。
+    ctx.set_stroke_style_str("#b9b6a3");
+    ctx.set_line_width(1.0);
+    ctx.begin_path();
+    ctx.move_to(wx + pad, hdr_y + 16.0);
+    ctx.line_to(wx + ww - pad, hdr_y + 16.0);
+    ctx.stroke();
+
+    // 武器行。
+    let row_top = wy + WEAPON_ROW_TOP;
+    ctx.set_font(&format!("12px {JP_SANS}"));
+    ctx.set_text_baseline("middle");
+    for (i, r) in data.rows.iter().take(9).enumerate() {
+        let ry = row_top + i as f64 * WEAPON_ROW_H;
+        let mid = ry + WEAPON_ROW_H / 2.0;
+        let col = if r.usable { "#101010" } else { "#9a988c" };
+        ctx.set_fill_style_str(col);
+        ctx.set_text_align("left");
+        // 使用不可は名称頭に × (オリジナル準拠)。
+        let name = if r.usable {
+            format!(" {}", truncate(&r.name, 12))
+        } else {
+            format!("×{}", truncate(&r.name, 12))
+        };
+        let _ = ctx.fill_text(&name, col_name, mid);
+        let _ = ctx.fill_text(&truncate(&r.adaption, 4), col_adp, mid);
+        let _ = ctx.fill_text(&truncate(&r.class, 6), col_cls, mid);
+        ctx.set_text_align("right");
+        let _ = ctx.fill_text(&r.power.to_string(), col_pow, mid);
+        let _ = ctx.fill_text(&format!("{}%", r.hit_pct), col_hit, mid);
+        let ct = if r.critical > 0 {
+            format!("{}%", r.critical)
+        } else {
+            "-".to_string()
+        };
+        let _ = ctx.fill_text(&ct, col_ct, mid);
+        let _ = ctx.fill_text(&r.ammo, col_ammo, mid);
+    }
+
+    ctx.set_text_align("right");
+    ctx.set_text_baseline("bottom");
+    ctx.set_fill_style_str("#6a6a60");
+    ctx.set_font(&format!("11px {JP_SANS}"));
+    let _ = ctx.fill_text(
+        "番号キー / クリックで選択   右クリックで戻る",
+        wx + ww - pad,
+        wy + wh - 6.0,
+    );
 }
 
 #[allow(clippy::too_many_arguments)]

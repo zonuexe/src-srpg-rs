@@ -17,6 +17,7 @@ pub mod pilot_list;
 pub mod reaction;
 pub mod unit_detail;
 pub mod unit_list;
+pub mod weapon_select;
 
 /// 現在表示中のシーン / Currently rendered scene.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
