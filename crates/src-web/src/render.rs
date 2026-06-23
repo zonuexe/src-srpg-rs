@@ -2567,17 +2567,22 @@ fn draw_status_panel(
             &database.effective_mobility(u).to_string(),
         );
         y += 12.0;
+        // タイプ (移動形態): base transportation + 移動系特殊能力の追加 (SRC 準拠)。
+        let move_type = src_core::data::unit::move_type_label(&d.transportation, |n| {
+            d.features.iter().any(|(f, _)| f == n) || pilot_inst.is_some_and(|p| p.has_skill(n))
+        });
+        lv(ctx, pad_x, y, "ﾀｲﾌﾟ", 28.0, &move_type);
         lv(
             ctx,
-            pad_x,
+            col2,
             y,
             "移動",
             28.0,
             &database.effective_speed(u).to_string(),
         );
-        lv(ctx, col2, y, "ｻｲｽﾞ", 28.0, d.size.label());
         y += 12.0;
         lv(ctx, pad_x, y, "適応", 28.0, d.adaption.as_str());
+        lv(ctx, col2, y, "ｻｲｽﾞ", 28.0, d.size.label());
         y += 13.0;
         // 機体特殊能力 (例: 霊力変換器) — 能力名青。
         let ufeatures: Vec<String> = d.features.iter().map(|(n, _)| n.clone()).collect();

@@ -181,6 +181,30 @@ impl AbilityData {
     }
 }
 
+/// SRC `Unit.Transportation` (移動形態 = ステータス画面の「タイプ」)。`base` は
+/// unit.txt の移動形態 (例 `"空陸"` / `"陸宇"`)。移動系特殊能力 (空中/陸上/水中/
+/// 地中/宇宙移動) で侵入可能地形を追加する (VB6 `Unit.cls` / C# `Unit.Transportation`
+/// と同順)。`has_feature` はユニット/パイロットの特殊能力保有を返すクロージャ。
+pub fn move_type_label(base: &str, has_feature: impl Fn(&str) -> bool) -> String {
+    let mut t = base.to_string();
+    if has_feature("空中移動") && !t.contains('空') {
+        t.insert(0, '空');
+    }
+    if has_feature("陸上移動") && !t.contains('陸') {
+        t.insert(0, '陸');
+    }
+    if has_feature("水中移動") && !t.contains('水') {
+        t.insert(0, '水');
+    }
+    if has_feature("地中移動") && !t.contains("地中") {
+        t.push_str("地中");
+    }
+    if has_feature("宇宙移動") && t.is_empty() {
+        t = "宇宙".to_string();
+    }
+    t
+}
+
 /// 元 `UnitData` の主要フィールド。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UnitData {
@@ -646,6 +670,21 @@ fn err(line_num: usize, message: &str) -> ParseError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn move_type_label_base_and_feature_additions() {
+        // 特殊能力なし → 基本移動形態そのまま。
+        assert_eq!(move_type_label("空陸", |_| false), "空陸");
+        assert_eq!(move_type_label("陸宇", |_| false), "陸宇");
+        // 既に含む地形は重複追加しない。
+        assert_eq!(move_type_label("空陸", |n| n == "空中移動"), "空陸");
+        // 空中移動で「空」を前置 (陸ユニットが飛行可能に)。
+        assert_eq!(move_type_label("陸", |n| n == "空中移動"), "空陸");
+        // 地中移動は末尾に追加。
+        assert_eq!(move_type_label("陸", |n| n == "地中移動"), "陸地中");
+        // 宇宙移動は移動形態が空のときのみ「宇宙」。
+        assert_eq!(move_type_label("", |n| n == "宇宙移動"), "宇宙");
+    }
 
     const SAMPLE: &str = "\
 ブレイバー
