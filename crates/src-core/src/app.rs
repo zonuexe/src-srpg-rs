@@ -87,16 +87,27 @@ struct PendingReaction {
     modes: Vec<String>,
 }
 
-/// 攻撃側の武器選択を待つ間 `pending_weapon_select` に保持する。応答時に選んだ
-/// 武器を `selected_weapon_idx` に固定して `target` の敵を攻撃・解決する。
+/// 武器選択を待つ間 `pending_weapon_select` に保持する。通常攻撃と、反撃手段
+/// 「反撃」選択後の反撃武器選択の両方に使う (`counter` で区別)。
 #[derive(Debug, Clone)]
 struct PendingWeaponSelect {
-    /// 攻撃側 (プレイヤー) ユニット uid。
+    /// 武器を撃つ側 uid (通常攻撃=攻撃側 / 反撃=防御側=反撃する側)。
     atk_uid: String,
-    /// 攻撃目標タイル。
+    /// 撃つ目標タイル (通常攻撃=防御側 / 反撃=元攻撃側の位置)。
     target: (u32, u32),
     /// 移動後攻撃か (キャンセル復帰用フラグ)。
     post_move: bool,
+    /// `Some` なら反撃武器選択。選択後に主攻撃を `def_mode="反撃"` で解決する。
+    counter: Option<CounterCtx>,
+}
+
+/// 反撃武器選択の文脈 (主攻撃の解決に必要)。
+#[derive(Debug, Clone)]
+struct CounterCtx {
+    /// 主攻撃の攻撃側 (AI) uid。
+    main_atk_uid: String,
+    /// 主攻撃の防御側 (反撃する側) タイル。
+    main_target: (u32, u32),
 }
 
 /// 精神コマンド (SP コマンド) のサブメニュー選択を待つ間 `pending_spirit` に保持。
@@ -334,6 +345,10 @@ pub struct App {
     /// 武器選択待機中の攻撃文脈 (Some のとき武器選択待ち)。transient。
     #[serde(skip)]
     pending_weapon_select: Option<PendingWeaponSelect>,
+    /// プレイヤーが反撃武器選択で選んだ反撃武器 (0-based)。`try_counterattack` が
+    /// `take()` して 1 回だけ使い、無効/未設定なら自動選定にフォールバック。transient。
+    #[serde(skip)]
+    forced_counter_weapon: Option<usize>,
     /// 精神コマンドのサブメニュー選択待ち文脈 (Some のとき発動待ち)。transient。
     #[serde(skip)]
     pending_spirit: Option<PendingSpirit>,
@@ -679,6 +694,7 @@ impl App {
             pending_reaction: None,
             weapon_window_enabled: true,
             pending_weapon_select: None,
+            forced_counter_weapon: None,
             pending_spirit: None,
             pending_transform: None,
             pending_ability: None,
@@ -4975,7 +4991,19 @@ impl App {
         let (def_pilot, def_unit) = self.database.effective_combat_data(def_idx)?;
         let (atk_pilot, mut atk_unit) = self.database.effective_combat_data(atk_idx)?;
         let dist = combat::manhattan((dx, dy), target);
-        let weapon = self.best_firable_weapon_in_range(def_idx, &def_unit, dist)?;
+        // プレイヤーが反撃武器選択で武器を指定していれば優先 (1 回限り。射程内 + 発射可能
+        // でなければ自動選定へフォールバック)。
+        let forced = self.forced_counter_weapon.take().and_then(|idx| {
+            def_unit
+                .weapons
+                .get(idx)
+                .filter(|w| self.weapon_usable_vs(def_idx, w, dist, false))
+                .cloned()
+        });
+        let weapon = match forced {
+            Some(w) => w,
+            None => self.best_firable_weapon_in_range(def_idx, &def_unit, dist)?,
+        };
         // 反撃の被弾側 (= 元攻撃者 atk_idx) の防御特性 (弱点→装甲半減 / 吸収→無視) を適用。
         self.apply_defense_armor_mod(atk_idx, &weapon.class, &mut atk_unit);
         let t_id = self
@@ -6231,6 +6259,37 @@ impl App {
             pr.modes.first().cloned().unwrap_or_default()
         };
         self.set_cursor_to_uid(&pr.atk_uid);
+        // 「反撃」選択時、反撃武器が複数あり武器選択ウィンドウが有効なら、どの反撃
+        // 武器で反撃するかを選ばせる (使用可能が 1 本以下なら自動選定のまま解決)。
+        if mode == "反撃" && self.weapon_window_enabled {
+            if let (Some(atk_idx), Some(def_idx)) = (
+                self.database.idx_by_uid(&pr.atk_uid),
+                self.database
+                    .unit_instances
+                    .iter()
+                    .position(|u| !u.off_map && (u.x, u.y) == pr.target_tile),
+            ) {
+                let usable_cnt = self
+                    .build_weapon_rows(def_idx, atk_idx, false)
+                    .iter()
+                    .filter(|r| r.usable)
+                    .count();
+                if usable_cnt >= 2 {
+                    let def_uid = self.database.unit_instances[def_idx].uid.clone();
+                    let atk_tile = {
+                        let a = &self.database.unit_instances[atk_idx];
+                        (a.x, a.y)
+                    };
+                    self.begin_counter_weapon_select(
+                        def_uid,
+                        atk_tile,
+                        pr.atk_uid.clone(),
+                        pr.target_tile,
+                    );
+                    return true;
+                }
+            }
+        }
         self.attack_resolve_and_run(Some(pr.target_tile), false, &mode);
         // ランナーは pending_dialog が消えたので次 tick で継続する。
         true
@@ -6422,9 +6481,45 @@ impl App {
             atk_uid,
             target,
             post_move,
+            counter: None,
         });
         self.set_pending_dialog(crate::dialog::PendingDialog::Menu {
             prompt: "武器選択".to_string(),
+            options: names,
+            var_name: String::new(),
+            store_value: false,
+            option_keys: Vec::new(),
+            non_cancellable: false,
+        });
+    }
+
+    /// 反撃武器選択を開始する。`def_uid` (反撃する側) の反撃武器一覧を Menu に積み、
+    /// 解決時に選んだ武器を `forced_counter_weapon` に設定して主攻撃を `反撃` で解決する。
+    /// `main_atk_uid` / `main_target` は主攻撃 (元の攻撃) の文脈。
+    fn begin_counter_weapon_select(
+        &mut self,
+        def_uid: String,
+        atk_tile: (u32, u32),
+        main_atk_uid: String,
+        main_target: (u32, u32),
+    ) {
+        let names: Vec<String> = self
+            .database
+            .unit_by_uid(&def_uid)
+            .and_then(|u| self.database.unit_by_name(&u.unit_data_name))
+            .map(|d| d.weapons.iter().map(|w| w.name.clone()).collect())
+            .unwrap_or_default();
+        self.pending_weapon_select = Some(PendingWeaponSelect {
+            atk_uid: def_uid,
+            target: atk_tile,
+            post_move: false,
+            counter: Some(CounterCtx {
+                main_atk_uid,
+                main_target,
+            }),
+        });
+        self.set_pending_dialog(crate::dialog::PendingDialog::Menu {
+            prompt: "反撃武器選択".to_string(),
             options: names,
             var_name: String::new(),
             store_value: false,
@@ -6547,6 +6642,7 @@ impl App {
             attacker,
             defender: pws.target,
             rows,
+            is_counter: pws.counter.is_some(),
         })
     }
 
@@ -6580,7 +6676,16 @@ impl App {
         }
         self.pending_weapon_select = None;
         self.pending_dialog = None;
-        // 選んだ武器を固定して攻撃 (1回限り; 終了後に W キー設定へ戻す)。
+        if let Some(cc) = pws.counter {
+            // 反撃武器選択: 選んだ武器を反撃武器に固定し、主攻撃を「反撃」で解決する
+            // (try_counterattack が forced_counter_weapon を take して使う)。
+            self.forced_counter_weapon = Some(widx - 1);
+            self.set_cursor_to_uid(&cc.main_atk_uid);
+            self.attack_resolve_and_run(Some(cc.main_target), false, "反撃");
+            self.forced_counter_weapon = None;
+            return true;
+        }
+        // 通常攻撃: 選んだ武器を固定して攻撃 (1回限り; 終了後に W キー設定へ戻す)。
         let prev = self.selected_weapon_idx;
         self.selected_weapon_idx = widx;
         let attacked = self.attack_unit_at(&pws.atk_uid, pws.target, pws.post_move);

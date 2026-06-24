@@ -1462,7 +1462,12 @@ fn draw_weapon_select_window(
     let wy = WEAPON_WIN_Y;
     let ww = WEAPON_WIN_W;
     let wh = WEAPON_WIN_H;
-    draw_vb6_dialog(ctx, wx as i64, wy as i64, ww as u32, wh as u32, "武器選択");
+    let title = if data.is_counter {
+        "反撃武器選択"
+    } else {
+        "武器選択"
+    };
+    draw_vb6_dialog(ctx, wx as i64, wy as i64, ww as u32, wh as u32, title);
 
     let pad = WEAPON_PAD;
     // 上段: 攻防 2 機の HUD。

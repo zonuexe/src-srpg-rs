@@ -17,6 +17,8 @@ pub struct WeaponSelectWindowData {
     pub defender: (u32, u32),
     /// 武器行 (機体の武装順 = 選択 index 順)。
     pub rows: Vec<WeaponSelectRow>,
+    /// 反撃武器選択 (反撃手段「反撃」選択後) なら true。タイトル表示の切替に使う。
+    pub is_counter: bool,
 }
 
 /// 武器選択ウィンドウの 1 行 (1 武器)。
