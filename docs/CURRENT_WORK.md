@@ -7,7 +7,7 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 
 ---
 
-## 現在地（2026-06-21）— UI をオリジナル SRC 表示に近づける（戦闘窓3種＋ステータスパネル刷新）（セッション区切り）
+## 現在地（2026-06-21）— UI をオリジナル SRC 表示に近づける（戦闘窓4種＋ステータスパネル刷新）（セッション区切り）
 
 **ブランチ**: `feat/status-panel-src-ui`（`master` ではない。**push 未指示**）。
 **テスト**: `cargo test -p src-core` 全緑／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。作業ツリーはクリーン（全コミット済み）。
@@ -23,13 +23,13 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 - **反撃手段選択窓**（`bf4335f`）: 既存の反撃/回避/防御フロー（`begin_reaction_prompt`、自動反撃オフ＝既定で発火）を、2機HUD＋各選択肢の命中率付きオリジナル窓に。`scene::reaction::ReactionWindowData` ＋ `App::reaction_window_data`（命中率は `attack_hit_forecast`）＋ `dialog::reaction_choice_at`（描画とジオメトリ共有）。
 - **攻撃側 武器選択窓**（`daa83d7`）: 目標確定後に武器表（名称/攻撃/命中/CT/弾EN/適応/分類, ×=不可）を挟む。**唯一フローに入力待ち1ステップ追加**。既存テスト保護のため `animate_battle`（UI）＋ `weapon_window_enabled`（既定true・マップコマンドでトグル）時のみ発火（ヘッドレステストは迂回）。`scene::weapon_select::*` ＋ `begin/build/resolve_weapon_select` ＋ `dialog::weapon_select_choice_at`。
 - **タイプ(移動形態)**（`ab1d0a8`）: `data::unit::move_type_label`（テスト付き）でステータスに「タイプ」行を追加。
+- **反撃武器選択窓**（`a3f53c1`）: 反撃手段「反撃」選択後に防御側の反撃武器を選ぶ窓（武器選択基盤を再利用・`is_counter` でタイトル切替）。`forced_counter_weapon` を `try_counterattack` が take（射程外/不可なら自動選定へフォールバック）。`resolve_reaction` は使用可能反撃武器が 2 本以上のときのみ分岐（1 本以下は自動）。
 
-**到達点**: オリジナルの戦闘窓3種（①メッセージ②反撃③武器選択）＋ステータスパネルが揃った。実機（DEMO BASE サンプル）で各窓・クリック確定を目視確認済み（タイプのみユニットテストのみ・実機未確認）。
+**到達点**: オリジナルの戦闘窓**4種**（①メッセージ②反撃③武器選択④反撃武器選択）＋ステータスパネルが揃った。実機（DEMO BASE サンプル）で各窓・クリック確定・反撃武器チェーンを目視確認済み（タイプのみユニットテストのみ・実機未確認）。
 
-**残（次セッション候補・低優先）**:
-1. **反撃時の防御側「反撃武器選択」窓**（着手途中で巻き戻し済）: 反撃選択後にもう1枚、防御側の反撃武器を選ぶ窓。注入点は `app.rs::try_counterattack` の `best_firable_weapon_in_range`（ここを `forced_counter_weapon: Option<usize>` で上書き）。フローは reaction→武器選択の2枚チェーン（`pending_weapon_select` に `counter` 種別を足し、解決を `attack_resolve_and_run(def_mode="反撃")` ＋ forced 反撃武器へ）。auto-pick が既に最良武器を選ぶため価値は低い。
-2. **戦闘窓の実顔グラ確認**: デモ機に立ち絵アセットが無くプレースホルダ。実シナリオでの確認は実機要。
-3. **キャンバス拡張で右パネル ~280px 化**（先送り済の判断）: 武器名の切り詰めが解消するが CANVAS_WIDTH 依存箇所の広範改修を伴う。
+**残（次セッション候補・低優先, データ/大改修要）**:
+1. **戦闘窓の実顔グラ確認**: デモ機に立ち絵アセットが無くプレースホルダ。実シナリオでの確認は実機要。
+2. **キャンバス拡張で右パネル ~280px 化**（先送り済の判断）: 武器名の切り詰めが解消するが CANVAS_WIDTH 依存箇所の広範改修を伴う。
 
 > 詳細・配色 RGB・各窓のジオメトリ定数は memory [[project_ui_fidelity_to_original_src]] に集約。
 
