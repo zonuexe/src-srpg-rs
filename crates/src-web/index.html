@@ -88,12 +88,14 @@
         opacity: 0.6;
       }
       #src-canvas {
-        /* 論理 640x480、HiDPI 環境で見やすいよう CSS で 1.5x 拡大表示。
-           Canvas の論理解像度は src-core::CANVAS_WIDTH/HEIGHT のまま保持。 */
+        /* 論理 768x480 (src-core::CANVAS_WIDTH/HEIGHT)、HiDPI 環境で見やすいよう
+           CSS で 1.5x 拡大表示 (768x480 → 1152x720)。aspect-ratio で縦横比を固定し、
+           ビューポート制約で縮んでも歪まないようにする。 */
         background: #c0c0c0;
         image-rendering: pixelated;
-        width: 960px;
-        height: 720px;
+        width: 1152px;
+        height: auto;
+        aspect-ratio: 768 / 480;
         max-width: calc(100vw - 32px);
         max-height: calc(100vh - 160px);
         box-shadow: 0 0 0 1px #1c1c2a, 0 12px 40px rgba(0,0,0,0.6);
@@ -103,7 +105,7 @@
         display: flex;
         align-items: stretch;
         gap: 2px;
-        width: 960px;
+        width: 1152px;
         max-width: calc(100vw - 32px);
         box-sizing: border-box;
         background: linear-gradient(#3a3a48, #2c2c38);
@@ -265,7 +267,7 @@
       <!-- 右寄せ: 押しやすい位置に残すキャプチャボタン -->
       <button id="src-capture" type="button" class="menubar-action">キャプチャ保存</button>
     </nav>
-    <canvas id="src-canvas" width="640" height="480"></canvas>
+    <canvas id="src-canvas" width="768" height="480"></canvas>
     <!-- シナリオ読込用ファイル入力。メニュー「シナリオ読込...」から click() で開くため
          画面上は隠す（DOM には残す）。 -->
     <input id="src-file" type="file" accept=".eve,.txt,.zip,.lzh" style="display:none;" />
