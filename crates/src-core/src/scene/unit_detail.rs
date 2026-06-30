@@ -16,8 +16,10 @@
 
 use super::title::Rect;
 
-pub const UNIT_DETAIL_WIDTH: u32 = 640;
-pub const UNIT_DETAIL_HEIGHT: u32 = 480;
+// 全画面モーダル。キャンバス幅に合わせ ox=0 を保つ (描画とクリック判定の中央寄せ
+// オフセットずれを避ける)。内容レイアウトは 640 幅基準で右側に余白が出るが破綻しない。
+pub const UNIT_DETAIL_WIDTH: u32 = crate::CANVAS_WIDTH;
+pub const UNIT_DETAIL_HEIGHT: u32 = crate::CANVAS_HEIGHT;
 
 /// フッタのナビゲーションボタン。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

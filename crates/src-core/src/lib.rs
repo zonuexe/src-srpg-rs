@@ -60,10 +60,11 @@ pub use unit_ability::UnitAbility;
 pub use unit_instance::{Party, UnitInstance};
 pub use unit_weapon::UnitWeapon;
 
-/// 描画キャンバスの論理サイズ。元 SRC の主要フォームを全て収めるため少し大きめ
-/// に取る（Main.frm = 508x294, Configuration.frm = 346x405）。
-/// Logical canvas size large enough to letterbox every VB6 form we port.
-pub const CANVAS_WIDTH: u32 = 640;
+/// 描画キャンバスの論理サイズ。左 480×480 のマップ領域 + 右 288px のステータス
+/// パネル = 768×480（オリジナル SRC のステータス窓幅に寄せ、武器名等を切り詰めず
+/// 表示できるようにした）。`MAP_VIEW_WIDTH`（= 480 + STATUS_PANEL_WIDTH）と一致させる。
+/// Logical canvas size: 480×480 map area + 288px status panel.
+pub const CANVAS_WIDTH: u32 = 768;
 pub const CANVAS_HEIGHT: u32 = 480;
 
 /// 現在の移植進捗を識別する文字列。フロントエンドのスプラッシュに表示する。

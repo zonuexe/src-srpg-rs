@@ -12,8 +12,9 @@
 
 use super::title::Rect;
 
-pub const INTERMISSION_WIDTH: u32 = 640;
-pub const INTERMISSION_HEIGHT: u32 = 480;
+// 全画面シーン。キャンバス幅に合わせ ox=0 を保つ (中央寄せオフセットずれ回避)。
+pub const INTERMISSION_WIDTH: u32 = crate::CANVAS_WIDTH;
+pub const INTERMISSION_HEIGHT: u32 = crate::CANVAS_HEIGHT;
 
 /// 各メニュー項目の表示矩形の縦サイズ。
 pub const ITEM_HEIGHT: u32 = 32;

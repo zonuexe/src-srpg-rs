@@ -2411,7 +2411,7 @@ fn draw_status_panel(
         .as_ref()
         .map(|p| p.nickname.clone())
         .unwrap_or_else(|| "(無人)".to_string());
-    let _ = ctx.fill_text(&truncate(&pname, 6), tx, py);
+    let _ = ctx.fill_text(&truncate(&pname, 10), tx, py);
     py += 13.0;
     ctx.set_font(&format!("10px {JP_SANS}"));
     // レベル (撃墜数)。撃墜数は PilotInstance.skills の「撃墜数 N」(increment_kill_count
@@ -2464,7 +2464,7 @@ fn draw_status_panel(
         if !abilities.is_empty() {
             ctx.set_fill_style_str(ABILITY);
             ctx.set_font(&format!("10px {JP_SANS}"));
-            for line in wrap_text(&abilities.join(" "), 26).into_iter().take(2) {
+            for line in wrap_text(&abilities.join(" "), 50).into_iter().take(2) {
                 let _ = ctx.fill_text(&line, pad_x, y);
                 y += 12.0;
             }
@@ -2496,7 +2496,7 @@ fn draw_status_panel(
     if let Some(d) = unit_def {
         ctx.set_fill_style_str(VALUE);
         ctx.set_font(&format!("bold 11px {JP_SANS}"));
-        let _ = ctx.fill_text(&truncate(&d.name, 11), pad_x, y);
+        let _ = ctx.fill_text(&truncate(&d.name, 20), pad_x, y);
         y += 13.0;
         // 現在地形 + 回避補正。
         if let Some(map) = database.map.as_ref() {
@@ -2594,7 +2594,7 @@ fn draw_status_panel(
         if !ufeatures.is_empty() {
             ctx.set_fill_style_str(ABILITY);
             ctx.set_font(&format!("10px {JP_SANS}"));
-            for line in wrap_text(&ufeatures.join(" "), 26).into_iter().take(2) {
+            for line in wrap_text(&ufeatures.join(" "), 50).into_iter().take(2) {
                 let _ = ctx.fill_text(&line, pad_x, y);
                 y += 12.0;
             }
@@ -2645,7 +2645,7 @@ fn draw_status_panel(
                 ctx.set_fill_style_str(if disabled { DISABLED } else { VALUE });
                 ctx.set_text_align("left");
                 let prefix = if active { "▶" } else { "" };
-                let _ = ctx.fill_text(&format!("{prefix}{}", truncate(&wd.name, 7)), pad_x, y);
+                let _ = ctx.fill_text(&format!("{prefix}{}", truncate(&wd.name, 16)), pad_x, y);
                 // 攻撃 / 射程 (右寄せ)。
                 ctx.set_text_align("right");
                 let _ = ctx.fill_text(&wd.power.to_string(), col_pow, y);
@@ -2736,7 +2736,7 @@ fn draw_message_box(
             ctx.set_fill_style_str("#101010");
             ctx.set_font(&format!("11px {JP_SANS}"));
             let max_lines = (((oy as f64 + h - 6.0) - text_top) / 14.0).max(1.0) as usize;
-            for (i, chunk) in wrap_text(msg, 26).into_iter().take(max_lines).enumerate() {
+            for (i, chunk) in wrap_text(msg, 50).into_iter().take(max_lines).enumerate() {
                 let _ = ctx.fill_text(&chunk, pad, text_top + 14.0 * i as f64);
             }
         }

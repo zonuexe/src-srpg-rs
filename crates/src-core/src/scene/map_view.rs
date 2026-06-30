@@ -30,8 +30,9 @@ pub const STATUS_BAR_HEIGHT: u32 = 0;
 pub const VIEW_TILES_X: u32 = 15;
 pub const VIEW_TILES_Y: u32 = 15;
 
-/// 右側のステータスパネル幅 (640 - 480 = 160)。
-pub const STATUS_PANEL_WIDTH: u32 = 160;
+/// 右側のステータスパネル幅 (768 - 480 = 288)。オリジナル SRC のステータス窓幅に
+/// 寄せ、武器名・能力名を切り詰めずに表示できる幅を確保する。
+pub const STATUS_PANEL_WIDTH: u32 = 288;
 
 /// 下部メッセージボックスの高さ (右パネル下部分を割く)。
 pub const MESSAGE_BOX_HEIGHT: u32 = 144;
@@ -65,12 +66,14 @@ mod tests {
 
     #[test]
     fn dimensions_match_constants() {
-        assert_eq!(MAP_VIEW_WIDTH, 15 * 32 + 160);
+        assert_eq!(MAP_VIEW_WIDTH, 15 * 32 + 288);
         assert_eq!(MAP_VIEW_HEIGHT, 15 * 32);
-        assert_eq!(MAP_VIEW_WIDTH, 640);
+        assert_eq!(MAP_VIEW_WIDTH, 768);
         assert_eq!(MAP_VIEW_HEIGHT, 480);
         assert_eq!(MAP_AREA_W, 480);
         assert_eq!(MAP_AREA_H, 480);
+        // キャンバス幅とマップビュー幅は一致 (ox=0 で中央寄せ)。
+        assert_eq!(MAP_VIEW_WIDTH, crate::CANVAS_WIDTH);
     }
 }
 
