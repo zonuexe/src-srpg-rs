@@ -1207,7 +1207,10 @@ fn resolve_combatant_hud(database: &GameDatabase, pos: (u32, u32)) -> Option<Com
     })
 }
 
-/// HP/EN の値テキスト + 緑バー (オリジナル戦闘窓風)。値を上、バーを直下に描く。
+/// HP/EN の値テキスト + ゲージ (オリジナル SRC `Status.bas` 準拠)。値を上、
+/// ゲージを直下に描く。ゲージは「赤地に緑の現在値 + 沈み込みベベル枠」で、
+/// 原典の `upic.Line ... rgb(0,210,0)/rgb(200,0,0)` と枠 rgb(100,100,100)/
+/// rgb(220,220,220) を再現する (減った分が赤く見える。緑→黄→赤の変化はしない)。
 fn draw_combat_bar(
     ctx: &CanvasRenderingContext2d,
     x: f64,
@@ -1217,37 +1220,47 @@ fn draw_combat_bar(
     cur: f64,
     max: f64,
 ) {
+    // ラベル「ＨＰ/ＥＮ」= 青、数値 = 黒 (原典 rgb(0,0,150) / rgb(0,0,0))。
     ctx.set_font(&format!("10px {JP_SANS}"));
     ctx.set_text_align("left");
     ctx.set_text_baseline("top");
-    ctx.set_fill_style_str("#000000");
+    ctx.set_fill_style_str("#000096");
+    let _ = ctx.fill_text(label, x, y);
+    let label_w = ctx.measure_text(label).map(|m| m.width()).unwrap_or(20.0) + 4.0;
+    ctx.set_fill_style_str("#101010");
     let _ = ctx.fill_text(
-        &format!("{label} {}/{}", cur.round() as i64, max.round() as i64),
-        x,
+        &format!("{}/{}", cur.round() as i64, max.round() as i64),
+        x + label_w,
         y,
     );
-    let by = y + 11.0;
-    let bh = 4.0;
-    ctx.set_fill_style_str("#808080");
-    ctx.fill_rect(x, by, w, bh);
+
+    // ゲージ (枠 7px / 塗り高 5px)。
+    let gy = y + 11.0;
+    let gh = 6.0;
     let frac = if max <= 0.0 {
         0.0
     } else {
         (cur / max).clamp(0.0, 1.0)
     };
-    // 残量が少ないと黄→赤に転じる (オリジナルのバー色変化を簡略再現)。
-    let fill = if frac > 0.5 {
-        "#10b020"
-    } else if frac > 0.25 {
-        "#d0b020"
-    } else {
-        "#d03020"
-    };
-    ctx.set_fill_style_str(fill);
-    ctx.fill_rect(x, by, w * frac, bh);
-    ctx.set_stroke_style_str("#404040");
+    // 赤背景 → 緑の現在値。
+    ctx.set_fill_style_str("#c80000");
+    ctx.fill_rect(x + 1.0, gy + 1.0, w - 1.0, gh - 1.0);
+    ctx.set_fill_style_str("#00d200");
+    ctx.fill_rect(x + 1.0, gy + 1.0, (w - 1.0) * frac, gh - 1.0);
+    // 沈み込みベベル枠: 上/左 = 暗灰、下/右 = 明灰。
     ctx.set_line_width(1.0);
-    ctx.stroke_rect(x + 0.5, by + 0.5, w - 1.0, bh - 1.0);
+    ctx.set_stroke_style_str("#646464");
+    ctx.begin_path();
+    ctx.move_to(x + 0.5, gy + gh - 0.5);
+    ctx.line_to(x + 0.5, gy + 0.5);
+    ctx.line_to(x + w - 0.5, gy + 0.5);
+    ctx.stroke();
+    ctx.set_stroke_style_str("#dcdcdc");
+    ctx.begin_path();
+    ctx.move_to(x + w - 0.5, gy + 0.5);
+    ctx.line_to(x + w - 0.5, gy + gh - 0.5);
+    ctx.line_to(x + 0.5, gy + gh - 0.5);
+    ctx.stroke();
 }
 
 /// 戦闘窓ヘッダの 1 機分を描く。オリジナル SRC の並びに合わせて
