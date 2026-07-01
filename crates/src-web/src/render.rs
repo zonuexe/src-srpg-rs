@@ -12,9 +12,8 @@ use src_core::scene::configuration::{
     TITLE_BAR_HEIGHT,
 };
 use src_core::scene::map_view::{
-    MAP_AREA_W, MAP_VIEW_HEIGHT, MAP_VIEW_WIDTH, MESSAGE_BOX_HEIGHT, MESSAGE_BOX_X, MESSAGE_BOX_Y,
-    STATUS_PANEL_H, STATUS_PANEL_WIDTH, STATUS_PANEL_X, STATUS_PANEL_Y, TILE_SIZE, VIEW_TILES_X,
-    VIEW_TILES_Y,
+    MAP_VIEW_HEIGHT, MAP_VIEW_WIDTH, STATUS_PANEL_H, STATUS_PANEL_WIDTH, STATUS_PANEL_X,
+    STATUS_PANEL_Y, TILE_SIZE, VIEW_TILES_X, VIEW_TILES_Y,
 };
 use src_core::scene::pilot_list::{
     self as plist, COLUMNS as PL_COLUMNS, HEADER_TOP, PILOT_LIST_HEIGHT, PILOT_LIST_WIDTH,
@@ -51,7 +50,6 @@ pub fn draw_scene(
     stage: &str,
     last_message: Option<&str>,
     selected_weapon_idx: usize,
-    messages_total: usize,
     pending_dialog: Option<&src_core::PendingDialog>,
     script_overlay: &src_core::ScriptOverlay,
     command_menu: Option<&src_core::CommandMenu>,
@@ -92,10 +90,8 @@ pub fn draw_scene(
                     turn,
                     scroll,
                     stage,
-                    last_message,
                     assets,
                     selected_weapon_idx,
-                    messages_total,
                     script_active,
                     action_mode.clone(),
                     battle_anim,
@@ -1211,6 +1207,7 @@ fn resolve_combatant_hud(database: &GameDatabase, pos: (u32, u32)) -> Option<Com
 /// ゲージを直下に描く。ゲージは「赤地に緑の現在値 + 沈み込みベベル枠」で、
 /// 原典の `upic.Line ... rgb(0,210,0)/rgb(200,0,0)` と枠 rgb(100,100,100)/
 /// rgb(220,220,220) を再現する (減った分が赤く見える。緑→黄→赤の変化はしない)。
+#[allow(clippy::too_many_arguments)]
 fn draw_combat_bar(
     ctx: &CanvasRenderingContext2d,
     x: f64,
@@ -1219,15 +1216,22 @@ fn draw_combat_bar(
     label: &str,
     cur: f64,
     max: f64,
+    dark: bool,
 ) {
     // ラベル「ＨＰ/ＥＮ」= 青、数値 = 黒 (原典 rgb(0,0,150) / rgb(0,0,0))。
+    // 暗背景の戦闘会話窓では視認性のため明色に振る。
+    let (label_col, value_col) = if dark {
+        ("#8fd6e6", "#f2f2f2")
+    } else {
+        ("#000096", "#101010")
+    };
     ctx.set_font(&format!("10px {JP_SANS}"));
     ctx.set_text_align("left");
     ctx.set_text_baseline("top");
-    ctx.set_fill_style_str("#000096");
+    ctx.set_fill_style_str(label_col);
     let _ = ctx.fill_text(label, x, y);
     let label_w = ctx.measure_text(label).map(|m| m.width()).unwrap_or(20.0) + 4.0;
-    ctx.set_fill_style_str("#101010");
+    ctx.set_fill_style_str(value_col);
     let _ = ctx.fill_text(
         &format!("{}/{}", cur.round() as i64, max.round() as i64),
         x + label_w,
@@ -1270,6 +1274,7 @@ fn draw_combat_bar(
 ///
 /// 画像 (顔・機体) が無いスロットは灰塗りせず薄枠のみ (原典では敵の「怪」等も画像で、
 /// 素材未配置時に文字代替はしない方針)。
+#[allow(clippy::too_many_arguments)]
 fn draw_combatant_hud(
     ctx: &CanvasRenderingContext2d,
     x: f64,
@@ -1278,6 +1283,7 @@ fn draw_combatant_hud(
     hud: &CombatantHud,
     assets: &Assets,
     with_pilot: bool,
+    dark: bool,
 ) {
     let fs = 32.0;
     let gap = 5.0;
@@ -1286,14 +1292,17 @@ fn draw_combatant_hud(
     } else {
         assets.find_image(&hud.sprite)
     };
+    // 暗背景 (戦闘会話窓) では枠・文字を明色に。
+    let frame_col = if dark { "#6b7a92" } else { "#b9b6a3" };
+    let lv_col = if dark { "#cfe0ff" } else { "#000080" };
 
     // 画像スロット (画像があれば描画、無ければ薄い空枠のみ)。
     let draw_slot = |img: Option<&web_sys::HtmlImageElement>, ix: f64| {
         if let Some(im) = img {
             let _ = ctx.draw_image_with_html_image_element_and_dw_and_dh(im, ix, top, fs, fs);
-            ctx.set_stroke_style_str("#404040");
+            ctx.set_stroke_style_str(if dark { "#20242c" } else { "#404040" });
         } else {
-            ctx.set_stroke_style_str("#b9b6a3");
+            ctx.set_stroke_style_str(frame_col);
         }
         ctx.set_line_width(1.0);
         ctx.stroke_rect(ix + 0.5, top + 0.5, fs, fs);
@@ -1310,7 +1319,7 @@ fn draw_combatant_hud(
         draw_slot(face_img, cur_x);
         cur_x += fs + gap;
         // 2) Lv / 気力 (2 行)。
-        ctx.set_fill_style_str("#000080");
+        ctx.set_fill_style_str(lv_col);
         ctx.set_font(&format!("bold 11px {JP_SANS}"));
         ctx.set_text_align("left");
         ctx.set_text_baseline("top");
@@ -1325,14 +1334,33 @@ fn draw_combatant_hud(
 
     // 4) HP / EN (数値 + 緑バー) を 2 行。
     let bw = (x + block_w) - cur_x;
-    draw_combat_bar(ctx, cur_x, top + 2.0, bw, "ＨＰ", hud.hp_cur, hud.hp_max);
-    draw_combat_bar(ctx, cur_x, top + 20.0, bw, "ＥＮ", hud.en_cur, hud.en_max);
+    draw_combat_bar(
+        ctx,
+        cur_x,
+        top + 2.0,
+        bw,
+        "ＨＰ",
+        hud.hp_cur,
+        hud.hp_max,
+        dark,
+    );
+    draw_combat_bar(
+        ctx,
+        cur_x,
+        top + 20.0,
+        bw,
+        "ＥＮ",
+        hud.en_cur,
+        hud.en_max,
+        dark,
+    );
 }
 
-/// 戦闘演出中に重ねる「メッセージ」ウィンドウ (オリジナル SRC 戦闘窓風)。
-/// 上段に攻撃側 / 防御側 2 機の顔・HP/EN 緑バー、下段に発話者 (攻撃側) の顔と
-/// 結果メッセージを表示する。データは `battle_anim` の攻撃側 / 防御側タイルから
-/// live `database` を引いて解決する (撃破され盤面から除去された側は欠落 → 非表示)。
+/// 戦闘演出中に重ねる戦闘会話 (メッセージ) ウィンドウ。非戦闘の Talk ダイアログと
+/// 同じ暗色パネル + 金枠・同サイズ (画面下部) に統一し、Windows 風 VB6 デザインは廃止。
+/// 上段に攻防 2 機の HUD (機体アイコン + HP/EN)、下段に発話者 (攻撃側) の顔・名前・
+/// メッセージを表示する。データは `battle_anim` の攻撃側 / 防御側タイルから live
+/// `database` を引いて解決する (撃破され盤面から除去された側は欠落 → 非表示)。
 fn draw_combat_window(
     ctx: &CanvasRenderingContext2d,
     database: &GameDatabase,
@@ -1347,65 +1375,84 @@ fn draw_combat_window(
         return;
     }
 
-    let ox = (i64::from(CANVAS_WIDTH) - i64::from(MAP_VIEW_WIDTH)) / 2;
-    let oy = (i64::from(CANVAS_HEIGHT) - i64::from(MAP_VIEW_HEIGHT)) / 2;
-    // マップ領域 (480px) 内に収め、右のステータスパネルへ被らないようにする。
-    let ww: u32 = MAP_AREA_W - 20;
-    let wh: u32 = 110;
-    let wx = ox + 10;
-    let wy = oy + i64::from(MAP_VIEW_HEIGHT) - i64::from(wh) - 8;
-    draw_vb6_dialog(ctx, wx, wy, ww, wh, "メッセージ");
+    let cw = f64::from(CANVAS_WIDTH);
+    let ch = f64::from(CANVAS_HEIGHT);
+    // Talk ダイアログと同じジオメトリ (画面下 ~45%、全幅、暗色パネル + 金枠)。
+    let win_top = ch * 0.55;
+    let win_h = ch - win_top - 6.0;
+    let pad = 12.0;
+    ctx.set_fill_style_str("rgba(0,0,0,0.30)");
+    ctx.fill_rect(0.0, 0.0, cw, ch);
+    ctx.set_fill_style_str("rgba(20,24,40,0.92)");
+    ctx.fill_rect(6.0, win_top, cw - 12.0, win_h);
+    ctx.set_stroke_style_str("#f0e68c");
+    ctx.set_line_width(2.0);
+    ctx.stroke_rect(6.0, win_top, cw - 12.0, win_h);
 
-    // 上段: 攻防 2 機の HUD。
-    let pad = 8.0;
-    let block_w = (f64::from(ww) - pad * 3.0) / 2.0;
-    let hud_top = wy as f64 + 22.0;
-    // メッセージ窓は機体アイコン + HP/EN のみ (顔・Lv/気力は出さない)。
+    // 上段: 攻防 2 機の HUD (機体アイコン + HP/EN のみ、暗背景用の明色)。
+    let block_w = (cw - 12.0 - pad * 3.0) / 2.0;
+    let hud_top = win_top + pad;
     if let Some(a) = atk.as_ref() {
-        draw_combatant_hud(ctx, wx as f64 + pad, hud_top, block_w, a, assets, false);
+        draw_combatant_hud(ctx, 6.0 + pad, hud_top, block_w, a, assets, false, true);
     }
     if let Some(d) = def.as_ref() {
         draw_combatant_hud(
             ctx,
-            wx as f64 + pad * 2.0 + block_w,
+            6.0 + pad * 2.0 + block_w,
             hud_top,
             block_w,
             d,
             assets,
             false,
+            true,
         );
     }
 
     // 区切り線。
-    let div_y = hud_top + 46.0;
-    ctx.set_stroke_style_str("#808080");
+    let div_y = hud_top + 44.0;
+    ctx.set_stroke_style_str("#4a5068");
     ctx.set_line_width(1.0);
     ctx.begin_path();
-    ctx.move_to(wx as f64 + pad, div_y + 0.5);
-    ctx.line_to(wx as f64 + f64::from(ww) - pad, div_y + 0.5);
+    ctx.move_to(6.0 + pad, div_y + 0.5);
+    ctx.line_to(cw - 6.0 - pad, div_y + 0.5);
     ctx.stroke();
 
-    // 下段: 発話者 (攻撃側) の顔 + 結果メッセージ。
-    let msg_y = div_y + 6.0;
-    let face_x = wx as f64 + pad;
+    // 下段: 発話者 (攻撃側) の顔 + 名前 + メッセージ (Talk 風)。
+    let sy = div_y + pad;
+    let face_x = 6.0 + pad;
+    let face_size = ((win_top + win_h - pad) - sy).clamp(48.0, 88.0);
+    ctx.set_stroke_style_str("#a8b8d0");
+    ctx.set_line_width(1.0);
+    ctx.stroke_rect(face_x, sy, face_size, face_size);
     if let Some(a) = atk.as_ref() {
-        let fs = 28.0;
         if let Some(img) = assets.find_image(&a.face) {
-            let _ =
-                ctx.draw_image_with_html_image_element_and_dw_and_dh(img, face_x, msg_y, fs, fs);
-            ctx.set_stroke_style_str("#404040");
-            ctx.set_line_width(1.0);
-            ctx.stroke_rect(face_x + 0.5, msg_y + 0.5, fs, fs);
+            let _ = ctx.draw_image_with_html_image_element_and_dw_and_dh(
+                img, face_x, sy, face_size, face_size,
+            );
+        }
+    }
+
+    let text_x = face_x + face_size + pad;
+    let mut ty = sy;
+    ctx.set_text_align("left");
+    ctx.set_text_baseline("top");
+    if let Some(a) = atk.as_ref() {
+        if !a.name.is_empty() {
+            ctx.set_fill_style_str("#ffffff");
+            ctx.set_font(&format!("bold 15px {JP_SANS}"));
+            let _ = ctx.fill_text(&a.name, text_x, ty);
+            ty += 22.0;
         }
     }
     if let Some(msg) = last_message {
-        ctx.set_fill_style_str("#000000");
-        ctx.set_font(&format!("12px {JP_SANS}"));
-        ctx.set_text_align("left");
-        ctx.set_text_baseline("top");
-        let text_x = face_x + 34.0;
-        for (i, line) in wrap_text(msg, 60).into_iter().take(2).enumerate() {
-            let _ = ctx.fill_text(&line, text_x, msg_y + i as f64 * 15.0);
+        ctx.set_fill_style_str("#e6e6f0");
+        ctx.set_font(&format!("14px {JP_SANS}"));
+        for line in wrap_text(msg, 46) {
+            let _ = ctx.fill_text(&line, text_x, ty);
+            ty += 19.0;
+            if ty > win_top + win_h - 18.0 {
+                break;
+            }
         }
     }
 }
@@ -1453,7 +1500,7 @@ fn draw_reaction_window(
     let hud_top = wy + 22.0;
     let block_w = (ww - pad * 3.0) / 2.0;
     if let Some(a) = resolve_combatant_hud(database, data.attacker) {
-        draw_combatant_hud(ctx, wx + pad, hud_top, block_w, &a, assets, true);
+        draw_combatant_hud(ctx, wx + pad, hud_top, block_w, &a, assets, true, false);
     }
     let def_hud = resolve_combatant_hud(database, data.defender);
     if let Some(d) = def_hud.as_ref() {
@@ -1465,6 +1512,7 @@ fn draw_reaction_window(
             d,
             assets,
             true,
+            false,
         );
         // 防御側「機体 パイロット」行。
         ctx.set_fill_style_str("#101010");
@@ -1539,7 +1587,7 @@ fn draw_weapon_select_window(
     let hud_top = wy + 22.0;
     let block_w = (ww - pad * 3.0) / 2.0;
     if let Some(a) = resolve_combatant_hud(database, data.attacker) {
-        draw_combatant_hud(ctx, wx + pad, hud_top, block_w, &a, assets, true);
+        draw_combatant_hud(ctx, wx + pad, hud_top, block_w, &a, assets, true, false);
     }
     if let Some(d) = resolve_combatant_hud(database, data.defender) {
         draw_combatant_hud(
@@ -1550,6 +1598,7 @@ fn draw_weapon_select_window(
             &d,
             assets,
             true,
+            false,
         );
     }
 
@@ -1634,10 +1683,8 @@ fn draw_map_view(
     turn: Turn,
     scroll: (u32, u32),
     stage: &str,
-    last_message: Option<&str>,
     assets: &Assets,
     selected_weapon_idx: usize,
-    messages_total: usize,
     script_active: bool,
     action_mode: src_core::ActionMode,
     battle_anim: Option<&src_core::BattleAnim>,
@@ -1850,20 +1897,7 @@ fn draw_map_view(
             selected_weapon_idx,
         );
 
-        // 下部メッセージボックス（カーソル位置のパイロットの顔グラを表示）
-        let face_hint = cursor
-            .and_then(|(cx, cy)| database.units_at(cx, cy).next())
-            .and_then(|u| database.pilot_by_name(&u.pilot_name))
-            .map(|p| p.bitmap.clone().unwrap_or_else(|| p.nickname.clone()));
-        draw_message_box(
-            ctx,
-            ox + i64::from(MESSAGE_BOX_X),
-            oy + i64::from(MESSAGE_BOX_Y),
-            last_message,
-            face_hint.as_deref(),
-            assets,
-            messages_total,
-        );
+        // サイドバーのメッセージボックスは廃止 (メッセージは Talk / 戦闘窓に集約)。
     } else {
         // マップ未ロード時は黒で塗っておく (後段の script_overlay の PaintPicture /
         // PaintString が黒地に乗る前提)。`script_active = false` のときだけ
@@ -2758,87 +2792,6 @@ fn truncate(s: &str, max_chars: usize) -> String {
         out.push(c);
     }
     out
-}
-
-/// 下部のメッセージボックス（顔グラ枠 + 本文 + ▼ 進行マーカ）。
-#[allow(clippy::too_many_arguments)]
-fn draw_message_box(
-    ctx: &CanvasRenderingContext2d,
-    ox: i64,
-    oy: i64,
-    last_message: Option<&str>,
-    face_hint: Option<&str>,
-    assets: &Assets,
-    queued: usize,
-) {
-    // 右パネル下部の 160px スロットに収まる VB6 風ウィンドウ (青タイトルバー
-    // 「メッセージ」+ 明グレー本体)。旧実装は w=MAP_VIEW_WIDTH(640) でキャンバス外へ
-    // はみ出し、顔・本文が右端に窮屈に詰まっていた。
-    let w = f64::from(STATUS_PANEL_WIDTH);
-    let h = f64::from(MESSAGE_BOX_HEIGHT);
-    draw_vb6_dialog(
-        ctx,
-        ox,
-        oy,
-        STATUS_PANEL_WIDTH,
-        MESSAGE_BOX_HEIGHT,
-        "メッセージ",
-    );
-
-    let pad = ox as f64 + 6.0;
-    let body_top = oy as f64 + 20.0;
-
-    // 顔グラ (小, 左上)。実画像があれば本文をその下へ送り、無ければ上端から。
-    let face_img = face_hint.and_then(|h| assets.find_image(h));
-    let text_top = if let Some(img) = face_img {
-        let fs = 32.0;
-        let _ = ctx.draw_image_with_html_image_element_and_dw_and_dh(img, pad, body_top, fs, fs);
-        ctx.set_stroke_style_str("#404040");
-        ctx.set_line_width(1.0);
-        ctx.stroke_rect(pad + 0.5, body_top + 0.5, fs, fs);
-        body_top + fs + 4.0
-    } else {
-        body_top
-    };
-
-    // 本文 (黒文字, 160px 幅で折返し)。
-    ctx.set_text_align("left");
-    ctx.set_text_baseline("top");
-    match last_message {
-        Some(msg) => {
-            ctx.set_fill_style_str("#101010");
-            ctx.set_font(&format!("11px {JP_SANS}"));
-            let max_lines = (((oy as f64 + h - 6.0) - text_top) / 14.0).max(1.0) as usize;
-            for (i, chunk) in wrap_text(msg, 50).into_iter().take(max_lines).enumerate() {
-                let _ = ctx.fill_text(&chunk, pad, text_top + 14.0 * i as f64);
-            }
-        }
-        None => {
-            ctx.set_fill_style_str("#6a6a60");
-            ctx.set_font(&format!("italic 10px {JP_SANS}"));
-            let _ = ctx.fill_text("(メッセージなし)", pad, text_top);
-        }
-    }
-
-    // ▼ 進行マーカ（右下に三角）。queued > 0 のときだけ表示。
-    if queued > 0 {
-        let mx = ox as f64 + w - 14.0;
-        let my = oy as f64 + h - 12.0;
-        ctx.set_fill_style_str("#404040");
-        ctx.begin_path();
-        ctx.move_to(mx - 5.0, my);
-        ctx.line_to(mx + 5.0, my);
-        ctx.line_to(mx, my + 6.0);
-        ctx.close_path();
-        ctx.fill();
-        if queued > 1 {
-            ctx.set_fill_style_str("#404040");
-            ctx.set_font(&format!("bold 9px {JP_SANS}"));
-            ctx.set_text_align("right");
-            ctx.set_text_baseline("bottom");
-            let _ = ctx.fill_text(&format!("{queued}件"), mx - 8.0, my + 6.0);
-        }
-    }
 }
 
 fn wrap_text(s: &str, max_chars_per_line: usize) -> Vec<String> {

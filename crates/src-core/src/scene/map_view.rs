@@ -51,12 +51,13 @@ pub const MAP_AREA_Y: u32 = STATUS_BAR_HEIGHT;
 pub const MAP_AREA_W: u32 = TILE_SIZE * VIEW_TILES_X;
 pub const MAP_AREA_H: u32 = TILE_SIZE * VIEW_TILES_Y;
 
-/// ステータスパネル領域 (右上)。下半分にメッセージボックスを置く。
+/// ステータスパネル領域 (右側全高)。旧実装は下部にメッセージボックスを割いていたが、
+/// サイドバーのメッセージ表示は廃止し、右パネルは全高をステータスに使う。
 pub const STATUS_PANEL_X: u32 = MAP_AREA_W;
 pub const STATUS_PANEL_Y: u32 = STATUS_BAR_HEIGHT;
-pub const STATUS_PANEL_H: u32 = MAP_AREA_H - MESSAGE_BOX_HEIGHT;
+pub const STATUS_PANEL_H: u32 = MAP_AREA_H;
 
-/// メッセージボックス領域 (右パネル下部)。
+/// メッセージボックス領域 (廃止済み・後方互換のため定数のみ残す)。
 pub const MESSAGE_BOX_X: u32 = MAP_AREA_W;
 pub const MESSAGE_BOX_Y: u32 = STATUS_PANEL_Y + STATUS_PANEL_H;
 

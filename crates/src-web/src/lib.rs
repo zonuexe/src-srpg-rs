@@ -1304,7 +1304,6 @@ fn copy_to_clipboard(text: &str) {
 fn redraw(ctx: &SharedCtx, app: &SharedApp, assets: &SharedAssets) {
     let app_ref = app.borrow();
     let last_msg = app_ref.messages().last().map(|s| s.as_str());
-    let total = app_ref.messages().len();
     let intermission_items: Vec<String> = (0..app_ref.intermission_item_count())
         .filter_map(|i| app_ref.intermission_item_label(i))
         .collect();
@@ -1330,7 +1329,6 @@ fn redraw(ctx: &SharedCtx, app: &SharedApp, assets: &SharedAssets) {
         app_ref.stage(),
         last_msg,
         app_ref.selected_weapon_idx(),
-        total,
         app_ref.pending_dialog(),
         app_ref.script_overlay(),
         app_ref.command_menu(),
