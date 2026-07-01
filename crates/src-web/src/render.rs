@@ -1140,7 +1140,11 @@ fn draw_battle_anim(
 
 /// 戦闘ウィンドウに表示する 1 機ぶんのスナップショット。
 struct CombatantHud {
+    /// パイロット顔グラのヒント (bitmap → nickname)。
     face: String,
+    /// 機体スプライトのヒント (UnitData.bitmap → unit_data_name)。オリジナル
+    /// 戦闘窓は顔グラの隣に機体アイコンも並べる。
+    sprite: String,
     /// パイロット愛称 (反撃窓の「機体 パイロット」行用)。
     name: String,
     /// 機体名 (同上)。
@@ -1181,13 +1185,19 @@ fn resolve_combatant_hud(database: &GameDatabase, pos: (u32, u32)) -> Option<Com
         .and_then(|p| p.bitmap.clone())
         .or_else(|| pilot.as_ref().map(|p| p.nickname.clone()))
         .unwrap_or_default();
+    // 機体スプライト: UnitData.bitmap があれば優先、無ければ unit_data_name
+    // (マップ描画と同じ解決順)。
+    let unit_data = database.unit_by_name(&u.unit_data_name);
+    let sprite = unit_data
+        .as_ref()
+        .map(|d| d.bitmap.clone())
+        .filter(|b| !b.is_empty())
+        .unwrap_or_else(|| u.unit_data_name.clone());
     Some(CombatantHud {
         face,
+        sprite,
         name,
-        unit: database
-            .unit_by_name(&u.unit_data_name)
-            .map(|d| d.name.clone())
-            .unwrap_or_default(),
+        unit: unit_data.map(|d| d.name.clone()).unwrap_or_default(),
         level,
         morale: u.morale,
         hp_cur,
@@ -1249,21 +1259,53 @@ fn draw_combatant_hud(
     hud: &CombatantHud,
     assets: &Assets,
 ) {
-    let fs = 28.0;
-    match assets.find_image(&hud.face) {
-        Some(img) => {
-            let _ = ctx.draw_image_with_html_image_element_and_dw_and_dh(img, x, top, fs, fs);
+    let fs = 30.0;
+    let face_img = if hud.face.is_empty() {
+        None
+    } else {
+        assets.find_image(&hud.face)
+    };
+    let sprite_img = if hud.sprite.is_empty() {
+        None
+    } else {
+        assets.find_image(&hud.sprite)
+    };
+
+    // オリジナル戦闘窓は「パイロット顔グラ + 機体スプライト」の 2 アイコンを
+    // 横に並べる。顔グラが無い (敵ユニット等) 場合は機体スプライトのみを左詰め。
+    let draw_icon = |img: &web_sys::HtmlImageElement, ix: f64| {
+        let _ = ctx.draw_image_with_html_image_element_and_dw_and_dh(img, ix, top, fs, fs);
+        ctx.set_stroke_style_str("#404040");
+        ctx.set_line_width(1.0);
+        ctx.stroke_rect(ix + 0.5, top + 0.5, fs, fs);
+    };
+    let mut ix = x;
+    match (face_img, sprite_img) {
+        (Some(f), Some(s)) => {
+            draw_icon(f, ix);
+            ix += fs + 2.0;
+            draw_icon(s, ix);
+            ix += fs + 2.0;
         }
-        None => {
+        (Some(f), None) => {
+            draw_icon(f, ix);
+            ix += fs + 2.0;
+        }
+        (None, Some(s)) => {
+            draw_icon(s, ix);
+            ix += fs + 2.0;
+        }
+        (None, None) => {
             ctx.set_fill_style_str("#9aa0a8");
-            ctx.fill_rect(x, top, fs, fs);
+            ctx.fill_rect(ix, top, fs, fs);
+            ctx.set_stroke_style_str("#404040");
+            ctx.set_line_width(1.0);
+            ctx.stroke_rect(ix + 0.5, top + 0.5, fs, fs);
+            ix += fs + 2.0;
         }
     }
-    ctx.set_stroke_style_str("#404040");
-    ctx.set_line_width(1.0);
-    ctx.stroke_rect(x + 0.5, top + 0.5, fs, fs);
 
-    let tx = x + fs + 6.0;
+    let tx = ix + 4.0;
     let bw = (x + block_w) - tx;
     ctx.set_fill_style_str("#000080");
     ctx.set_font(&format!("bold 10px {JP_SANS}"));
