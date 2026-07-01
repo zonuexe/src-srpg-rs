@@ -2226,7 +2226,7 @@ impl App {
         // 回復系特殊能力 (`回復系特殊能力.md`): 当該陣営フェイズ開始時に、
         // ＨＰ回復Lv*/ＥＮ回復Lv* は実効最大値の 10×Lv% を回復、ＨＰ消費Lv*/ＥＮ消費Lv*
         // は同率を減少させる (ＨＰ は最低 1 / ＥＮ は最低 0)。
-        // ※ 霊力回復は本実装では別途 (未対応)。基礎 EN 回復 (毎ターン 5) は上のブロックで実施済み。
+        // ※ 基礎 EN 回復 (毎ターン 5) は上のブロックで、霊力 (プラーナ) 回復は下のブロックで実施。
         for i in 0..self.database.unit_instances.len() {
             if self.database.unit_instances[i].party != party {
                 continue;
@@ -2266,6 +2266,28 @@ impl App {
                 let drn = eff_max_en * (10 * lv) / 100;
                 u.en_consumed = (u.en_consumed + drn).min(eff_max_en);
             }
+        }
+        // 霊力 (プラーナ) 自然回復 (VB6 `Unit.cls:27374`): 主パイロットが霊力を持つ
+        // (MaxPlana>0) ユニットは、フェイズ開始時に
+        // `plana += MaxPlana/16 + MaxPlana*霊力回復Lv/10 - MaxPlana*霊力消費Lv/10`
+        // し、[0, MaxPlana] にクランプする。HP/EN と異なり `回復不能` でも回復する
+        // (VB6 では回復不能ガードの外に置かれている)。
+        for i in 0..self.database.unit_instances.len() {
+            if self.database.unit_instances[i].party != party {
+                continue;
+            }
+            let inst = &self.database.unit_instances[i];
+            let max_plana = self.database.effective_max_plana(inst);
+            if max_plana <= 0 {
+                continue;
+            }
+            let heal =
+                crate::feature::feature_level(&inst.active_features, "霊力回復").unwrap_or(0);
+            let drain =
+                crate::feature::feature_level(&inst.active_features, "霊力消費").unwrap_or(0);
+            let rec = max_plana / 16 + max_plana * heal / 10 - max_plana * drain / 10;
+            let u = &mut self.database.unit_instances[i];
+            u.plana = (u.plana + rec).clamp(0, max_plana);
         }
         // 母艦格納中ユニットの毎ターン回復 (回復系特殊能力.md 母艦): HP/EN を実効最大値の
         // 50% 回復、弾薬・アビリティ使用回数を全快。当該陣営フェイズ開始時。
@@ -13191,6 +13213,192 @@ mod tests {
         assert_eq!(
             u.en_consumed, 20,
             "回復不能により基礎EN自然回復も阻害される (据え置き)"
+        );
+    }
+
+    /// `霊力`/`霊力成長` 技能を持つパイロットデータを DB へ追加し、それを主パイロットに
+    /// 持つプレイヤーユニットを配置する。`push_pilot_with_features` でパイロット静的
+    /// データ (`霊力Lv<n>` 等) を登録した上で `create_pilot_instance` して
+    /// `PilotInstance.level` を設定し、`main_pilot_name()` (= `pilot_name` フォールバック)
+    /// と `PilotInstance.id` を一致させて `effective_max_plana` の実解決経路に乗せる。
+    /// 返り値は配置したユニットの uid。
+    fn place_player_unit_with_plana_pilot(
+        app: &mut App,
+        unit_name: &str,
+        pilot_name: &str,
+        pilot_features: Vec<(String, String)>,
+        pilot_level: i32,
+        x: u32,
+        y: u32,
+    ) -> String {
+        place_player_unit(app, unit_name, x, y); // UnitData 用途 (features は空で登録済み)
+        push_pilot_with_features(app, pilot_name, pilot_features);
+        let uid = app.database_mut().register_unit(crate::UnitInstance::new(
+            unit_name,
+            pilot_name,
+            crate::Party::Player,
+            x + 1,
+            y,
+        ));
+        app.database_mut()
+            .create_pilot_instance(pilot_name, pilot_name);
+        app.database_mut()
+            .pilot_instance_by_id_mut(pilot_name)
+            .unwrap()
+            .level = pilot_level;
+        uid
+    }
+
+    /// `effective_max_plana`: 霊力Lv20・パイロットLv10・霊力成長なし →
+    /// `20 + round_ties_even(1.5*10) = 20 + 15 = 35`。VB6 `Pilot.cls:1423`。
+    #[test]
+    fn effective_max_plana_basic_formula() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        let uid = place_player_unit_with_plana_pilot(
+            &mut app,
+            "Reiryoku",
+            "REI",
+            vec![("霊力Lv20".into(), "1".into())],
+            10,
+            2,
+            6,
+        );
+        let inst = app.database().unit_by_uid(&uid).unwrap().clone();
+        assert_eq!(
+            app.database().effective_max_plana(&inst),
+            35,
+            "20 + round_ties_even(1.5*10) = 20 + 15 = 35"
+        );
+    }
+
+    /// `霊力` 技能を持たないパイロットは MaxPlana = 0 (プラーナ非搭載)。
+    #[test]
+    fn effective_max_plana_zero_without_reiryoku_skill() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        let uid = place_player_unit_with_plana_pilot(
+            &mut app,
+            "NoReiryoku",
+            "PLAIN2",
+            Vec::new(),
+            50,
+            2,
+            6,
+        );
+        let inst = app.database().unit_by_uid(&uid).unwrap().clone();
+        assert_eq!(
+            app.database().effective_max_plana(&inst),
+            0,
+            "霊力技能なしは MaxPlana=0"
+        );
+    }
+
+    /// `効果Lv23` 実際の `霊力成長` 込み: `霊力Lv20` / `霊力成長Lv5` / パイロットLv10 →
+    /// `20 + round_ties_even(1.5*10*(10+5)/10) = 20 + round_ties_even(22.5) = 20 + 22 = 42`
+    /// (`round_ties_even(22.5)` は最近接偶数の 22)。VB6 `Pilot.cls:1451-1454`。
+    #[test]
+    fn effective_max_plana_growth_skill_formula() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        let uid = place_player_unit_with_plana_pilot(
+            &mut app,
+            "ReiryokuGrowth",
+            "REIG",
+            vec![
+                ("霊力Lv20".into(), "1".into()),
+                ("霊力成長Lv5".into(), "1".into()),
+            ],
+            10,
+            2,
+            6,
+        );
+        let inst = app.database().unit_by_uid(&uid).unwrap().clone();
+        assert_eq!(
+            app.database().effective_max_plana(&inst),
+            42,
+            "20 + round_ties_even(1.5*10*(10+5)/10) = 20 + round_ties_even(22.5) = 20 + 22 = 42"
+        );
+    }
+
+    /// 霊力 (プラーナ) 自然回復: MaxPlana=35 (霊力Lv20・パイロットLv10) のユニットは
+    /// 味方フェイズ開始時に `plana += 35/16 = 2` (霊力回復/霊力消費 特殊能力なし)。
+    /// VB6 `Unit.cls:27374`。
+    #[test]
+    fn plana_regen_applies_at_player_phase_start() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        let uid = place_player_unit_with_plana_pilot(
+            &mut app,
+            "PlanaRegen",
+            "REIP",
+            vec![("霊力Lv20".into(), "1".into())],
+            10,
+            2,
+            6,
+        );
+        // 勝敗即決回避の敵 (遠方)。
+        app.database_mut().register_unit(crate::UnitInstance::new(
+            "PlanaRegen",
+            "PILOT",
+            crate::Party::Enemy,
+            12,
+            12,
+        ));
+        app.set_stage_state(crate::stage::StageState::Battle);
+        {
+            let u = app.database_mut().unit_by_uid_mut(&uid).unwrap();
+            u.plana = 0;
+        }
+        // 1 周回って味方フェイズ T2 開始 → 霊力回復適用。
+        app.handle_input(Input::EndPhase);
+        assert_eq!(app.turn().phase, crate::Phase::Player);
+        let u = app.database().unit_by_uid(&uid).unwrap();
+        assert_eq!(u.plana, 2, "MaxPlana=35 のとき 35/16 == 2");
+    }
+
+    /// 霊力 (プラーナ) 自然回復は HP/EN と異なり `回復不能` (特殊効果攻撃属性 害) でも
+    /// 阻害されない (VB6 では回復不能ガードの外)。同一ユニットで HP/EN 自然回復は
+    /// 阻害されることも併せて確認する。
+    #[test]
+    fn plana_regen_not_gated_by_no_regen_condition() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        let uid = place_player_unit_with_plana_pilot(
+            &mut app,
+            "PlanaNoRegenGate",
+            "REIN",
+            vec![("霊力Lv20".into(), "1".into())],
+            10,
+            2,
+            6,
+        );
+        // 勝敗即決回避の敵 (遠方)。
+        app.database_mut().register_unit(crate::UnitInstance::new(
+            "PlanaNoRegenGate",
+            "PILOT",
+            crate::Party::Enemy,
+            12,
+            12,
+        ));
+        app.set_stage_state(crate::stage::StageState::Battle);
+        {
+            let u = app.database_mut().unit_by_uid_mut(&uid).unwrap();
+            u.plana = 0;
+            u.en_consumed = 20; // 最大EN=50
+            u.add_condition(crate::Condition::new("回復不能", -1));
+        }
+        // 1 周回って味方フェイズ T2 開始。
+        app.handle_input(Input::EndPhase);
+        assert_eq!(app.turn().phase, crate::Phase::Player);
+        let u = app.database().unit_by_uid(&uid).unwrap();
+        assert_eq!(
+            u.plana, 2,
+            "回復不能でも霊力回復 (35/16 == 2) は阻害されない"
+        );
+        assert_eq!(
+            u.en_consumed, 20,
+            "対照: 回復不能により基礎EN自然回復は阻害される (据え置き)"
         );
     }
 

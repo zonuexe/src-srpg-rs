@@ -11396,7 +11396,7 @@ fn format_with_pattern(v: f64, fmt: &str) -> String {
 /// 銀行丸め (round half to even)。`f64::round_ties_even` 相当だが、
 /// MSRV 1.75 では未安定 (1.77 安定) のため手動実装する。
 /// 半端ちょうど (小数部 0.5) のときのみ偶数側へ丸め、それ以外は最近接。
-fn round_half_to_even(x: f64) -> f64 {
+pub(crate) fn round_half_to_even(x: f64) -> f64 {
     let floor = x.floor();
     let diff = x - floor;
     if diff < 0.5 {

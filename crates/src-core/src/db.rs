@@ -652,6 +652,39 @@ impl GameDatabase {
         with_items + u.upgrade_level * UPGRADE_EN_PER_LEVEL
     }
 
+    /// 主パイロットの実効最大霊力 (プラーナ)。VB6 原典 `Pilot.cls:1423` 準拠。
+    /// 主パイロットの `PilotInstance` が無い、または `霊力` 技能を持たない場合は 0
+    /// (プラーナを持たない)。あれば `霊力Lv + 成長分` で、成長分は
+    ///
+    /// - `霊力成長` 技能あり: `(1.5 * lv * (10 + 霊力成長Lv)) \ 10`
+    /// - なし: `1.5 * lv`
+    ///
+    /// (`lv = min(level, 100)`、`\` は VB6 の整数除算で float→Long 変換は銀行家丸め
+    /// = 最近接偶数丸め)。※ VB6 の「追加パイロットは第1パイロットの MaxPlana を
+    /// 使う」分岐は簡略化のため未対応 (主パイロットのみ)。
+    pub fn effective_max_plana(&self, u: &UnitInstance) -> i32 {
+        let Some(pi) = self.pilot_instance_by_id(u.main_pilot_name()) else {
+            return 0;
+        };
+        let Some(pd) = self.pilot_by_name(&pi.pilot_data_name) else {
+            return 0;
+        };
+        let reiryoku = pilot_static_skill_level(&pd.features, "霊力");
+        if reiryoku <= 0 {
+            return 0;
+        }
+        let lv = pi.level.min(100);
+        let seichou = pilot_static_skill_level(&pd.features, "霊力成長");
+        let growth: i64 = if seichou > 0 {
+            crate::event_runtime::round_half_to_even(1.5 * f64::from(lv) * f64::from(10 + seichou))
+                as i64
+                / 10
+        } else {
+            crate::event_runtime::round_half_to_even(1.5 * f64::from(lv)) as i64
+        };
+        reiryoku + growth as i32
+    }
+
     /// 装備込みの装甲。
     pub fn effective_armor(&self, u: &UnitInstance) -> i64 {
         let base = self
@@ -879,6 +912,34 @@ impl GameDatabase {
         unit.armor = (unit.armor + b.armor).max(0);
         Some((pilot, unit))
     }
+}
+
+/// パイロット静的 `features` (Vec<(名前, 値)>) から `<base>` / `<base>Lv<n>` 技能の
+/// レベルを読む。`feature::feature_level` と同じ部分一致規約 (`base` 直後が空か `Lv`
+/// のみ受理) なので、`"霊力"` を探すとき `"霊力成長"` / `"霊力回復"` / `"霊力消費"` を
+/// 誤マッチしない (直後が `"成長"` 等の漢字で `Lv` 始まりでないため除外)。無ければ 0。
+fn pilot_static_skill_level(features: &[(String, String)], base: &str) -> i32 {
+    features
+        .iter()
+        .find_map(|(name, _)| {
+            let rest = name.trim().strip_prefix(base)?;
+            if rest.is_empty() {
+                return Some(1);
+            }
+            let after = rest
+                .strip_prefix("Lv")
+                .or_else(|| rest.strip_prefix("LV"))
+                .or_else(|| rest.strip_prefix("lv"))
+                .or_else(|| rest.strip_prefix("Ｌｖ"))
+                .or_else(|| rest.strip_prefix("ＬＶ"))?;
+            let digits: String = after.chars().take_while(char::is_ascii_digit).collect();
+            if digits.is_empty() {
+                None
+            } else {
+                digits.parse().ok()
+            }
+        })
+        .unwrap_or(0)
 }
 
 /// ボスランク (1〜5) による HP 補正 `(分子, 分母=2, 加算)`。`BossRankコマンド.md` の
