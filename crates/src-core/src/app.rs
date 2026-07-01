@@ -2205,10 +2205,28 @@ impl App {
                 }
             }
         }
+        // 基礎 EN 自然回復 (VB6 `Unit.cls:28182`「ＥＮは毎ターン5回復」): 当該陣営の
+        // 全ユニットは、特殊能力 ＥＮ回復 の有無に関わらずフェイズ開始時に EN +5 される
+        // (MaxEN 超過分は en_consumed の `.max(0)` クランプで自動的に切り捨てられる)。
+        // `回復不能` (特殊効果攻撃属性 害) のユニットは対象外。VB6 の
+        // `ＥＮ自然回復無効` オプションや `IsSpecialPowerInEffect("回復不能")` 判定、
+        // 味方最初のターンのスキップは本実装では対象外 (下の特殊能力回復と同様に
+        // `回復不能` condition のみを見る)。霊力回復は本実装では別途 (未対応)。
+        for i in 0..self.database.unit_instances.len() {
+            if self.database.unit_instances[i].party != party {
+                continue;
+            }
+            let inst = &self.database.unit_instances[i];
+            if inst.has_condition("回復不能") {
+                continue;
+            }
+            self.database.unit_instances[i].en_consumed =
+                (self.database.unit_instances[i].en_consumed - 5).max(0);
+        }
         // 回復系特殊能力 (`回復系特殊能力.md`): 当該陣営フェイズ開始時に、
         // ＨＰ回復Lv*/ＥＮ回復Lv* は実効最大値の 10×Lv% を回復、ＨＰ消費Lv*/ＥＮ消費Lv*
         // は同率を減少させる (ＨＰ は最低 1 / ＥＮ は最低 0)。
-        // ※ 通常の基礎 EN 回復 (毎ターン 5) と霊力回復は本実装では別途 (未対応)。
+        // ※ 霊力回復は本実装では別途 (未対応)。基礎 EN 回復 (毎ターン 5) は上のブロックで実施済み。
         for i in 0..self.database.unit_instances.len() {
             if self.database.unit_instances[i].party != party {
                 continue;
@@ -13106,7 +13124,74 @@ mod tests {
         assert_eq!(app.turn().phase, crate::Phase::Player);
         let u = app.database().unit_by_uid(&uid).unwrap();
         assert_eq!(u.damage, 30, "ＨＰ回復Lv2 = 最大HP 20% (20) 回復");
-        assert_eq!(u.en_consumed, 10, "ＥＮ回復Lv2 = 最大EN 20% (10) 回復");
+        assert_eq!(
+            u.en_consumed, 5,
+            "ＥＮ回復Lv2 = 最大EN 20% (10) 回復 + 基礎EN自然回復 (5) = 15 回復 (20 -> 5)"
+        );
+    }
+
+    /// 基礎 EN 自然回復 (VB6 `Unit.cls:28182`「ＥＮは毎ターン5回復」): 回復系特殊能力を
+    /// 持たないユニットでもフェイズ開始時に EN +5 される。
+    #[test]
+    fn base_en_regen_applies_without_any_recovery_feature() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Regenner", 2, 6);
+        // 勝敗即決回避の敵 (遠方)。
+        app.database_mut().register_unit(crate::UnitInstance::new(
+            "Regenner",
+            "PILOT",
+            crate::Party::Enemy,
+            12,
+            12,
+        ));
+        app.set_stage_state(crate::stage::StageState::Battle);
+        let uid = first_player_uid(&app);
+        {
+            let u = app.database_mut().unit_by_uid_mut(&uid).unwrap();
+            u.active_features = vec![];
+            u.en_consumed = 20; // 最大EN=50
+        }
+        // 1 周回って味方フェイズ T2 開始 → 基礎EN自然回復 (+5) のみ適用。
+        app.handle_input(Input::EndPhase);
+        assert_eq!(app.turn().phase, crate::Phase::Player);
+        let u = app.database().unit_by_uid(&uid).unwrap();
+        assert_eq!(
+            u.en_consumed, 15,
+            "回復系特殊能力が無くても基礎EN自然回復 (+5) は適用される (20 -> 15)"
+        );
+    }
+
+    /// 基礎 EN 自然回復は `回復不能` (特殊効果攻撃属性 害) を持つユニットには適用されない。
+    #[test]
+    fn base_en_regen_skipped_for_no_regen_condition() {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Regenner", 2, 6);
+        // 勝敗即決回避の敵 (遠方)。
+        app.database_mut().register_unit(crate::UnitInstance::new(
+            "Regenner",
+            "PILOT",
+            crate::Party::Enemy,
+            12,
+            12,
+        ));
+        app.set_stage_state(crate::stage::StageState::Battle);
+        let uid = first_player_uid(&app);
+        {
+            let u = app.database_mut().unit_by_uid_mut(&uid).unwrap();
+            u.active_features = vec![];
+            u.en_consumed = 20; // 最大EN=50
+            u.add_condition(crate::Condition::new("回復不能", -1));
+        }
+        // 1 周回って味方フェイズ T2 開始 → 回復不能により基礎EN自然回復も阻害される。
+        app.handle_input(Input::EndPhase);
+        assert_eq!(app.turn().phase, crate::Phase::Player);
+        let u = app.database().unit_by_uid(&uid).unwrap();
+        assert_eq!(
+            u.en_consumed, 20,
+            "回復不能により基礎EN自然回復も阻害される (据え置き)"
+        );
     }
 
     /// `Disable unit ＨＰ回復` / `Enable unit ＨＰ回復` (レベル無し基底名) が実体
@@ -13939,7 +14024,10 @@ mod tests {
         app.handle_input(Input::EndPhase);
         let f = app.database().unit_by_uid(&fighter).unwrap();
         assert_eq!(f.damage, 10, "HP 50% (50) 回復で damage 60→10");
-        assert_eq!(f.en_consumed, 15, "EN 50% (25) 回復で en_consumed 40→15");
+        assert_eq!(
+            f.en_consumed, 10,
+            "基礎EN自然回復 (+5, 40→35) の後さらに母艦格納 EN 50% (最大EN50の50%=25) 回復で 35→10"
+        );
     }
 
     /// 合体テスト用: host + 2マス以内の合体相手を置き、合体形態 UnitData を用意する。
