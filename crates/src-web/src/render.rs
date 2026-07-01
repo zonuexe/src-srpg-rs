@@ -1250,7 +1250,10 @@ fn draw_combat_bar(
     ctx.stroke_rect(x + 0.5, by + 0.5, w - 1.0, bh - 1.0);
 }
 
-/// 戦闘窓ヘッダの 1 機分 (顔 + Lv/気力 + HP/EN バー) を描く。
+/// 戦闘窓ヘッダの 1 機分を描く。オリジナル SRC の並びに合わせて
+/// `[パイロット顔] [Lv / 気力] [機体スプライト] [HP / EN 数値+バー]` の順に配置する。
+/// 画像 (顔・機体) が無いスロットは灰塗りせず薄枠のみ (原典では敵の「怪」等も画像で、
+/// 素材未配置時に文字代替はしない方針)。
 fn draw_combatant_hud(
     ctx: &CanvasRenderingContext2d,
     x: f64,
@@ -1259,7 +1262,8 @@ fn draw_combatant_hud(
     hud: &CombatantHud,
     assets: &Assets,
 ) {
-    let fs = 30.0;
+    let fs = 32.0;
+    let gap = 5.0;
     let face_img = if hud.face.is_empty() {
         None
     } else {
@@ -1271,49 +1275,40 @@ fn draw_combatant_hud(
         assets.find_image(&hud.sprite)
     };
 
-    // オリジナル戦闘窓は「パイロット顔グラ + 機体スプライト」の 2 アイコンを
-    // 横に並べる。顔グラが無い (敵ユニット等) 場合は機体スプライトのみを左詰め。
-    let draw_icon = |img: &web_sys::HtmlImageElement, ix: f64| {
-        let _ = ctx.draw_image_with_html_image_element_and_dw_and_dh(img, ix, top, fs, fs);
-        ctx.set_stroke_style_str("#404040");
+    // 画像スロット (画像があれば描画、無ければ薄い空枠のみ)。
+    let draw_slot = |img: Option<&web_sys::HtmlImageElement>, ix: f64| {
+        if let Some(im) = img {
+            let _ = ctx.draw_image_with_html_image_element_and_dw_and_dh(im, ix, top, fs, fs);
+            ctx.set_stroke_style_str("#404040");
+        } else {
+            ctx.set_stroke_style_str("#b9b6a3");
+        }
         ctx.set_line_width(1.0);
         ctx.stroke_rect(ix + 0.5, top + 0.5, fs, fs);
     };
-    let mut ix = x;
-    match (face_img, sprite_img) {
-        (Some(f), Some(s)) => {
-            draw_icon(f, ix);
-            ix += fs + 2.0;
-            draw_icon(s, ix);
-            ix += fs + 2.0;
-        }
-        (Some(f), None) => {
-            draw_icon(f, ix);
-            ix += fs + 2.0;
-        }
-        (None, Some(s)) => {
-            draw_icon(s, ix);
-            ix += fs + 2.0;
-        }
-        (None, None) => {
-            ctx.set_fill_style_str("#9aa0a8");
-            ctx.fill_rect(ix, top, fs, fs);
-            ctx.set_stroke_style_str("#404040");
-            ctx.set_line_width(1.0);
-            ctx.stroke_rect(ix + 0.5, top + 0.5, fs, fs);
-            ix += fs + 2.0;
-        }
-    }
 
-    let tx = ix + 4.0;
-    let bw = (x + block_w) - tx;
+    // 1) パイロット顔。
+    draw_slot(face_img, x);
+
+    // 2) Lv / 気力 (2 行)。
+    let lv_x = x + fs + gap;
+    let lv_w = 32.0;
     ctx.set_fill_style_str("#000080");
-    ctx.set_font(&format!("bold 10px {JP_SANS}"));
+    ctx.set_font(&format!("bold 11px {JP_SANS}"));
     ctx.set_text_align("left");
     ctx.set_text_baseline("top");
-    let _ = ctx.fill_text(&format!("Lv{} M{}", hud.level, hud.morale), tx, top);
-    draw_combat_bar(ctx, tx, top + 12.0, bw, "ＨＰ", hud.hp_cur, hud.hp_max);
-    draw_combat_bar(ctx, tx, top + 30.0, bw, "ＥＮ", hud.en_cur, hud.en_max);
+    let _ = ctx.fill_text(&format!("Lv{}", hud.level), lv_x, top + 3.0);
+    let _ = ctx.fill_text(&format!("M{}", hud.morale), lv_x, top + 18.0);
+
+    // 3) 機体スプライト。
+    let sp_x = lv_x + lv_w;
+    draw_slot(sprite_img, sp_x);
+
+    // 4) HP / EN (数値 + 緑バー) を 2 行。
+    let bx = sp_x + fs + gap;
+    let bw = (x + block_w) - bx;
+    draw_combat_bar(ctx, bx, top + 2.0, bw, "ＨＰ", hud.hp_cur, hud.hp_max);
+    draw_combat_bar(ctx, bx, top + 20.0, bw, "ＥＮ", hud.en_cur, hud.en_max);
 }
 
 /// 戦闘演出中に重ねる「メッセージ」ウィンドウ (オリジナル SRC 戦闘窓風)。
