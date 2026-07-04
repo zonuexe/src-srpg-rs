@@ -7310,7 +7310,7 @@ impl App {
     /// 防御特性による装甲調整を予測前に `def_unit.armor` へ適用する (VB6 `Unit.cls:6949-6951`)。
     /// 弱点 → 装甲半減 (被ダメージ増) / 吸収 (かつ非有効) → 装甲無視 (arm=0)。弱点 > 吸収 の優先。
     /// 通常攻撃 / 援護 / 反撃の全経路で一貫適用するための共有ヘルパ。
-    fn apply_defense_armor_mod(
+    pub(crate) fn apply_defense_armor_mod(
         &self,
         def_idx: usize,
         weapon_class: &str,
@@ -7354,7 +7354,12 @@ impl App {
     /// (`有効` は防御特性を打ち消すため、`弱点`/`有効` 一致時は吸収/無効化/耐性を適用しない)。
     /// 対象が該当特性を持たなければ `damage` をそのまま返す。
     /// 注: 吸収は spec では「装甲無視ダメージ÷2」だが、本実装は最終ダメージ基準の近似 (要精緻化)。
-    fn defense_attribute_damage(&self, def_idx: usize, weapon_class: &str, damage: i64) -> i64 {
+    pub(crate) fn defense_attribute_damage(
+        &self,
+        def_idx: usize,
+        weapon_class: &str,
+        damage: i64,
+    ) -> i64 {
         let inst = &self.database.unit_instances[def_idx];
         let m = |name: &str| -> bool {
             let list = crate::feature::feature_value(&inst.active_features, name).unwrap_or("");
@@ -20867,6 +20872,79 @@ End
             ],
         );
         assert_eq!(app.defense_attribute_damage(idx, "火 実", 100), 100);
+    }
+
+    /// マップ攻撃も通常戦闘と同じく防御特性 (無効化/耐性/吸収) を反映する
+    /// (`event_runtime::map_attack`)。火属性マップ攻撃に対し 無効化=火 の敵は 0 ダメージで
+    /// 生存し、特性なしの敵は被弾する (以前はマップ攻撃だけ防御特性が抜けていた)。
+    #[test]
+    fn mapattack_applies_defense_attributes() {
+        use crate::feature::ActiveFeature;
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Attacker", 5, 5);
+        // 攻撃側に火属性の高威力武器を付与。
+        {
+            let ud = app
+                .database_mut()
+                .units
+                .iter_mut()
+                .find(|d| d.name == "Attacker")
+                .unwrap();
+            ud.weapons.push(crate::data::unit::WeaponData {
+                name: "FireCannon".into(),
+                power: 8000,
+                min_range: 1,
+                max_range: 3,
+                precision: 0,
+                bullet: -1,
+                en_consumption: 0,
+                necessary_morale: 0,
+                adaption: "AAAA".into(),
+                critical: 0,
+                class: "火".into(),
+                extras: Vec::new(),
+            });
+        }
+        // 無効化=火 の敵 (生存するはず) と 特性なしの敵 (被弾するはず) を area 内に配置。
+        let nullify_uid = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Attacker",
+            "PILOT",
+            crate::Party::Enemy,
+            6,
+            5,
+        ));
+        app.database_mut()
+            .unit_by_uid_mut(&nullify_uid)
+            .unwrap()
+            .active_features = vec![ActiveFeature::new("無効化", "火")];
+        let plain_uid = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Attacker",
+            "PILOT",
+            crate::Party::Enemy,
+            6,
+            4,
+        ));
+        // スクリプト経路 (is_event=true) でマップ攻撃を実行。
+        crate::event_runtime::map_attack(&mut app, None, "FireCannon", 6, 5, true);
+        // 無効化=火 の敵は 0 ダメージで生存。
+        let nullified = app.database().unit_by_uid(&nullify_uid);
+        assert!(
+            nullified.is_some(),
+            "無効化=火 の敵はマップ火属性攻撃で撃破されない"
+        );
+        assert_eq!(
+            nullified.unwrap().damage,
+            0,
+            "無効化=火 でマップ火属性攻撃は 0 ダメージ"
+        );
+        // 対照: 特性なしの敵は被弾する (撃破で除去 or ダメージ > 0)。
+        let plain_hit = app
+            .database()
+            .unit_by_uid(&plain_uid)
+            .map(|u| u.damage > 0)
+            .unwrap_or(true);
+        assert!(plain_hit, "特性なしの敵はマップ攻撃で被弾する (対照)");
     }
 
     /// 防御特性の属性照合は字単位の**部分一致** (VB6 `InStrNotNest`)。無空白複合 class

@@ -13532,9 +13532,12 @@ pub(crate) fn map_attack(
     let mut kills = 0usize;
     for &def_idx in targets.iter().rev() {
         let def_inst = app.database().unit_instances[def_idx].clone();
-        let Some((def_pilot, def_unit)) = app.database().effective_combat_data(def_idx) else {
+        let Some((def_pilot, mut def_unit)) = app.database().effective_combat_data(def_idx) else {
             continue;
         };
+        // 防御特性による装甲調整 (弱点→半減 / 吸収→無視)。通常戦闘と一貫させ、
+        // マップ攻撃でも VB6 `Unit.cls:6949-6951` の防御特性を反映する。
+        app.apply_defense_armor_mod(def_idx, &weapon.class, &mut def_unit);
         // マップ未設定時は terrain_id=0 (平地) として進める。
         let terrain_id = app
             .database()
@@ -13559,10 +13562,14 @@ pub(crate) fn map_attack(
             &atk_statuses,
             &def_statuses,
         );
-        // マップ攻撃は必中扱いに近い (ダメージのみ)
+        // 防御特性 (耐性÷2 / 無効化0 / 吸収=回復) を最終ダメージへ適用する
+        // (弱点の装甲半減は上の apply_defense_armor_mod で予測前に適用済み)。
+        let dmg = app.defense_attribute_damage(def_idx, &weapon.class, preview.damage);
+        // マップ攻撃は必中扱いに近い (ダメージのみ)。吸収 (dmg<0) は回復だが
+        // damage は 0 未満にしない (最大HP超過回復の抑止)。
         let old_dmg = app.database().unit_instances[def_idx].damage;
-        app.database_mut().unit_instances[def_idx].damage += preview.damage;
-        let new_dmg = app.database().unit_instances[def_idx].damage;
+        let new_dmg = (old_dmg + dmg).max(0);
+        app.database_mut().unit_instances[def_idx].damage = new_dmg;
         let remaining = def_unit.hp - new_dmg;
         if remaining <= 0 {
             // 精神コマンド「復活」: HP0 でも HP 全快で立ち上がる (1 回で消費)。通常戦闘と
