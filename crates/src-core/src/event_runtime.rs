@@ -2981,7 +2981,7 @@ fn exec_command_pc(
                 return Err(err(line, "ChangeParty 命令は 2 引数必要 (unit party)。"));
             }
             let target = xargs[0].clone();
-            let party = parse_party(&xargs[1], line)?;
+            let party = parse_party(app, &xargs[1], line)?;
             if let Some(u) = app
                 .database_mut()
                 .unit_instances
@@ -5954,7 +5954,7 @@ fn exec_command_pc(
                     "Create 命令は 7 引数必要 (party unit rank pilot level x y)。",
                 ));
             }
-            let party = parse_party(&xargs[0], line)?;
+            let party = parse_party(app, &xargs[0], line)?;
             let unit_data_name = fn_arg_value(app, &xargs[1]);
             // rank = xargs[2] = 改造段階。SRC `UList.Add(uname, urank, uparty)` は
             // `Unit.Rank=urank` で 1 段ごとに HP+200/装甲+100/EN+10/運動性+5 を加える
@@ -6591,7 +6591,7 @@ fn exec_command_pc(
                 return Err(err(line, "Place 命令は 5 引数必要。"));
             }
             let unit_data_name = xargs[0].clone();
-            let party = parse_party(&xargs[2], line)?;
+            let party = parse_party(app, &xargs[2], line)?;
             // 座標は式評価 (ループ変数/算術式対応)。
             let x = eval_coord_u32(app, &xargs, 3);
             let y = eval_coord_u32(app, &xargs, 4);
@@ -13675,15 +13675,29 @@ pub(crate) fn sp_cost_for(name: &str) -> i32 {
     }
 }
 
-fn parse_party(s: &str, line: usize) -> Result<Party, ScriptError> {
-    match s {
+/// 陣営名引数を `Party` に解決する。
+///
+/// 原典 SRC はコマンド引数を項として評価する
+/// (`CmdData.GetArgAsString` → `Expression.GetValueAsString(arg, is_term: true)`)。
+/// このため陣営名にも変数を渡せる:
+///
+/// ```text
+/// Local ＲＧparty = Args(1)
+/// Create ＲＧparty ＲＧunit 0 ＲＧpilot ＲＧlevel ＲＧx ＲＧy
+/// ```
+///
+/// 未定義なら `fn_arg_value` が名前自身を返すので、`Create 味方 …` の
+/// ような定数指定は影響を受けない。
+fn parse_party(app: &App, s: &str, line: usize) -> Result<Party, ScriptError> {
+    let resolved = fn_arg_value(app, s);
+    match resolved.as_str() {
         "Player" | "味方" => Ok(Party::Player),
         // ＮＰＣ はコンピューター操作のプレイヤー側陣営。SRC 正準名は "ＮＰＣ"。
         // "友軍"/"Allied" は旧移植の後方互換エイリアス。
         "NPC" | "ＮＰＣ" | "Allied" | "友軍" => Ok(Party::Npc),
         "Enemy" | "敵" => Ok(Party::Enemy),
         "Neutral" | "中立" => Ok(Party::Neutral),
-        _ => Err(err(line, &format!("Party 値が不正: {s:?}"))),
+        _ => Err(err(line, &format!("Party 値が不正: {resolved:?}"))),
     }
 }
 
@@ -16204,6 +16218,36 @@ Set y 配列[2]
     // 値解決の集約点は `fn_arg_value`、LHS 解決の集約点は `resolve_lhs_name`。
     // この 2 つの不変条件を全文脈で固定する。
     // ───────────────────────────────────────────────────────────────────
+
+    /// 陣営名引数に変数を渡せる (原典は引数を `EvalTerm` で項評価する)。
+    /// ライブラリ .eve の `Local p = Args(1) / Create p …` 用法が該当。
+    #[test]
+    fn party_arg_resolves_variable() {
+        let src = "\
+Set 陣営 敵
+Create 陣営 ブレイバー 0 リオ 1 1 1
+Create 味方 ブレイバー 0 リオ 1 2 2
+";
+        let stmts = event::parse(src).unwrap();
+        let mut app = App::new();
+        execute(&mut app, &stmts).unwrap();
+        let parties: Vec<_> = app
+            .database()
+            .unit_instances
+            .iter()
+            .map(|u| u.party)
+            .collect();
+        assert_eq!(parties, vec![Party::Enemy, Party::Player]);
+    }
+
+    /// 未定義の陣営名はリテラル扱いのまま (回帰防止)。
+    #[test]
+    fn party_arg_unknown_still_errors() {
+        let stmts = event::parse("Create 謎陣営 ブレイバー 0 リオ 1 1 1\n").unwrap();
+        let mut app = App::new();
+        let e = execute(&mut app, &stmts).unwrap_err();
+        assert!(e.to_string().contains("Party"), "{e}");
+    }
 
     /// `fn_arg_value` の契約を直接固定する。
     /// - 未定義 indexed 参照 → 空文字 (リテラル `name[k]` を漏らさない)
