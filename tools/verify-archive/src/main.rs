@@ -327,7 +327,7 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
     }
 
     let analysis = entrypoint::analyze(entries);
-    if let Some(best) = analysis.best() {
+    if let Some(best) = analysis.best_runnable() {
         println!(
             "  → entry-point: {} (候補 {} 件, スコア降順)",
             best,
@@ -396,9 +396,9 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                     }
                 }
             }
-            found.or_else(|| analysis.best().map(String::from))
+            found.or_else(|| analysis.best_runnable().map(String::from))
         }
-        _ => analysis.best().map(String::from),
+        _ => analysis.best_runnable().map(String::from),
     };
     let entry_name = effective_entry.as_deref();
     let mut run_errors = 0;

@@ -49,9 +49,24 @@ pub struct Analysis {
 }
 
 impl Analysis {
-    /// 最有力のエントリーポイント名。
+    /// 最有力のエントリーポイント名。`.exe` / `.html` のランチャを返すことも
+    /// ある (スコアリング上はそれが「起動する物」だから)。
     pub fn best(&self) -> Option<&str> {
         self.candidates.first().map(|c| c.name.as_str())
+    }
+
+    /// 本エンジンが実際に実行できる最有力候補 (`.eve`)。
+    ///
+    /// 配布物には `GameStart.exe` / `index.html` のような、原典 SRC 本体を
+    /// 起動するためのランチャが同梱されていることがある。それらは
+    /// `best()` では最上位になるが本エンジンでは実行できないので、
+    /// 実行対象の決定にはこちらを使う。`.src` セーブデータから解決した
+    /// `.eve` は `analyze` が候補先頭に置くため、ここでも最優先になる。
+    pub fn best_runnable(&self) -> Option<&str> {
+        self.candidates
+            .iter()
+            .find(|c| c.kind == CandidateKind::Eve)
+            .map(|c| c.name.as_str())
     }
 }
 
@@ -548,6 +563,27 @@ mod tests {
         // Game.exe: ルート (+80) + .exe (+50) = 130。
         assert_eq!(a.best(), Some("Game.exe"));
         assert_eq!(a.candidates[0].score, 130);
+    }
+
+    /// ランチャ (`.exe` / `.html`) が最上位でも、実行対象は `.eve` を選ぶ。
+    #[test]
+    fn best_runnable_skips_launcher() {
+        let entries = vec![
+            entry("Game.exe", ""),
+            entry("index.html", ""),
+            entry("scenario.eve", ""),
+        ];
+        let a = analyze(&entries);
+        // ランチャ同士の順位は問わない (index.html が .exe を上回る)。
+        assert_ne!(a.best(), Some("scenario.eve"));
+        assert_eq!(a.best_runnable(), Some("scenario.eve"));
+    }
+
+    /// `.eve` が 1 本も無ければ `best_runnable` は None。
+    #[test]
+    fn best_runnable_none_without_eve() {
+        let entries = vec![entry("Game.exe", "")];
+        assert_eq!(analyze(&entries).best_runnable(), None);
     }
 
     #[test]

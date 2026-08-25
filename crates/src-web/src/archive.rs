@@ -312,7 +312,7 @@ pub fn load_into_app(
     // README 起動指示 / 開始系命名 / 階層位置 / `@識別子` を加味したスコア降順で
     // 並べ、同点はパス区切りの少ない = 浅い .eve を先頭へ寄せる。
     let analysis = entrypoint::analyze(&entries);
-    if let Some(best) = analysis.best() {
+    if let Some(best) = analysis.best_runnable() {
         log.push_str(&format!(
             "  → エントリーポイント検出: {best} (候補 {} 件)\n",
             analysis.candidates.len()
@@ -375,7 +375,7 @@ pub fn load_into_app(
     // 登録済みで十分。Continue チェインが必要なタイミングで実行される。
     // 全ファイルを一括実行すると多章シナリオの後続章・GameOver.eve が
     // ロード時に走り、ゲーム状態を破壊する。
-    let entry_name = analysis.best();
+    let entry_name = analysis.best_runnable();
     for (name, pc, len) in &eve_entries {
         if entry_name == Some(name.as_str()) {
             match event_runtime::run_from_pc(app, *pc) {
@@ -433,7 +433,7 @@ pub fn load_into_app(
     // ステージファイルとして登録し、原典 `StartScenario` 後半の
     // 「プロローグ完了 → `スタート` 発火 → 味方フェイズ」を flow 継続で
     // 駆動する (プロローグが対話で suspend 中なら完了時に自動進行)。
-    if let Some(best) = analysis.best() {
+    if let Some(best) = analysis.best_runnable() {
         app.bootstrap_stage_after_load(best);
         log.push_str(&format!("  → ステージブートストラップ: {best}\n"));
     }
