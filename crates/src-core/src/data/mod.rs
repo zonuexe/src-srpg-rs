@@ -17,6 +17,7 @@ pub mod item;
 pub mod loader;
 pub mod map;
 pub mod pilot;
+pub mod save_src;
 pub mod special_power;
 pub mod terrain;
 pub mod terrain_file;

@@ -42,6 +42,10 @@ pub struct Analysis {
     pub data_only: bool,
     /// スコア降順 (同点はアーカイブ登録順) の候補一覧。
     pub candidates: Vec<Candidate>,
+    /// 最有力候補が `.src` セーブデータで、その `次ステージ` /
+    /// `ScenarioFileName` から実際の開始 `.eve` を解決できた場合、その
+    /// `.src` のアーカイブ内パス。`best()` は解決後の `.eve` を返す。
+    pub resolved_from_save: Option<String>,
 }
 
 impl Analysis {
@@ -129,10 +133,97 @@ pub fn analyze(entries: &[(String, Vec<u8>)]) -> Analysis {
             .then_with(|| depth_of(&a.name).cmp(&depth_of(&b.name)))
     });
 
-    Analysis {
+    let mut analysis = Analysis {
         data_only,
         candidates,
+        resolved_from_save: None,
+    };
+    resolve_save_entry(&mut analysis, entries);
+    analysis
+}
+
+/// 最有力候補が `.src` セーブデータなら、その中の開始 `.eve`
+/// (`次ステージ` / `ScenarioFileName`) を解決して候補の先頭に差し込む。
+///
+/// 配布シナリオには「ここから開始」用の `スタート.src` / `Start.src` を
+/// 同梱し、本体は `Eve\...eve` に置く構成が多い (原典 SRC はセーブデータを
+/// ロードして開始する)。`.src` 自体はスクリプトではないので、そのままでは
+/// 実行できず起動に失敗する。
+fn resolve_save_entry(analysis: &mut Analysis, entries: &[(String, Vec<u8>)]) {
+    let Some(best) = analysis.candidates.first() else {
+        return;
+    };
+    if best.kind != CandidateKind::Src {
+        return;
     }
+    let src_name = best.name.clone();
+    let Some((_, data)) = entries.iter().find(|(n, _)| *n == src_name) else {
+        return;
+    };
+    let text = loader::decode_text(data);
+    let Ok(save) = crate::data::save_src::parse(&text) else {
+        return;
+    };
+    if save.start_eve.trim().is_empty() {
+        return;
+    }
+    let Some(target) = find_entry_for(entries, &src_name, &save.start_eve) else {
+        return;
+    };
+    // 解決先を先頭へ。既に候補にあれば移動、無ければ挿入する
+    // (`.eve` 以外が指されることは無いが、候補化されていない `.eve` もありうる)。
+    let top_score = analysis.candidates[0].score + 1;
+    if let Some(pos) = analysis.candidates.iter().position(|c| c.name == target) {
+        let mut c = analysis.candidates.remove(pos);
+        c.score = top_score;
+        analysis.candidates.insert(0, c);
+    } else {
+        analysis.candidates.insert(
+            0,
+            Candidate {
+                name: target,
+                kind: CandidateKind::Eve,
+                score: top_score,
+            },
+        );
+    }
+    analysis.resolved_from_save = Some(src_name);
+}
+
+/// セーブデータ内の相対パス (`Eve\Alt-01.eve` 等) をアーカイブ内エントリ名に
+/// 解決する。`.src` の置かれたディレクトリを基準に、区切り (`\` / `/`) と
+/// 大文字小文字を無視して照合し、駄目なら basename 一致にフォールバックする。
+fn find_entry_for(entries: &[(String, Vec<u8>)], src_name: &str, rel: &str) -> Option<String> {
+    let rel_n = rel.replace('\\', "/").to_lowercase();
+    let rel_n = rel_n.trim_start_matches("./").trim_start_matches('/');
+    let dir = match src_name.rfind(['/', '\\']) {
+        Some(i) => &src_name[..i + 1],
+        None => "",
+    };
+    let want = format!("{dir}{rel_n}").replace('\\', "/").to_lowercase();
+    if let Some((n, _)) = entries
+        .iter()
+        .find(|(n, _)| n.replace('\\', "/").to_lowercase() == want)
+    {
+        return Some(n.clone());
+    }
+    // シナリオルートの取り方が違う場合に備え、末尾一致でも探す。
+    if let Some((n, _)) = entries.iter().find(|(n, _)| {
+        n.replace('\\', "/")
+            .to_lowercase()
+            .ends_with(&rel_n.to_string())
+    }) {
+        return Some(n.clone());
+    }
+    // 最後の手段: basename 一致 (階層構成が異なる再配布物向け)。
+    let base = basename(rel_n).to_lowercase();
+    if base.is_empty() {
+        return None;
+    }
+    entries
+        .iter()
+        .find(|(n, _)| basename(n).to_lowercase() == base)
+        .map(|(n, _)| n.clone())
 }
 
 /// 1 候補のスコアを算出する (§7-3)。
@@ -466,6 +557,43 @@ mod tests {
         assert!(a.data_only);
         assert!(a.candidates.is_empty());
         assert_eq!(a.best(), None);
+    }
+
+    /// `スタート.src` (通常セーブ) が最有力なら、その `次ステージ` が指す
+    /// `.eve` を解決して先頭に据える。
+    #[test]
+    fn src_entrypoint_resolves_to_next_stage_eve() {
+        let save = "20033\n0\n\"Eve\\\\Alt-01.eve\"\n0\n0\n0\n0\n";
+        let entries = vec![
+            entry("ALT/Start.src", save),
+            entry("ALT/Eve/Alt-01.eve", "Message hi"),
+            entry("ALT/Eve/Alt-02.eve", "Message next"),
+        ];
+        let a = analyze(&entries);
+        assert_eq!(a.best(), Some("ALT/Eve/Alt-01.eve"));
+        assert_eq!(a.resolved_from_save.as_deref(), Some("ALT/Start.src"));
+    }
+
+    /// 中断データ (`ScenarioFileName` が version 直後) からも解決できる。
+    #[test]
+    fn suspend_src_resolves_to_scenario_file() {
+        let save = "20233\n\"Eve\\\\#00.eve\"\n0\n0\n0\n0\n";
+        let entries = vec![
+            entry("C/\u{25bc}\u{30b9}\u{30bf}\u{30fc}\u{30c8}.src", save),
+            entry("C/Eve/#00.eve", "Message start"),
+        ];
+        let a = analyze(&entries);
+        assert_eq!(a.best(), Some("C/Eve/#00.eve"));
+    }
+
+    /// 解決先が見つからなければ従来どおり `.src` のまま (回帰防止)。
+    #[test]
+    fn src_entrypoint_without_target_stays_put() {
+        let save = "20033\n0\n\"Eve\\\\missing.eve\"\n0\n0\n0\n0\n";
+        let entries = vec![entry("ALT/Start.src", save)];
+        let a = analyze(&entries);
+        assert_eq!(a.best(), Some("ALT/Start.src"));
+        assert!(a.resolved_from_save.is_none());
     }
 
     #[test]
