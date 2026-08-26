@@ -15,17 +15,9 @@ pending_audio = 0
 == messages (1) ==
 [0] empty hello-World hello-SRC
 
-== vars (11) ==
-ArgNum = 
+== vars (3) ==
+ArgNum = 0
 Args(1) = 
-Args(2) = 
-Args(3) = 
-Args(4) = 
-Args(5) = 
-Args(6) = 
-Args(7) = 
-Args(8) = 
-Args(9) = 
 greeting = empty hello-World hello-SRC
 
 == units (0) ==

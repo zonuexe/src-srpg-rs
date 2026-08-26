@@ -65,6 +65,13 @@ impl std::error::Error for ScriptError {}
 /// 余裕を持たせる。
 const STEP_LIMIT: usize = 2_000_000;
 
+/// `Call` / ユーザ定義関数に渡せる引数の上限。
+///
+/// 原典の引数配列は動的で制限が無いが (`CmdData.cls` の
+/// `ReDim strArgs(2 To ArgNum)`)、壊れた `ArgNum` で巨大なループを回さない
+/// ための番人として上限を置く。実データの最大は `Args(14)` 程度。
+const MAX_CALL_ARGS: usize = 256;
+
 /// 中断可能な `.eve` 実行コンテキスト。`Talk` / `Confirm` で対話 UI を表示すると
 /// `App.pending_dialog` をセットしてこのコンテキストを `App` 側に預け、
 /// ユーザ応答時に `resume(app)` で続行する。
@@ -5707,18 +5714,21 @@ fn exec_command_pc(
                 let ancestor_idx = depth - upvar_level;
                 if let Some(saved) = app.call_stack_saved_args(ancestor_idx) {
                     let saved = saved.clone(); // 借用解除のためコピー
+                                               // layout: [upvar_level, upvar_base_argnum, ArgNum, Args(1)..]
                     let parent_argnum = saved
-                        .get(9)
+                        .get(2)
                         .and_then(|s| s.parse::<usize>().ok())
-                        .unwrap_or(0);
+                        .unwrap_or(0)
+                        .min(MAX_CALL_ARGS);
 
-                    // 祖先の Args(1..parent_argnum) を base の直後から設定
-                    // まず base+1 以降をクリア (前回の UpVar 分を上書き)
-                    for k in (base + 1)..=9 {
+                    // 祖先の Args(1..parent_argnum) を base の直後から設定。
+                    // まず base+1 以降をクリア (前回の UpVar 分を上書き)。
+                    let cur = current_argnum(app);
+                    for k in (base + 1)..=cur.max(base + parent_argnum) {
                         app.set_script_var(format!("Args({k})"), String::new());
                     }
-                    for i in 0..parent_argnum.min(9 - base) {
-                        let val = saved.get(i).cloned().unwrap_or_default();
+                    for i in 0..parent_argnum {
+                        let val = saved.get(3 + i).cloned().unwrap_or_default();
                         app.set_script_var(format!("Args({})", base + i + 1), val);
                     }
                     // ArgNum を更新
@@ -12466,19 +12476,25 @@ fn foreach_status_mask(status_args: &[String]) -> (bool, bool) {
 /// SRC の `Args` は呼び出しフレーム単位なので、ネストした `Call` が
 /// 呼び出し元の `Args` を破壊しないようこのスナップショット/復元が要る。
 ///
-/// saved の layout: [Args(1)..Args(9), ArgNum, upvar_level, upvar_base_argnum]  (長さ 12)
+/// saved の layout (可変長):
+/// `[upvar_level, upvar_base_argnum, ArgNum, Args(1), ..., Args(ArgNum)]`
+///
+/// 原典の引数配列は `ReDim strArgs(2 To ArgNum)` の動的配列で個数制限が無い
+/// (`CmdData.cls`)。旧実装は `Args(1..9)` 固定で 10 個目以降を取りこぼして
+/// いた (実コーパスのサンプル 79 件中 9 件が `Args(10)` 以上を参照し、
+/// 最大 `Args(14)` を確認)。
 fn enter_call_args(app: &mut App, new_args: &[String]) -> Vec<String> {
-    let mut saved: Vec<String> = (1..=9)
-        .map(|k| app.script_var(&format!("Args({k})")).to_string())
-        .collect();
-    // ArgNum も退避 (10 番目要素)
-    saved.push(app.script_var("ArgNum").to_string());
-    // upvar_level と upvar_base_argnum を退避 (11・12 番目要素)
-    saved.push(app.upvar_level().to_string());
-    saved.push(app.upvar_base_argnum().to_string());
+    let prev_argnum = current_argnum(app);
+    let mut saved: Vec<String> = vec![
+        app.upvar_level().to_string(),
+        app.upvar_base_argnum().to_string(),
+        prev_argnum.to_string(),
+    ];
+    saved.extend((1..=prev_argnum).map(|k| app.script_var(&format!("Args({k})")).to_string()));
 
-    // 新フレーム用に Args をクリアして引数をセット
-    for k in 1..=9 {
+    // 新フレーム用に Args をクリアして引数をセット。
+    // 呼び出し元の分と新引数の分、両方を覆う範囲を消す。
+    for k in 1..=prev_argnum.max(new_args.len()) {
         app.set_script_var(format!("Args({k})"), String::new());
     }
     // 各引数は `fn_arg_value` で解決する。`Call 敵配置 … 敵配置数` のように
@@ -12498,28 +12514,36 @@ fn enter_call_args(app: &mut App, new_args: &[String]) -> Vec<String> {
     saved
 }
 
-/// `Return` 時に呼び出し元の `Args(1..9)` / `ArgNum` / `upvar_level` /
-/// `upvar_base_argnum` を復元する。
-/// saved の layout: [Args(1)..Args(9), ArgNum, upvar_level, upvar_base_argnum]  (長さ 12)
+/// `Return` 時に呼び出し元の `Args(..)` / `ArgNum` / `upvar_level` /
+/// `upvar_base_argnum` を復元する。layout は [`enter_call_args`] 参照。
 fn restore_call_args(app: &mut App, saved: Vec<String>) {
-    for (i, v) in saved.iter().take(9).enumerate() {
-        app.set_script_var(format!("Args({})", i + 1), v.clone());
+    let upvar_level = saved.first().and_then(|s| s.parse::<usize>().ok());
+    let upvar_base = saved.get(1).and_then(|s| s.parse::<usize>().ok());
+    let saved_argnum = saved
+        .get(2)
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0)
+        .min(MAX_CALL_ARGS);
+    // 呼び出された側が使っていた Args を消してから、呼び出し元の分を書き戻す。
+    let callee_argnum = current_argnum(app);
+    for k in (saved_argnum + 1)..=callee_argnum.max(saved_argnum) {
+        app.set_script_var(format!("Args({k})"), String::new());
     }
-    // 10 番目要素が ArgNum
-    if let Some(argnum) = saved.get(9) {
-        app.set_script_var("ArgNum".to_string(), argnum.clone());
+    for k in 1..=saved_argnum {
+        let v = saved.get(2 + k).cloned().unwrap_or_default();
+        app.set_script_var(format!("Args({k})"), v);
     }
-    // 11・12 番目要素が upvar_level と upvar_base_argnum
-    if let Some(ul) = saved.get(10).and_then(|s| s.parse::<usize>().ok()) {
-        app.set_upvar_level(ul);
-    } else {
-        app.set_upvar_level(0);
-    }
-    if let Some(ub) = saved.get(11).and_then(|s| s.parse::<usize>().ok()) {
-        app.set_upvar_base_argnum(ub);
-    } else {
-        app.set_upvar_base_argnum(0);
-    }
+    app.set_script_var("ArgNum".to_string(), saved_argnum.to_string());
+    app.set_upvar_level(upvar_level.unwrap_or(0));
+    app.set_upvar_base_argnum(upvar_base.unwrap_or(0));
+}
+
+/// 現フレームの `ArgNum`。異常値は上限で頭打ちにする。
+fn current_argnum(app: &App) -> usize {
+    app.script_var("ArgNum")
+        .parse::<usize>()
+        .unwrap_or(0)
+        .min(MAX_CALL_ARGS)
 }
 
 /// `Require <path>` の対象ファイルを script_library から basename で引き、
@@ -14082,6 +14106,53 @@ Return ""
         let stmts = event::parse(src).unwrap();
         execute(&mut app, &stmts).unwrap();
         assert_eq!(app.script_var("u"), "キャリバーン(不完全)");
+    }
+
+    /// `Args` は 10 個以上も扱える。原典の引数配列は `ReDim` の動的配列で
+    /// 個数制限が無い (`CmdData.cls`)。旧実装は `Args(1..9)` 固定だった。
+    #[test]
+    fn call_supports_more_than_nine_arguments() {
+        let src = r#"Call 集める a b c d e f g h i j k l
+Stage done
+Exit
+
+集める:
+Set n10 $(Args(10))
+Set n12 $(Args(12))
+Set cnt $(ArgNum)
+Return
+"#;
+        let mut app = App::new();
+        let stmts = event::parse(src).unwrap();
+        execute(&mut app, &stmts).unwrap();
+        assert_eq!(app.script_var("cnt"), "12");
+        assert_eq!(app.script_var("n10"), "j");
+        assert_eq!(app.script_var("n12"), "l");
+    }
+
+    /// ネストした `Call` の後も、呼び出し元の 10 個目以降の `Args` が戻る。
+    #[test]
+    fn nested_call_restores_high_numbered_args() {
+        let src = r#"Call 外 a b c d e f g h i j k l
+Stage done
+Exit
+
+外:
+Call 内 x y
+Set 外10 $(Args(10))
+Set 外num $(ArgNum)
+Return
+
+内:
+Set 内num $(ArgNum)
+Return
+"#;
+        let mut app = App::new();
+        let stmts = event::parse(src).unwrap();
+        execute(&mut app, &stmts).unwrap();
+        assert_eq!(app.script_var("内num"), "2");
+        assert_eq!(app.script_var("外num"), "12", "呼び出し元の ArgNum が復元");
+        assert_eq!(app.script_var("外10"), "j", "10 個目以降も復元される");
     }
 
     /// `Local` で宣言した変数はサブルーチンを抜けると宣言前の値へ戻る。
