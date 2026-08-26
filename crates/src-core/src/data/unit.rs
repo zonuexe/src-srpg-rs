@@ -352,22 +352,22 @@ fn parse_record(record: &[SourceLine]) -> Result<UnitData, ParseError> {
         _ => return Err(err(mv.line_num, "移動性能の項目が不足しています。")),
     };
     let transportation = transportation_s.to_string();
-    let speed: i32 = speed_s
+    // 原典 `UnitDataList.cls:304` は不正な移動力を `DataErrorMessage`
+    // (警告して既定値で継続) で扱い、レコードは捨てない。
+    // 欠落 (フィールドが無い) 場合だけが `Error 0` によるレコード破棄。
+    let speed: i32 = super::loader::normalize_fullwidth(speed_s)
         .parse()
-        .map_err(|_| err(mv.line_num, "移動力が数値ではありません。"))?;
+        .unwrap_or(0);
     let size = match size_token {
-        Some(tok) => Size::parse(tok).ok_or_else(|| {
-            err(
-                mv.line_num,
-                "サイズが不正です (XL/LL/L/M/S/SS のいずれか)。",
-            )
-        })?,
-        // サイズ省略 → SRC.NET 既定の M で補完。
+        // 原典 `UnitDataList.cls:320` も不正なサイズは警告して既定 M にする
+        // (実データに `宇宙, 5, 5L, 14000, 170` のような指定がある)。
+        Some(tok) => Size::parse(tok).unwrap_or(Size::M),
+        // サイズ省略 → 既定の M で補完。
         None => Size::M,
     };
-    let value: i64 = value_s
+    let value: i64 = super::loader::normalize_fullwidth(value_s)
         .parse()
-        .map_err(|_| err(mv.line_num, "修理費が数値ではありません。"))?;
+        .unwrap_or(0);
     let exp_value: i32 = exp_value_s
         .parse()
         .map_err(|_| err(mv.line_num, "経験値が数値ではありません。"))?;
@@ -675,6 +675,21 @@ fn err(line_num: usize, message: &str) -> ParseError {
 
 #[cfg(test)]
 mod tests {
+    /// 原典 `UnitDataList.cls:304,320` はフィールド **値** の不正を
+    /// `DataErrorMessage` (警告して既定値で継続) で扱い、レコードは捨てない。
+    /// 不正なサイズは既定 M になる (実データ str.lzh の `宇宙, 5, 5L, …`)。
+    #[test]
+    fn invalid_size_falls_back_to_m_without_dropping_record() {
+        let src = "ＧＰ－０３\n\
+ＧＰ－０３, ＭＳ, 1, 2\n\
+宇宙, 5, 5L, 14000, 170\n";
+        let (units, errors) = parse_lenient(src);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(units.len(), 1);
+        assert_eq!(units[0].size, Size::M);
+        assert_eq!(units[0].speed, 5);
+    }
+
     /// 原典 `UnitDataList.cls` はコンマ数で書式を判定する。行末コンマで
     /// アイテム数が空欄でも comma_num=3 なら合格し、レコードは捨てない
     /// (実シナリオ mva / mva06 の `対人級, ＢＥＴＡ, 1 ,`)。

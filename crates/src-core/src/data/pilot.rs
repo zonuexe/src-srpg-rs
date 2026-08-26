@@ -219,8 +219,9 @@ fn parse_record(record: &[SourceLine]) -> Result<PilotData, ParseError> {
         6 => {
             let nickname = fields[0].to_string();
             let kana = fields[1].to_string();
-            let sex = Sex::parse(fields[2])
-                .ok_or_else(|| err(detail.line_num, "性別の設定が間違っています。"))?;
+            // 原典 `PilotDataList.cls:248` は不正な性別を `DataErrorMessage`
+            // (警告して既定値で継続) で扱い、レコードは捨てない。
+            let sex = Sex::parse(fields[2]).unwrap_or(Sex::Unspecified);
             (
                 nickname,
                 kana,
@@ -235,9 +236,12 @@ fn parse_record(record: &[SourceLine]) -> Result<PilotData, ParseError> {
     };
     let adaption = Adaption::parse(adaption_str)
         .ok_or_else(|| err(detail.line_num, "地形適応は 4 文字で指定してください。"))?;
-    let exp_value: i32 = exp_str
+    // 原典 `PilotDataList.cls:283` は不正な経験値も `DataErrorMessage` で
+    // 警告するだけでレコードは維持する (実データに `…, ----, -` がある)。
+    let exp_value: i32 = super::loader::normalize_fullwidth(exp_str)
         .parse()
-        .map_err(|_| err(detail.line_num, "経験値が数値ではありません。"))?;
+        .unwrap_or(0)
+        .min(9999);
 
     // 3 行目以降: 能力値行を heuristics で探す。
     // 実 SRC は "特殊能力" マーカ + フィーチャー群が detail と stats の間に
@@ -471,6 +475,21 @@ pub fn parse_with(src: &str, _settings: &Settings) -> Result<Vec<PilotData>, Par
 
 #[cfg(test)]
 mod tests {
+    /// 原典 `PilotDataList.cls:248,283` は性別・経験値の値エラーを
+    /// `DataErrorMessage` で警告するだけでレコードを維持する
+    /// (実データ battleroyal の `ダイアナ, 女性, …, ----, -`)。
+    #[test]
+    fn invalid_exp_value_keeps_record() {
+        let src = "ダイアナ(ＫＯＦ)\n\
+ダイアナ, 女性, ネスツ構成員, ----, -\n\
+特殊能力なし\n\
+1, 1, 1, 1, 174, 1, 強気\n";
+        let (pilots, errors) = parse_lenient(src);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(pilots.len(), 1);
+        assert_eq!(pilots[0].exp_value, 0, "不正な経験値は既定 0");
+    }
+
     use super::*;
 
     const SAMPLE: &str = "\
