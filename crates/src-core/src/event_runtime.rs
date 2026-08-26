@@ -1101,10 +1101,28 @@ fn exec_command_pc(
             // Set var value...  (value が複数トークンの場合はスペース連結)
             // `__assign` は `var = expr` 形 (assign sugar が生成する内部コマンド名)。
             // SRC の `=` 代入は RHS が常に式なので括弧無し算術も数値化する (下記)。
-            let is_assign_form = lname == "__assign";
+            // SRC `Localコマンド` は 2 書式を持つ (C# `LocalCmd.cs`)。
+            //   書式1 `Local var1 var2 …` — 各変数を空文字で宣言する
+            //   書式2 `Local var = expr`  — 1 変数を式の値で初期化する
+            // 書式2 の `=` は値の一部ではない。従来は `Local p = Args(1)` の値が
+            // `"= <値>"` になり、`Create p …` 等で「Party 値が不正」を招いていた。
+            let local_assign = lname == "local" && args.len() >= 3 && args[1].trim() == "=";
+            let is_assign_form = lname == "__assign" || local_assign;
             if args.is_empty() {
                 return Err(err(line, "Set/Local には変数名が必要。"));
             }
+            if lname == "local" && !local_assign {
+                // 書式1: 宣言のみ。SRC は新しいサブルーチンローカル変数を空で作る。
+                for name in args.iter() {
+                    let key = resolve_lhs_name(app, name);
+                    if !key.is_empty() {
+                        app.set_script_var(key, String::new());
+                    }
+                }
+                return Ok(pc + 1);
+            }
+            // 書式2 では値は `=` の次から始まる。
+            let val_start = if local_assign { 2 } else { 1 };
             // LHS は `name[expr]` の `expr` を eval して実際のキーに解決する。
             // expand_vars 後の xargs[0] は「変数値」展開済みで Set には使えないので
             // 元の args[0] から名前を組み立てる。
@@ -1137,25 +1155,25 @@ fn exec_command_pc(
             } else {
                 resolve_lhs_name(app, &args[0])
             };
-            let value = if xargs.len() >= 2 {
+            let value = if xargs.len() > val_start {
                 // `#` コメントを除去 (SRC.Sharp `SetCmd.cs` 後方互換性):
                 // `Set var value # comment` 形式で `#` 以降を無視する。
                 // 重要: チェック対象は xargs[2] (値の直後のトークン) のみ。
                 // xargs[1] が `#` で始まる場合は色コード (`#3264c8` 等) であり
                 // コメントとは区別する (この場合 xargs.len()==2 で下記 end=2 分岐)。
-                let end = if xargs.len() > 2 && xargs[2].starts_with('#') {
-                    2 // `#` コメント発見 → 値は xargs[1] のみ
+                let end = if xargs.len() > val_start + 1 && xargs[val_start + 1].starts_with('#') {
+                    val_start + 1 // `#` コメント発見 → 値は 1 トークンのみ
                 } else {
                     xargs.len()
                 };
-                if end == 2 {
+                if end == val_start + 1 {
                     // 単一トークン値 (`Set マップ決定 選択` 形式) は SRC 同様に
                     // 裸の識別子を script_var として自動解決する。`fn_arg_value`
                     // は「変数として引いて空でなければ採用、そうでなければ literal」
                     // という SRC 流の値評価セマンティクス。
-                    fn_arg_value(app, &xargs[1])
+                    fn_arg_value(app, &xargs[val_start])
                 } else {
-                    xargs[1..end].join(" ")
+                    xargs[val_start..end].join(" ")
                 }
             } else if lname == "set" {
                 // SRC `SetCmd`: 値なし `Set var` はフラグとして 1 を代入する
@@ -13825,13 +13843,35 @@ Set 結果 $(画像[真イーグル])
         assert_eq!(app.script_var("結果"), "Anime\\Unit\\TrueEagle1.bmp");
     }
 
+    /// SRC `Localコマンド` 書式1 `Local var1 var2 …` は **宣言のみ**で、
+    /// 各変数を空文字で作る (C# `LocalCmd.cs`: `for i = 2 To ArgNum` →
+    /// `SetValue(vname, StringType, "", 0)`)。`Set` の別名ではない。
+    /// 実コーパスでも `Local i j` のような複数宣言が 358 箇所ある。
     #[test]
-    fn local_alias_of_set() {
-        let src = "Local x 42\n";
+    fn local_declares_each_arg_empty() {
+        let stmts = event::parse("Local x y\n").unwrap();
+        let mut app = App::new();
+        execute(&mut app, &stmts).unwrap();
+        assert_eq!(app.script_var("x"), "");
+        assert_eq!(app.script_var("y"), "");
+        assert!(app.is_script_var_defined("y"), "y も宣言される");
+    }
+
+    /// SRC `Localコマンド` 書式2 `Local var = expr` は式の値で初期化する。
+    /// `=` は値に含めない (旧実装は `"= 42"` を代入していた)。
+    /// 実コーパスで最頻の形 (3225 箇所)。
+    #[test]
+    fn local_assign_form_evaluates_expression() {
+        let src = "Local x = 42\n\
+Local y = (1 + 2)\n\
+Set 陣営 敵\n\
+Local p = 陣営\n";
         let stmts = event::parse(src).unwrap();
         let mut app = App::new();
         execute(&mut app, &stmts).unwrap();
         assert_eq!(app.script_var("x"), "42");
+        assert_eq!(app.script_var("y"), "3");
+        assert_eq!(app.script_var("p"), "敵");
     }
 
     /// テストヘルパ: src を実行して App を返す。

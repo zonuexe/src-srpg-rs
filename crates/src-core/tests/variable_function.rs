@@ -123,10 +123,23 @@ fn get_undefined_variable_returns_empty() {
 //  Local & Incr edge cases
 // ============================================================
 
+/// SRC `Localコマンド` 書式1 `Local var1 var2 …` は **宣言のみ** で、
+/// 各変数を空文字で作る (C# `LocalCmd.cs`)。`Set` の別名ではない。
 #[test]
-fn local_is_alias_of_set() {
+fn local_declaration_form_initialises_empty() {
     let app = run(r#"
 Local x 42
+Set v $(x)
+"#);
+    assert_eq!(app.script_var("v"), "");
+}
+
+/// SRC `Localコマンド` 書式2 `Local var = expr` は式の値で初期化する。
+/// `=` は値に含めない。実コーパスで最頻の Local 用法。
+#[test]
+fn local_assign_form_initialises_from_expression() {
+    let app = run(r#"
+Local x = 42
 Set v $(x)
 "#);
     assert_eq!(app.script_var("v"), "42");
