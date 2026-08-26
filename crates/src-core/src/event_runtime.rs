@@ -633,6 +633,7 @@ pub fn evaluate_command_condition(app: &mut App, condition: Option<&str>) -> boo
     } else {
         cond.to_string()
     };
+    let processed = preprocess_user_functions(app, &processed);
     let expanded = expand_vars(app, &processed);
     // 数値ならそのまま 0 判定。expand_vars が `1` / `0` / `False` 等の
     // 文字列に解決するケースを順に許容する。
@@ -663,7 +664,7 @@ fn preprocess_call_expressions_in_condition(app: &mut App, src: &str) -> String 
             // find_matching_paren は src[i+4] が '(' であることを期待
             if let Some(close) = find_matching_paren(src, i + 4) {
                 let label_name = src[i + 5..close].trim();
-                let ret_val = call_label_sync_for_condition(app, label_name);
+                let ret_val = call_label_sync(app, label_name, &[]).unwrap_or_default();
                 result.push_str(&ret_val);
                 i = close + 1;
                 continue;
@@ -676,25 +677,53 @@ fn preprocess_call_expressions_in_condition(app: &mut App, src: &str) -> String 
     result
 }
 
-/// `evaluate_command_condition` が `Call(<label>)` 形式の条件を評価する際に
-/// 用いる同期的サブルーチン呼び出し。
+/// ユーザ定義関数の再帰段数上限。相互再帰の暴走を防ぐ番人。
+const MAX_USER_FUNC_DEPTH: u32 = 32;
+
+thread_local! {
+    /// 実行中のユーザ定義関数のネスト段数。
+    static USER_FUNC_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// ラベルがユーザ定義関数として呼び出せるか (script_library に定義済みか)。
+fn is_user_function(app: &App, name: &str) -> bool {
+    !name.is_empty() && app.script_library().label_pc(name).is_some()
+}
+
+/// ユーザ定義関数 / サブルーチンを **同期実行** し、`Return <value>` の値を返す。
 ///
-/// 該当ラベルから始まるサブルーチンをステップ実行し、`Return <value>` で返された
-/// 文字列値を返す。ラベルが見つからない / 実行エラーの場合は空文字列。
+/// 原典 SRC は式中の未知の関数名についてラベルを探し、見つかればユーザ定義関数
+/// として呼ぶ (`Expression.function.cs`: `Event.FindNormalLabel(fname)` →
+/// `CallUserFunction`)。`Return` の引数がその返り値になる
+/// (`Returnコマンド.md`: 「*value* の値がサブルーチンコールの返り値」)。
 ///
-/// 同期実行なので `Talk` / `Confirm` 等のダイアログや `Wait` タイマが呼ばれた
-/// 場合は中断して空文字列を返す。条件サブルーチンではこれらを使用しないこと。
-fn call_label_sync_for_condition(app: &mut App, label_name: &str) -> String {
+/// ラベルが無ければ `None` (呼び出し側はトークンをリテラルとして残す)。
+///
+/// 同期実行なので `Talk` / `Confirm` 等のダイアログや `Wait` タイマが発生した
+/// 場合は中断して、そこまでの返り値を返す。関数用サブルーチンでこれらを使うのは
+/// 原典でも想定外。
+fn call_label_sync(app: &mut App, label_name: &str, args: &[String]) -> Option<String> {
     let lib = app.script_library();
-    let Some(pc) = lib.label_pc(label_name) else {
-        return String::new();
-    };
+    let pc = lib.label_pc(label_name)?;
+    // 再帰段数の番人。超えたら空文字を返して打ち切る。
+    let depth = USER_FUNC_DEPTH.with(|d| d.get());
+    if depth >= MAX_USER_FUNC_DEPTH {
+        return Some(String::new());
+    }
+    USER_FUNC_DEPTH.with(|d| d.set(depth + 1));
+    let result = call_label_sync_inner(app, pc, args);
+    USER_FUNC_DEPTH.with(|d| d.set(depth));
+    Some(result)
+}
+
+fn call_label_sync_inner(app: &mut App, pc: usize, args: &[String]) -> String {
+    let lib = app.script_library();
     let stmts = lib.statements.clone();
     let labels = lib.labels.clone();
 
     // 戻り値フィールドをクリアしてフレームをセットアップ
     app.set_last_return_value(String::new());
-    let saved = enter_call_args(app, &[]);
+    let saved = enter_call_args(app, args);
     // 番兵 PC: stmts.len() を使うと Return 後のループ終了判定に便利
     app.push_call_return(stmts.len(), saved);
     let call_depth_before = app.call_stack_depth();
@@ -751,6 +780,145 @@ fn call_label_sync_for_condition(app: &mut App, label_name: &str) -> String {
     app.truncate_for_stack(for_depth_before);
 
     app.take_last_return_value()
+}
+
+/// 式文字列中の **ユーザ定義関数呼び出し** を実行し、返り値へ置換する前処理。
+///
+/// 原典 SRC は式の評価中に未知の関数名をラベルとして解決し、その場で
+/// サブルーチンを呼ぶ (`Expression.function.cs`)。本実装の式展開
+/// (`expand_vars` / `fn_arg_value`) は `&App` (不変) しか持たずサブルーチンを
+/// 実行できないため、`&mut App` を持つ地点で先に解決して文字列へ畳み込む。
+/// 条件式の `Call(<label>)` を先に潰す既存の前処理と同じ方式。
+///
+/// 解決するのは **script_library にラベルが定義されている名前だけ**。
+/// 組込み関数名やユニット名などは対象外なので、通常の式評価に素通しする。
+/// 引数は内側から順に解決される (再帰)。
+fn preprocess_user_functions(app: &mut App, src: &str) -> String {
+    // 早期リターン: `(` を含まない式にユーザ定義関数呼び出しは有り得ない。
+    if !src.contains('(') {
+        return src.to_string();
+    }
+    let mut out = String::new();
+    let mut i = 0usize;
+    let mut in_quote = false;
+    while i < src.len() {
+        let ch_end = next_char_end(src, i);
+        let ch = &src[i..ch_end];
+        if ch == "\"" {
+            in_quote = !in_quote;
+            out.push_str(ch);
+            i = ch_end;
+            continue;
+        }
+        if in_quote {
+            out.push_str(ch);
+            i = ch_end;
+            continue;
+        }
+        if let Some((name, args_str, total)) = take_user_function_call(app, src, i) {
+            // 引数は内側のユーザ定義関数を先に解決してから渡す。
+            let inner = preprocess_user_functions(app, args_str);
+            let args: Vec<String> = split_function_args(&inner)
+                .into_iter()
+                .map(|a| a.trim().to_string())
+                .collect();
+            match call_label_sync(app, &name, &args) {
+                Some(v) => out.push_str(&v),
+                // ラベルが消えている等で呼べなければ元のトークンを温存。
+                None => out.push_str(&src[i..i + total]),
+            }
+            i += total;
+            continue;
+        }
+        out.push_str(ch);
+        i = ch_end;
+    }
+    out
+}
+
+/// `i` の位置から `<ラベル名>(<引数>)` 形式のユーザ定義関数呼び出しを取り出す。
+///
+/// `take_function_call` と違い **ASCII 始まりに限定しない**。原典は
+/// 「先頭がアルファベットでなければ必ずユーザー定義関数」と扱っており
+/// (`Expression.function.cs`)、実シナリオでも `シールド判定(Args(1))` の
+/// ような日本語名の関数が多用される。
+///
+/// 名前として認めるのは、区切り文字・演算子・空白を含まない連続した文字列。
+/// script_library に同名ラベルがあるときだけ Some を返す。
+fn take_user_function_call<'a>(
+    app: &App,
+    src: &'a str,
+    i: usize,
+) -> Option<(String, &'a str, usize)> {
+    // 直前が識別子構成文字なら、より長い名前の途中なので開始位置ではない。
+    if i > 0 {
+        let prev = src[..i].chars().next_back()?;
+        if !is_expr_delimiter(prev) {
+            return None;
+        }
+    }
+    // 名前部分を読む。
+    let mut j = i;
+    for (off, c) in src[i..].char_indices() {
+        if c == '(' {
+            j = i + off;
+            break;
+        }
+        if is_expr_delimiter(c) {
+            return None;
+        }
+        j = i + off + c.len_utf8();
+    }
+    if j >= src.len() || src.as_bytes()[j] != b'(' {
+        return None;
+    }
+    let name = &src[i..j];
+    if name.is_empty() || !is_user_function(app, name) {
+        return None;
+    }
+    let close = find_matching_paren(src, j)?;
+    // 原典 `Expression.function.cs` は「括弧を含むユニット名等である場合が
+    // あるため」、ユーザ定義関数と見なす前にトークン **全体** が
+    // ユニット / パイロット / アイテムとして定義済みでないか確かめる。
+    // 実サンプルの `Upgrade キャリバーン キャリバーン(不完全)` が該当し、
+    // これを関数呼び出しと誤認すると機体名が空文字に化ける。
+    let whole = &src[i..close + 1];
+    if is_defined_data_name(app, whole) {
+        return None;
+    }
+    Some((name.to_string(), &src[j + 1..close], close + 1 - i))
+}
+
+/// トークンがデータベース上のユニット / パイロット / アイテム名か。
+fn is_defined_data_name(app: &App, name: &str) -> bool {
+    let db = app.database();
+    db.unit_by_name(name).is_some()
+        || db.pilot_by_name(name).is_some()
+        || db.item_by_name(name).is_some()
+}
+
+/// 式中で識別子を区切る文字か。
+fn is_expr_delimiter(c: char) -> bool {
+    c.is_whitespace()
+        || matches!(
+            c,
+            '(' | ')'
+                | ','
+                | '"'
+                | '+'
+                | '-'
+                | '*'
+                | '/'
+                | '\\'
+                | '='
+                | '<'
+                | '>'
+                | '&'
+                | '$'
+                | '['
+                | ']'
+                | '!'
+        )
 }
 
 pub fn run_from_pc(app: &mut App, pc: usize) -> Result<(), ScriptError> {
@@ -1027,6 +1195,12 @@ fn exec_command_pc(
     }
     // 各引数を $(var) / Args(N) / 関数呼出 / インデックス変数で展開後、
     // `&` 連結演算子を畳み込む（`"abc" & x & ".bmp"` → "abcvalue.bmp"）。
+    // 式展開の前にユーザ定義関数呼び出しを解決して値へ畳み込む
+    // (`expand_arg` は `&App` しか持たずサブルーチンを実行できないため)。
+    let args: Vec<String> = args
+        .iter()
+        .map(|a| preprocess_user_functions(app, a))
+        .collect();
     let expanded: Vec<String> = args.iter().map(|a| expand_arg(app, a)).collect();
     let xargs: Vec<String> = collapse_concat(expanded);
     // 制御フロー命令を case-insensitive で先に処理。
@@ -1048,7 +1222,7 @@ fn exec_command_pc(
             // `expand_vars` 後の `xargs` は `Instr(...)` 等の関数呼出が値に
             // 潰れており、`If Instr(...) Exit` の「条件 1 トークン + 本体」
             // 構造が失われてブロック If と誤認されてしまうため。
-            let (raw_cond, raw_body) = split_if_cond_body(args);
+            let (raw_cond, raw_body) = split_if_cond_body(&args);
             let cond_len = raw_cond.len();
             // 本体開始位置 (cond と body の間に `Then` が挟まる場合がある)。
             let body_start = args.len().saturating_sub(raw_body.len());
@@ -7792,7 +7966,7 @@ fn eval_binop(lhs: &str, op: &str, rhs: &str) -> bool {
 /// - 同レベル `Else` → その次の PC を返す（Else 節を実行）
 /// - 同レベル `ElseIf` → 条件評価し、真ならその次の PC、偽なら更に次の分岐へ
 fn skip_to_else_or_endif(
-    app: &App,
+    app: &mut App,
     pc: usize,
     stmts: &[EventStatement],
     line: usize,
@@ -7810,7 +7984,11 @@ fn skip_to_else_or_endif(
                 "endif" => depth -= 1,
                 "elseif" if depth == 0 => {
                     // 変数展開 + `&` 連結 → 条件評価
-                    let expanded: Vec<String> = args.iter().map(|a| expand_arg(app, a)).collect();
+                    let pre: Vec<String> = args
+                        .iter()
+                        .map(|a| preprocess_user_functions(app, a))
+                        .collect();
+                    let expanded: Vec<String> = pre.iter().map(|a| expand_arg(app, a)).collect();
                     let xargs = collapse_concat(expanded);
                     if eval_condition_args_with(app, &xargs) {
                         return Ok(i + 1);
@@ -13728,6 +13906,98 @@ fn err(line_num: usize, message: &str) -> ScriptError {
 
 #[cfg(test)]
 mod tests {
+    // ───────────── ユーザ定義関数 (ラベルの関数呼び出し) ─────────────
+
+    /// 原典 SRC は式中の未知の関数名をラベルとして解決し、`Return <value>` の
+    /// 値を返す (`Expression.function.cs` / `Returnコマンド.md`)。
+    #[test]
+    fn user_function_called_by_label_name() {
+        let src = "\
+Set a 足す2(5)
+Stage done
+Exit
+
+足す2:
+Local n = Args(1)
+Return (n + 2)
+";
+        let mut app = App::new();
+        let stmts = event::parse(src).unwrap();
+        execute(&mut app, &stmts).unwrap();
+        assert_eq!(app.script_var("a"), "7");
+    }
+
+    /// 日本語名のユーザ定義関数を条件式で使える。
+    #[test]
+    fn user_function_in_condition() {
+        let src = "\
+If シールド判定(3) = 1 Then
+  Set d ok
+EndIf
+Stage done
+Exit
+
+シールド判定:
+Return 1
+";
+        let mut app = App::new();
+        let stmts = event::parse(src).unwrap();
+        execute(&mut app, &stmts).unwrap();
+        assert_eq!(app.script_var("d"), "ok");
+    }
+
+    /// 引数の内側のユーザ定義関数も解決される (入れ子)。
+    #[test]
+    fn user_function_nested_arguments() {
+        let src = r#"Set e 包む(足す2(1))
+Stage done
+Exit
+
+足す2:
+Return (Args(1) + 2)
+
+包む:
+Return ("[" & Args(1) & "]")
+"#;
+        let mut app = App::new();
+        let stmts = event::parse(src).unwrap();
+        execute(&mut app, &stmts).unwrap();
+        assert_eq!(app.script_var("e"), "[3]");
+    }
+
+    /// 括弧を含む **ユニット名** をユーザ定義関数と誤認しない。
+    /// 原典 `Expression.function.cs` も同じチェックを行う。公式サンプルの
+    /// `Upgrade キャリバーン キャリバーン(不完全)` が該当する。
+    #[test]
+    fn defined_unit_name_with_parens_is_not_a_user_function() {
+        let mut app = App::new();
+        let (units, _) = crate::data::unit::parse_lenient(
+            "キャリバーン(不完全)\n\
+キャリバーン, ＭＳ, 1, 2\n\
+陸, 4, M, 1000, 100\n",
+        );
+        app.database_mut().extend_units(units);
+        let src = r#"Set u キャリバーン(不完全)
+Stage done
+Exit
+
+キャリバーン:
+Return ""
+"#;
+        let stmts = event::parse(src).unwrap();
+        execute(&mut app, &stmts).unwrap();
+        assert_eq!(app.script_var("u"), "キャリバーン(不完全)");
+    }
+
+    /// ラベルが無い名前は関数として実行せずリテラルのまま残す。
+    #[test]
+    fn unknown_function_name_is_left_literal() {
+        let stmts = event::parse("Set z 未定義関数(1)\nStage done\n").unwrap();
+        let mut app = App::new();
+        execute(&mut app, &stmts).unwrap();
+        assert_eq!(app.script_var("z"), "未定義関数(1)");
+    }
+
     use super::*;
     use crate::data::event;
 
