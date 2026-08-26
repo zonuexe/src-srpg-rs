@@ -92,11 +92,21 @@ pub fn load_into_app(
     // アニメフレームが上限を食い潰し、肝心のユニット / 顔グラが登録
     // されない (スパロボ戦記: Bitmap/Anime/Animation 等が先, Bitmap/Unit が後)。
     let mut deferred_images: Vec<(&str, &[u8])> = Vec::new();
+    // 原典 SRC はシナリオデータを `Data\` 配下からのみ読む
+    // (`SRC.bas::SearchDataFolder`)。`Data/` を持つアーカイブでは、その外側の
+    // 同名ファイル (`Lib/Library/Unit.txt` 等、別ツールの設定ファイル) を
+    // データとして読まない。`Data/` を持たないデータ集アーカイブは従来どおり。
+    let data_scope = loader::scope_to_data_dir(entries.iter().map(|(n, _)| n.as_str()));
+
     for (name, data) in &entries {
         let lname = name.to_ascii_lowercase();
         // basename (区切り `/` / `\` 両対応) を取り出し、`non_pilot.txt`/`pilot.txt`
         // の取り違えを防ぐ。
         let base = basename(&lname);
+        // データファイル名だがスコープ外なら丸ごと無視する。
+        if loader::is_data_file_name(&lname) && !loader::accept_data_entry(name, data_scope) {
+            continue;
+        }
         let txt = if is_text_kind(base, &lname) {
             loader::decode_text(data)
         } else {

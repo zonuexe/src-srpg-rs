@@ -148,6 +148,74 @@ pub fn split_records(lines: &[SourceLine]) -> Vec<Vec<SourceLine>> {
     records
 }
 
+/// SRC がシナリオデータとして読み込むファイルの basename 一覧。
+///
+/// 原典 VB6 `SRC.bas::IncludeData` / `LoadData` が `Data\` 配下で
+/// `FileExists` を確かめて読むファイル名と一致させる。
+pub const DATA_FILE_BASENAMES: &[&str] = &[
+    "alias.txt",
+    "sp.txt",
+    "mind.txt",
+    "pilot.txt",
+    "non_pilot.txt",
+    "robot.txt",
+    "unit.txt",
+    "pilot_message.txt",
+    "pilot_dialog.txt",
+    "effect.txt",
+    "animation.txt",
+    "ext_animation.txt",
+    "item.txt",
+    "terrain.txt",
+];
+
+/// 与えられた名前 (アーカイブ内パス) が SRC データファイルの basename か。
+pub fn is_data_file_name(name: &str) -> bool {
+    let base = name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(name)
+        .to_ascii_lowercase();
+    DATA_FILE_BASENAMES.contains(&base.as_str())
+}
+
+/// パスの途中に `Data` ディレクトリ成分を含むか (大文字小文字無視)。
+///
+/// 原典 SRC はシナリオデータを `<ScenarioPath>\Data\...` からのみ読む
+/// (`SRC.bas::SearchDataFolder` は `Data\<作品名>` を探す)。
+pub fn is_under_data_dir(name: &str) -> bool {
+    let mut parts: Vec<&str> = name.split(['/', '\\']).collect();
+    parts.pop(); // ファイル名自身は除く
+    parts.iter().any(|p| p.eq_ignore_ascii_case("data"))
+}
+
+/// アーカイブのデータファイル探索を `Data/` 配下に限定すべきか。
+///
+/// `Data/` 配下にデータファイルが 1 つでもあるアーカイブでは、その外側に
+/// ある同名ファイルは SRC データではない: 実コーパスでは
+/// `Lib/Library/Unit.txt` (別ツールの `[Setting]` 形式プロファイル) や
+/// `Lib/_encyclopedia/pilot.txt` (`en_パイロット[1] = "…"` 形式の
+/// 図鑑ライブラリ) が該当し、パーサに渡すと大量の「設定に抜けがあります」
+/// を生む。
+///
+/// 一方 `Data/` を持たないデータ集アーカイブ (`作品名/item.txt` を
+/// SRC の `Data\` へ配置して使う形式) も実在するため、その場合は
+/// 限定せず従来どおり basename 一致で拾う。
+pub fn scope_to_data_dir<'a, I>(entry_names: I) -> bool
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    entry_names
+        .into_iter()
+        .any(|n| is_data_file_name(n) && is_under_data_dir(n))
+}
+
+/// 個々のエントリをデータファイルとして採用するか。
+/// `scope` は [`scope_to_data_dir`] の判定結果。
+pub fn accept_data_entry(name: &str, scope: bool) -> bool {
+    is_data_file_name(name) && (!scope || is_under_data_dir(name))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,5 +300,43 @@ mod tests {
         let lines = read_lines("# c\nbody\n# c2\nbody2");
         assert_eq!(lines[1].line_num, 2);
         assert_eq!(lines[3].line_num, 4);
+    }
+
+    #[test]
+    fn data_dir_detection() {
+        assert!(is_under_data_dir("scn/Data/unit.txt"));
+        assert!(is_under_data_dir("scn/data/作品/unit.txt"));
+        assert!(is_under_data_dir("scn\\DATA\\unit.txt"));
+        assert!(!is_under_data_dir("scn/Lib/Library/Unit.txt"));
+        assert!(!is_under_data_dir("unit.txt"));
+        // `data` はディレクトリ成分でなければならない。
+        assert!(!is_under_data_dir("scn/mydata/unit.txt"));
+    }
+
+    #[test]
+    fn data_file_name_detection() {
+        assert!(is_data_file_name("a/b/pilot.txt"));
+        assert!(is_data_file_name("a\\b\\Unit.TXT"));
+        assert!(!is_data_file_name("a/b/readme.txt"));
+    }
+
+    /// `Data/` 配下があるアーカイブでは、外側の同名ファイル
+    /// (別ツールの `Lib/Library/Unit.txt` 等) を採用しない。
+    #[test]
+    fn scoped_archive_rejects_files_outside_data_dir() {
+        let names = ["scn/Data/unit.txt", "scn/Lib/Library/Unit.txt"];
+        let scope = scope_to_data_dir(names.iter().copied());
+        assert!(scope);
+        assert!(accept_data_entry("scn/Data/unit.txt", scope));
+        assert!(!accept_data_entry("scn/Lib/Library/Unit.txt", scope));
+    }
+
+    /// `Data/` を持たないデータ集アーカイブは従来どおり拾う。
+    #[test]
+    fn unscoped_archive_keeps_basename_match() {
+        let names = ["作品名/item.txt", "作品名/non_pilot.txt"];
+        let scope = scope_to_data_dir(names.iter().copied());
+        assert!(!scope);
+        assert!(accept_data_entry("作品名/item.txt", scope));
     }
 }

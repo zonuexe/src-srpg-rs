@@ -68,6 +68,8 @@ fn main() -> ExitCode {
 
     let mut counts = std::collections::BTreeMap::<&str, usize>::new();
     let mut text_samples = Vec::<(String, String)>::new(); // (kind, name)
+                                                           // 分類レポートでも smoke と同じ `Data/` スコープを使う。
+    let report_scope = loader::scope_to_data_dir(entries.iter().map(|(n, _)| n.as_str()));
 
     for (name, data) in &entries {
         if dump_names {
@@ -112,6 +114,12 @@ fn main() -> ExitCode {
         *counts
             .entry(Box::leak(kind.to_string().into_boxed_str()))
             .or_default() += 1;
+
+        // データファイルはスコープ外 (`Data/` 配下でない別ツールの同名ファイル)
+        // なら SRC データではないので、パース結果を報告しない。
+        if loader::is_data_file_name(&lname) && !loader::accept_data_entry(name, report_scope) {
+            continue;
+        }
 
         // 主要テキストはサンプリングしてパース通過率を見る
         match kind {
@@ -247,10 +255,18 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
             .to_string()
     };
 
+    // 原典 SRC と同じく `Data\` 配下のみをシナリオデータとして読む
+    // (`SRC.bas::SearchDataFolder`)。`Data/` を持たないデータ集アーカイブは
+    // 従来どおり basename 一致で拾う。
+    let data_scope = loader::scope_to_data_dir(entries.iter().map(|(n, _)| n.as_str()));
+
     for (name, data) in entries {
         let lname = name.to_ascii_lowercase();
         let base = basename(&lname);
         if !is_text(&base, &lname) {
+            continue;
+        }
+        if loader::is_data_file_name(&lname) && !loader::accept_data_entry(name, data_scope) {
             continue;
         }
         let txt = loader::decode_text(data);
