@@ -13,6 +13,17 @@
 /// 文字列に変換するヘルパ。BOM や UTF-8 で始まる場合は素通し、それ以外は
 /// Shift_JIS としてデコードする（不正バイトは `U+FFFD` 置換）。
 pub fn decode_text(bytes: &[u8]) -> String {
+    // MS-DOS の EOF マーカー (0x1A / Ctrl-Z) 以降を切り捨てる。
+    // 原典 SRC は `Open fname For Input` + `Line Input #` でテキストを読むため、
+    // VB6 (DOS 由来) のファイル入出力が 0x1A を EOF とみなしてそこで読み終える。
+    // 実コーパスには 0x1A で終わる data ファイルがあり、切り捨てないと
+    // 末尾に 0x1A だけのレコードが生まれて「基本属性行が見つかりません」に
+    // なる。Shift_JIS の 2 バイト目は 0x40 以上なので、単独の 0x1A を
+    // 終端と見なしても多バイト文字を壊さない。
+    let bytes = match bytes.iter().position(|&b| b == 0x1A) {
+        Some(i) => &bytes[..i],
+        None => bytes,
+    };
     // UTF-8 BOM
     if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
         return String::from_utf8_lossy(&bytes[3..]).into_owned();
@@ -81,6 +92,16 @@ fn strip_comments(line: &str) -> String {
 pub fn read_data_lines(src: &str) -> Vec<SourceLine> {
     src.split('\n')
         .enumerate()
+        // 行頭 `#` はコメント行。原典 `GeneralLib.GetLine` は
+        // `If Left$(buf, 1) = "#" Then GoTo NextLine` で読み飛ばし、
+        // `データ形式.md` も「コメント行はデータ読み込みの際に存在しない
+        // ものとして扱われます」と明記する。
+        //
+        // 空行に置き換えてはならない: `split_records` は空行をレコード境界と
+        // するため、レコード途中のコメント (`#ビューティフル＝Ｇ＝カトレア,
+        // (人間), 1, 0` のような旧設定のコメントアウト) が 1 レコードを
+        // 2 つに割ってしまい、後続行を別レコードの先頭と誤認する。
+        .filter(|(_, raw)| !raw.trim_start().starts_with('#'))
         .map(|(idx, raw)| SourceLine {
             line_num: idx + 1,
             // 元 SRC `GeneralLib.GetLine` は全データ行で全角コンマ `，`(U+FF0C) を
@@ -121,10 +142,8 @@ fn strip_slash_comment(line: &str) -> String {
 /// 連続する空行を 1 レコード境界として、空行で区切られたレコード単位に分割。
 /// Group consecutive non-empty lines into records, separated by blank lines.
 ///
-/// 先頭行が `#` で始まるレコードはコメント (`###見出し`, `# section header`,
-/// `# 開始時設定...` 等) としてスキップする。pilot / unit / item / sp / terrain の
-/// 全データファイルで、本来のエンティティ名は `#` で始まらないため安全。
-/// 内部行 (例: bitmap 行の `#BGlxy_AI.bmp` sigil) は引き続きレコードに含まれる。
+/// コメント行 (`#` 始まり) は [`read_data_lines`] の時点で除去済みなので、
+/// ここには現れない。
 pub fn split_records(lines: &[SourceLine]) -> Vec<Vec<SourceLine>> {
     let mut records = Vec::new();
     let mut current: Vec<SourceLine> = Vec::new();
@@ -140,11 +159,6 @@ pub fn split_records(lines: &[SourceLine]) -> Vec<Vec<SourceLine>> {
     if !current.is_empty() {
         records.push(current);
     }
-    records.retain(|r| {
-        r.first()
-            .map(|line| !line.text.starts_with('#'))
-            .unwrap_or(false)
-    });
     records
 }
 
@@ -240,10 +254,11 @@ mod tests {
         assert_eq!(lines[0].text, r#""hello // world""#);
     }
 
+    /// `#` 行はレコードの内外を問わず「存在しないもの」として消える
+    /// (`パイロットデータ.md` / `ユニットデータ.md` / `データ形式.md`、
+    /// および `GeneralLib.GetLine`)。SRC に `#` 始まりの sigil 行は無い。
     #[test]
-    fn split_records_skips_comment_records() {
-        // 先頭行 `#`/`###` で始まるレコードはコメントとしてスキップ。
-        // 内部行の `#BGlxy.bmp` sigil はレコード末尾に残るので維持される。
+    fn split_records_drops_comment_lines_everywhere() {
         let lines = read_data_lines(
             "### 見出し\n\n\
              # 単発コメント\n\n\
@@ -252,9 +267,9 @@ mod tests {
              #BGlxy.bmp\n",
         );
         let records = split_records(&lines);
-        assert_eq!(records.len(), 1, "コメントレコードは除外される");
+        assert_eq!(records.len(), 1, "コメントだけのレコードは生まれない");
         assert_eq!(records[0][0].text, "リオ");
-        assert_eq!(records[0].len(), 3, "内部の #sigil 行は残る");
+        assert_eq!(records[0].len(), 2, "内部のコメント行も消える");
     }
 
     #[test]
@@ -300,6 +315,33 @@ mod tests {
         let lines = read_lines("# c\nbody\n# c2\nbody2");
         assert_eq!(lines[1].line_num, 2);
         assert_eq!(lines[3].line_num, 4);
+    }
+
+    /// 原典 `GeneralLib.GetLine` / `データ形式.md`: 行頭 `#` のコメント行は
+    /// **存在しないもの** として扱う。空行に置き換えるとレコードが割れる。
+    #[test]
+    fn data_lines_drop_comment_lines_entirely() {
+        let lines = read_data_lines("カトレアＵ\n#旧設定, (人間), 1, 0\nカトレア, (人間), 1, 0\n");
+        let texts: Vec<&str> = lines
+            .iter()
+            .map(|l| l.text.as_str())
+            .filter(|t| !t.is_empty())
+            .collect();
+        assert_eq!(texts, vec!["カトレアＵ", "カトレア, (人間), 1, 0"]);
+        // 行番号は元ファイルのまま (エラー報告用)。
+        assert_eq!(lines[1].line_num, 3, "コメント行を飛ばしても行番号は保つ");
+        // レコードが割れない。
+        assert_eq!(split_records(&lines).len(), 1);
+    }
+
+    /// MS-DOS の EOF マーカー (0x1A) 以降は読まない。
+    #[test]
+    fn decode_text_stops_at_dos_eof_marker() {
+        let mut b = b"name\r\n\r\n".to_vec();
+        b.push(0x1A);
+        assert_eq!(decode_text(&b), "name\r\n\r\n");
+        // 末尾に 0x1A だけのレコードが生まれない。
+        assert_eq!(split_records(&read_data_lines(&decode_text(&b))).len(), 1);
     }
 
     #[test]
