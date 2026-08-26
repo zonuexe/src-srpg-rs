@@ -164,14 +164,21 @@ pub fn split_records(lines: &[SourceLine]) -> Vec<Vec<SourceLine>> {
 
 /// データフィールド中の全角英数記号を半角へ正規化する。
 ///
-/// 原典 VB6 の `IsNumeric` / `CInt` は日本語ロケールで全角数字 (`１`) を
-/// 数値として受け付けるため、実データには全角混じりのフィールドが存在する
-/// (例: `ザク, MS, １, 3` のパイロット数、`一弥, 男性, ＯＦ, －-－－, 0` の
-/// 地形適応)。C# 移植 (`VB/Information.cs`) は `decimal.TryParse` を使って
-/// おりここが再現できていないため、VB6 側を正とする。
+/// **数値フィールドには使わないこと。** C# 移植の `IsNumeric`
+/// (`VB/Information.cs` → `decimal.TryParse`) は全角数字を受け付けない
+/// ことを実測で確認済み (`１` / `＋25` いずれも ja-JP でも false)。
+/// VB6 側は実行環境が無く未検証のため、数値は半角のみを受け付ける
+/// C# 準拠とし、不正値は原典どおり既定値へフォールバックさせる。
 ///
-/// 名称や説明文まで正規化すると `０号機` のような固有名を壊すので、
-/// **数値・地形適応など書式が決まったフィールドの解釈時のみ** 使うこと。
+/// 用途は地形適応の解釈に限る。原典 `PilotDataList.cls:270` の判定は
+/// `Len(buf2) = 4` (4 文字ならそのまま採用) だけなので、`－-－－` のような
+/// 全角混じり指定も **原典では受理され生の 4 文字が保持される**。
+/// 本実装の `Adaption` は ASCII 4 バイト固定で生の全角を保持できないため、
+/// 半角へ正規化して等価な意味 (`----` = 適応なし) を保つ。正規化しないと
+/// 「4 文字でない」と見なされ既定 `AAAA` (全適応) に落ちてしまい、原典と
+/// 正反対の結果になる。
+///
+/// 名称や説明文に使ってはならない (`０号機` のような固有名を壊す)。
 pub fn normalize_fullwidth(s: &str) -> String {
     s.chars()
         .map(|c| match c {
@@ -343,7 +350,7 @@ mod tests {
     }
 
     #[test]
-    fn normalize_fullwidth_digits_and_signs() {
+    fn normalize_fullwidth_maps_to_ascii() {
         assert_eq!(normalize_fullwidth("１"), "1");
         assert_eq!(normalize_fullwidth("＋25"), "+25");
         assert_eq!(normalize_fullwidth("－-－－"), "----");

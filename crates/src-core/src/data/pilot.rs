@@ -239,10 +239,7 @@ fn parse_record(record: &[SourceLine]) -> Result<PilotData, ParseError> {
     let adaption = Adaption::parse(adaption_str).unwrap_or(Adaption(*b"AAAA"));
     // 原典 `PilotDataList.cls:283` は不正な経験値も `DataErrorMessage` で
     // 警告するだけでレコードは維持する (実データに `…, ----, -` がある)。
-    let exp_value: i32 = super::loader::normalize_fullwidth(exp_str)
-        .parse()
-        .unwrap_or(0)
-        .min(9999);
+    let exp_value: i32 = exp_str.parse().unwrap_or(0).min(9999);
 
     // 3 行目以降: 能力値行を heuristics で探す。
     // 実 SRC は "特殊能力" マーカ + フィーチャー群が detail と stats の間に

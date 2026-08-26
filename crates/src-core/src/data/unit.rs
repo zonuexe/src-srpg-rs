@@ -331,9 +331,7 @@ fn parse_record(record: &[SourceLine]) -> Result<UnitData, ParseError> {
     // アイテム数が空欄・非数値でもレコードは捨てない。原典は個別フィールドの
     // 不正を `DataErrorMessage` (警告して既定値で継続) で扱い、`Error 0` による
     // レコード中断はコンマ数の書式エラーだけに限っている。
-    let item_num: i32 = super::loader::normalize_fullwidth(item_num_s)
-        .parse()
-        .unwrap_or(0);
+    let item_num: i32 = item_num_s.parse().unwrap_or(0);
 
     // L3: Transportation,Speed,Size,Value,ExpValue
     let mv = it
@@ -357,9 +355,7 @@ fn parse_record(record: &[SourceLine]) -> Result<UnitData, ParseError> {
     // 原典 `UnitDataList.cls:304` は不正な移動力を `DataErrorMessage`
     // (警告して既定値で継続) で扱い、レコードは捨てない。
     // 欠落 (フィールドが無い) 場合だけが `Error 0` によるレコード破棄。
-    let speed: i32 = super::loader::normalize_fullwidth(speed_s)
-        .parse()
-        .unwrap_or(0);
+    let speed: i32 = speed_s.parse().unwrap_or(0);
     let size = match size_token {
         // 原典 `UnitDataList.cls:320` も不正なサイズは警告して既定 M にする
         // (実データに `宇宙, 5, 5L, 14000, 170` のような指定がある)。
@@ -367,9 +363,7 @@ fn parse_record(record: &[SourceLine]) -> Result<UnitData, ParseError> {
         // サイズ省略 → 既定の M で補完。
         None => Size::M,
     };
-    let value: i64 = super::loader::normalize_fullwidth(value_s)
-        .parse()
-        .unwrap_or(0);
+    let value: i64 = value_s.parse().unwrap_or(0);
     let exp_value: i32 = exp_value_s
         .parse()
         .map_err(|_| err(mv.line_num, "経験値が数値ではありません。"))?;
@@ -636,10 +630,7 @@ fn parse_pilot_num(s: &str, line_num: usize) -> Result<i32, ParseError> {
         .trim_start_matches('(')
         .trim_end_matches(')')
         .trim();
-    // 実データには全角数字指定 (`ザク, MS, １, 3`) がある。原典 VB6 の
-    // `IsNumeric` / `CInt` は日本語ロケールでこれを受け付ける。
-    super::loader::normalize_fullwidth(core)
-        .parse::<i32>()
+    core.parse::<i32>()
         .map_err(|_| err(line_num, "パイロット数が数値ではありません。"))
 }
 
@@ -709,15 +700,16 @@ mod tests {
         assert_eq!(units[0].item_num, 0, "空欄のアイテム数は既定 0");
     }
 
-    /// 全角数字のパイロット数を受ける (VB6 `IsNumeric` は全角を受け付ける)。
+    /// 全角数字のパイロット数は数値として受け付けない (C# `IsNumeric` 実測)。
+    /// 原典どおり既定値 1 にフォールバックし、レコードは維持する。
     #[test]
-    fn fullwidth_pilot_num_is_accepted() {
+    fn fullwidth_pilot_num_falls_back_to_default() {
         let src = "ザクⅡF2\n\
 ザク, MS, １, 3\n\
 陸, 3, M, 1000, 30\n";
         let (units, errors) = parse_lenient(src);
         assert!(errors.is_empty(), "{errors:?}");
-        assert_eq!(units[0].pilot_num, 1);
+        assert_eq!(units[0].pilot_num, 1, "全角は既定 1 へフォールバック");
     }
 
     /// コンマが 3 個未満なら原典どおりレコードを落とす (回帰防止)。
