@@ -12,7 +12,7 @@ use crate::Settings;
 pub const CONFIG_WIDTH: u32 = 346;
 pub const CONFIG_HEIGHT: u32 = 405;
 
-/// ダイアログ上部に描画する VB6 風タイトルバーの高さ。
+/// ダイアログ上部に描画する VB5 風タイトルバーの高さ。
 /// レイアウト座標はクライアント領域基準なので、ヒット判定時にこの分 Y を引く
 /// （render 側も同値で描画する）。
 pub const TITLE_BAR_HEIGHT: i32 = 18;
@@ -38,7 +38,7 @@ impl LabelledControl {
 /// Layout for every control on the original Configuration dialog.
 #[derive(Debug, Clone, Copy)]
 pub struct ConfigurationLayout {
-    // CheckBoxes — フィールド名は元 VB6 識別子に対応。
+    // CheckBoxes — フィールド名は元 VB5 識別子に対応。
     pub message_speed_label: LabelledControl,
     pub message_speed_combo: Rect,
     pub battle_animation: LabelledControl,

@@ -432,7 +432,7 @@ fn info_pilot_sex() {
 #[test]
 fn info_pilot_infight() {
     // パイロット (実体) は level 成長後。リオ は level 1 ＝ base 160 + lv 1 = 161
-    // (VB6 `Pilot.cls:582-593`、格闘 += lv)。パイロットデータ (静的) は素の 160。
+    // (VB5 `Pilot.cls:582-593`、格闘 += lv)。パイロットデータ (静的) は素の 160。
     let app = run_unit("Set v Info(パイロット, リオ, 格闘)\n");
     assert_eq!(app.script_var("v"), "161");
 }

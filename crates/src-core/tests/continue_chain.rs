@@ -1,7 +1,7 @@
 //! `Continue <next>` で予約された次ステージを順に走らせるチェインのテスト /
 //! Multi-stage chaining via `次ステージ`.
 //!
-//! VB6 / SRC.Sharp の `ContinueCmd` は次に読むべきシナリオファイル名を
+//! VB5 / SRC.Sharp の `ContinueCmd` は次に読むべきシナリオファイル名を
 //! システム変数「次ステージ」にセットしてエピローグへジャンプする。
 //! 原典では `SRC.StartScenario(次ステージ)` がエピローグ後に呼ばれて
 //! 新しいシナリオに切替わる。

@@ -1,10 +1,10 @@
 //! シーン（画面状態）モジュール / Scene (screen state) module.
 //!
-//! VB6 原典は Form を切り替えてシーン遷移していた（`frmTitle` → `frmMain`）。
+//! VB5 原典は Form を切り替えてシーン遷移していた（`frmTitle` → `frmMain`）。
 //! 移植先では Form を持たず、シーンを enum で表現し、フロントエンドはその enum
 //! を見て描画を切り替える。
 //!
-//! Original VB6 switches `Form`s for scene transitions
+//! Original VB5 switches `Form`s for scene transitions
 //! (`frmTitle` → `frmMain`). Here we model scenes as an enum so the
 //! frontend can render based on the current variant.
 

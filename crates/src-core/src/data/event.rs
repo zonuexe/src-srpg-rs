@@ -66,7 +66,7 @@ pub fn parse(src: &str) -> Result<Vec<EventStatement>, ParseError> {
     Ok(out)
 }
 
-/// VB6 流の行継続 (` _` = 空白 + アンダースコアで行末) を結合する。
+/// VB5 流の行継続 (` _` = 空白 + アンダースコアで行末) を結合する。
 ///
 /// スパロボ戦記の `String.eve` / `Score.eve` は長い `PaintString` 等を
 /// ` _` で複数行に分けて書く。これを結合しないと行が途中で切れて
@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn line_continuation_merges() {
-        // VB6 流 ` _` 行継続。String.eve VibrationString と同型。
+        // VB5 流 ` _` 行継続。String.eve VibrationString と同型。
         let src = "\
 PaintString (10 + 5) (20 - 3 + _
             40) hello

@@ -161,7 +161,7 @@ impl PilotInstance {
 
     /// レベルに応じた能力値成長を base から再計算する。
     ///
-    /// 成長式は VB6 原典 `Pilot.cls:582-593` 準拠: **`lv = Level`**(level-1 ではなく Level そのもの。
+    /// 成長式は VB5 原典 `Pilot.cls:582-593` 準拠: **`lv = Level`**(level-1 ではなく Level そのもの。
     /// レベル 1 でも成長する)、格闘/射撃/技量/反応 `+= lv`、命中/回避 `+= 2*lv`。差分オラクル
     /// placeunit で C# SRCCore と一致を確認。成長スキル (`格闘成長` 等)・`追加レベル`・
     /// `攻撃力低成長` Option は未モデル (素の式)。`db::grown_pilot` と同一の式に保つこと。
@@ -262,7 +262,7 @@ mod tests {
 
     #[test]
     fn pilot_instance_from_data_applies_level1_growth() {
-        // VB6 `Pilot.cls:582-593` 準拠: lv=Level なのでレベル 1 でも成長が乗る
+        // VB5 `Pilot.cls:582-593` 準拠: lv=Level なのでレベル 1 でも成長が乗る
         // (格闘/射撃/技量/反応 +1・命中/回避 +2)。base = make_pilot_data の値。
         let pdata = make_pilot_data();
         let inst = PilotInstance::from_data("テストパイロット", "p1", &pdata);
@@ -443,7 +443,7 @@ mod tests {
 
     #[test]
     fn stat_growth_increases_on_level_up() {
-        // VB6 式: 格闘 += lv。level 1 → base+1、level 2 → base+2。
+        // VB5 式: 格闘 += lv。level 1 → base+1、level 2 → base+2。
         let mut pdata = make_pilot_data();
         pdata.infight = 100;
         let inst = PilotInstance::from_data("テストパイロット", "p1", &pdata);
@@ -457,7 +457,7 @@ mod tests {
 
     #[test]
     fn stat_growth_does_not_vary_by_class() {
-        // VB6 `Pilot.cls:582-593` の成長式は class 非依存 (lv のみで決まる)。
+        // VB5 `Pilot.cls:582-593` の成長式は class 非依存 (lv のみで決まる)。
         // 旧実装は class ベース rate で成長していたが、SRC 準拠では class が違っても同値。
         let mut pdata_super = make_pilot_data();
         pdata_super.class = "スーパー系".to_string();

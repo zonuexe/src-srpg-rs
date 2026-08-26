@@ -484,7 +484,7 @@ fn canonical_label(token: &str) -> Option<String> {
 ///
 /// 「name が SRC 自動発火キーワード」のときのみ multi-token ラベル
 /// として扱う。これで `Goto end:` のような control-flow + target を
-/// ラベルと誤認しない (VB6 原典では `Goto target:` の表記は許容され、
+/// ラベルと誤認しない (VB5 原典では `Goto target:` の表記は許容され、
 /// target 側の `:` は jump 時に剥がす)。
 fn canonical_label_full(name: &str, args: &[String]) -> Option<String> {
     // 1) 単一トークンの label / anchor (`プロローグ:` / `@onsen` / `*スタート:`)
@@ -513,7 +513,7 @@ fn canonical_label_full(name: &str, args: &[String]) -> Option<String> {
     //
     //    SRC.Sharp `SRCCore` 内 `HandleEvent("…")` 呼出箇所を grep して
     //    実存する name に揃えた (Friendship / Item / Damage 等の標準
-    //    auto-fire は VB6 原典に存在しないため除外)。
+    //    auto-fire は VB5 原典に存在しないため除外)。
     const AUTOFIRE_KEYWORDS: &[&str] = &[
         // 制御 / 進行
         "Turn",
@@ -996,7 +996,7 @@ fn exec_command_pc(
     stmts: &[EventStatement],
     labels: &HashMap<String, usize>,
 ) -> Result<usize, ScriptError> {
-    // VB6 風代入文の救済: `var = expr` (第 1 引数が裸の `=`) は
+    // VB5 風代入文の救済: `var = expr` (第 1 引数が裸の `=`) は
     // `Set var expr` と等価に dispatch する。
     // 実シナリオ (`UnitHP = HP(Args(1))` 等) で頻出する記法で、これを
     // catch しないと dispatcher は `UnitHP` を未登録コマンドとして
@@ -1515,7 +1515,7 @@ fn exec_command_pc(
             // `Incr var [delta]` — delta 省略時は 1。
             //
             // delta は **非数値でもエラーにしない** (0 扱い)。SRC.Sharp の
-            // `IncrCmd` は `GetArgAsDouble` を使い、非数値文字列は VB6 `Val()`
+            // `IncrCmd` は `GetArgAsDouble` を使い、非数値文字列は VB5 `Val()`
             // 流に 0 となる (例外を投げない)。実シナリオは
             // `Incr 仮変数 Mid(名前, i, 1)` のように 1 文字 (非数値) を
             // 渡してハッシュを計算する用途があり、ここでエラーにすると
@@ -2708,7 +2708,7 @@ fn exec_command_pc(
             //    `script_var("次ステージ")` を確認して、対応する .eve を
             //    新規シナリオとして起動する責務を負う。
             //
-            //    元実装: VB6 `Event.bas` / SRC.Sharp
+            //    元実装: VB5 `Event.bas` / SRC.Sharp
             //    `CmdDatas/Commands/Stage/ContinueCmd.cs:ExecInternal`
             //    に対応。
             if xargs.is_empty() {
@@ -6751,7 +6751,7 @@ fn eval_condition_args_with(app: &App, xargs: &[String]) -> bool {
 
 /// 名前から UnitInstance を引く。`uid` (Create で採番した一意 ID) /
 /// `unit_data_name` / `pilot_name` のいずれかが一致すれば真。
-/// SRC (VB6 `Option Compare Text` / Collection キー照合) はユニット/パイロット名の
+/// SRC (VB5 `Option Compare Text` / Collection キー照合) はユニット/パイロット名の
 /// 照合で全角英数字を半角と同一視する。比較用に全角 ASCII (U+FF01–U+FF5E) を
 /// 半角 (U+0021–U+007E) へ畳み込む。例: `バ５` → `バ5`。
 ///
@@ -6998,7 +6998,7 @@ pub(crate) fn fire_destruction_labels(
     );
 }
 
-/// マップ攻撃で撃破された対象用の破壊系イベント (SRC VB6 `Unit.cls:17214` /
+/// マップ攻撃で撃破された対象用の破壊系イベント (SRC VB5 `Unit.cls:17214` /
 /// `Event.bas:1744` で `破壊` と同じ `DestructionEventLabel`)。原典はマップ攻撃の
 /// 撃破に対し `破壊` ではなく **`マップ攻撃破壊 <対象>`** を発火する。対象ユニット
 /// システム変数の設定と `全滅 <party>` 発火は `破壊` と共通。プレイヤー/AI 発の
@@ -7636,7 +7636,7 @@ fn is_comparison_op(s: &str) -> bool {
         || s.eq_ignore_ascii_case("like")
 }
 
-/// VB6 `Like` 演算子のパターンマッチ。
+/// VB5 `Like` 演算子のパターンマッチ。
 ///
 /// パターン特殊文字:
 /// - `*`  任意の 0 文字以上にマッチ
@@ -7896,7 +7896,7 @@ fn collect_until_end(app: &App, start: usize, stmts: &[EventStatement]) -> (Stri
 
 /// SRC `Talk` ボディに含まれる HTML 書式タグを除去・変換する。
 ///
-/// SRC は Talk メッセージ中に VB6 Rich TextBox 用の簡易タグを許容する:
+/// SRC は Talk メッセージ中に VB5 Rich TextBox 用の簡易タグを許容する:
 ///   `<B>`, `</B>`, `<I>`, `</I>`, `<BIG>`, `</BIG>`, `<SMALL>`, `</SMALL>`,
 ///   `<SIZE=n>`, `</SIZE>`, `<COLOR=...>`, `</COLOR>`
 ///
@@ -8251,7 +8251,7 @@ fn try_function_lhs_assign(app: &mut App, lhs: &str, value: &str) -> bool {
     let arg = lhs[open + 1..lhs.len() - 1].trim();
     let lower = func_name.to_ascii_lowercase();
 
-    // 数値変換: 非数値は 0 扱い (SRC.Sharp VB6 `Val()` 相当)。
+    // 数値変換: 非数値は 0 扱い (SRC.Sharp VB5 `Val()` 相当)。
     let n: i64 = value
         .parse()
         .unwrap_or_else(|_| try_eval_int(value).unwrap_or(0));
@@ -8497,7 +8497,7 @@ fn split_top_level_concat(inner: &str) -> Vec<&str> {
 
 /// `&` 連結演算子の畳み込み。引数列で `"&"` トークンを見つけたら前後を
 /// 空白なしで連結する。`["abc", "&", "xyz"]` → `["abcxyz"]`。
-/// 元 SRC は VB6 風の文字列連結 `a & b` を使うため。
+/// 元 SRC は VB5 風の文字列連結 `a & b` を使うため。
 fn collapse_concat(args: Vec<String>) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut i = 0;
@@ -9073,7 +9073,7 @@ fn eval_script_function(app: &App, name: &str, args_str: &str) -> Option<String>
         }
         "String" => {
             // `String(count, s)` — s を count 回繰り返した文字列。
-            // VB6 では String(N, char) で char 単一文字だが、SRC は `String(3, "0 ")`
+            // VB5 では String(N, char) で char 単一文字だが、SRC は `String(3, "0 ")`
             // のように任意文字列も渡される (スパロボ戦記 で 6 回使用)。
             if args.len() < 2 {
                 return None;
@@ -9083,7 +9083,7 @@ fn eval_script_function(app: &App, name: &str, args_str: &str) -> Option<String>
             Some(s.repeat(n))
         }
         "Wide" => {
-            // `Wide(s)` — 半角文字を全角に変換。VB6 の StrConv(s, vbWide) 相当。
+            // `Wide(s)` — 半角文字を全角に変換。VB5 の StrConv(s, vbWide) 相当。
             // 半角 ASCII / 空白に加え、半角カタカナ (濁点・半濁点の合成含む) も
             // 全角カタカナへ変換する (SRC.NET `Expression.cs` の VbStrConv.Wide 準拠)。
             let s = fn_arg_value(app, args.first()?);
@@ -9101,12 +9101,12 @@ fn eval_script_function(app: &App, name: &str, args_str: &str) -> Option<String>
         }
         "Trim" => {
             // `Trim(s)` — 先頭末尾の半角空白を除去。内部空白は保持。
-            // VB6 の Trim$ は全角空白 (U+3000) は除去しない。
+            // VB5 の Trim$ は全角空白 (U+3000) は除去しない。
             let s = fn_arg_value(app, args.first()?);
             Some(s.trim_matches(' ').to_string())
         }
         "Asc" => {
-            // `Asc(s)` — VB6 互換: SJIS (CP932) 経由で文字コードを返す。
+            // `Asc(s)` — VB5 互換: SJIS (CP932) 経由で文字コードを返す。
             // ASCII (0..=0x7F) は素直にそのバイト値、半角カナ等の単バイト SJIS は
             // そのバイト値、2 バイト SJIS は `high << 8 | low` (例: "あ" → 0x82A0)。
             // SJIS にエンコードできない文字は Unicode コードポイントに fallback。
@@ -9131,11 +9131,11 @@ fn eval_script_function(app: &App, name: &str, args_str: &str) -> Option<String>
             Some(code.to_string())
         }
         "Chr" => {
-            // `Chr(n)` — VB6 互換: SJIS (CP932) コードを解釈して 1 文字を返す。
+            // `Chr(n)` — VB5 互換: SJIS (CP932) コードを解釈して 1 文字を返す。
             // - 0..=0xFF: 単バイト SJIS (ASCII / 半角カナ / 制御コード)
             // - 0x100..: 2 バイト SJIS `high << 8 | low` として decode (例: 0x82A0 → "あ")
             // SRC.Sharp の Chr は `(char)long` で Unicode コードポイント扱い (XXX
-            // 文字コード という FIXME 付き) だが、こちらは VB6 寄りで実装する。
+            // 文字コード という FIXME 付き) だが、こちらは VB5 寄りで実装する。
             let n: u32 = numeric_arg(app, args.first()?).map(|v| v.max(0.0) as u32)?;
             let bytes: Vec<u8> = if n <= 0xFF {
                 vec![n as u8]
@@ -9238,7 +9238,7 @@ fn eval_script_function(app: &App, name: &str, args_str: &str) -> Option<String>
             // `Round(x [, digits])` — 四捨五入。digits=0 なら整数。
             // SRC.NET `Expression.cs::CallFunction "round"` 準拠で +∞ 方向への
             // 半数切り上げ (floor(scaled) 後、小数部 >= 0.5 なら +1)。
-            // VB6 の銀行丸めとも Rust の round (ゼロから遠ざける) とも異なり、
+            // VB5 の銀行丸めとも Rust の round (ゼロから遠ざける) とも異なり、
             // 負数では +∞ 方向に丸める。例: Round(-2.5) = -2、Round(2.5) = 3。
             let v = numeric_arg(app, args.first()?)?;
             let d: i32 = args
@@ -9297,7 +9297,7 @@ fn eval_script_function(app: &App, name: &str, args_str: &str) -> Option<String>
             Some(format_num(v.atan()))
         }
         "Log" => {
-            // `Log(x)` — 自然対数 (VB6 `Log` 同等、SRC 準拠)。x <= 0 は None。
+            // `Log(x)` — 自然対数 (VB5 `Log` 同等、SRC 準拠)。x <= 0 は None。
             let v = numeric_arg(app, args.first()?)?;
             if v <= 0.0 {
                 return None;
@@ -9306,7 +9306,7 @@ fn eval_script_function(app: &App, name: &str, args_str: &str) -> Option<String>
         }
         "Sgn" => {
             // `Sgn(x)` — 符号関数: x > 0 → 1, x < 0 → -1, x == 0 → 0。
-            // VB6 `Sgn` 同等 (`Math.Sign`)。
+            // VB5 `Sgn` 同等 (`Math.Sign`)。
             let v = numeric_arg(app, args.first()?)?;
             Some(format_num(if v > 0.0 {
                 1.0
@@ -9317,7 +9317,7 @@ fn eval_script_function(app: &App, name: &str, args_str: &str) -> Option<String>
             }))
         }
         "Mod" => {
-            // `Mod(a, b)` — 整数剰余。`a Mod b` 演算子も VB6/SRC で存在するが、
+            // `Mod(a, b)` — 整数剰余。`a Mod b` 演算子も VB5/SRC で存在するが、
             // 関数形式は本実装で `Mod(a, b)` をサポートする (SRC.Sharp parity)。
             // 0 除算は 0 を返す (SRC は実行時エラーだが本実装は黙殺)。
             if args.len() < 2 {
@@ -9328,7 +9328,7 @@ fn eval_script_function(app: &App, name: &str, args_str: &str) -> Option<String>
             if b == 0.0 {
                 return Some("0".to_string());
             }
-            // VB6 `Mod` は整数演算: a, b を整数に切り捨ててから剰余。
+            // VB5 `Mod` は整数演算: a, b を整数に切り捨ててから剰余。
             let ai = a as i64;
             let bi = b as i64;
             if bi == 0 {
@@ -9498,7 +9498,7 @@ fn eval_script_function(app: &App, name: &str, args_str: &str) -> Option<String>
         "Format" => {
             // `Format(value, "fmt")` — 簡易実装: 数値ならそのまま、"#,##0" 形式は
             // 桁区切りカンマを付与、"0.00" 形式は小数桁固定、`%` は 100 倍 + %付与。
-            // それ以外の VB6 format 構文 ($, E+ 等) はサポートしない。
+            // それ以外の VB5 format 構文 ($, E+ 等) はサポートしない。
             let v_str = fn_arg_value(app, args.first()?);
             let fmt = args
                 .get(1)
@@ -10617,7 +10617,7 @@ fn split_function_args(s: &str) -> Vec<&str> {
 /// 元 SRC の `Info([データ区分,]データ,情報種類,…)` を解釈する。
 /// 引数文字列は既に `expand_vars` で展開済 (ネスト関数も解決済)。
 ///
-/// 未対応の組合せは空文字列を返す（VB6 SRC では type error になるが、
+/// 未対応の組合せは空文字列を返す（VB5 SRC では type error になるが、
 /// シナリオ既存コードは Info() が空を返す前提でフォールバックを書いている
 /// ことが多いので互換性優先）。
 fn info_query(app: &App, args: &[&str]) -> String {
@@ -11393,11 +11393,11 @@ fn canonical_function_name(s: &str) -> String {
     }
 }
 
-/// VB6 風の `Format(value, "##,##0.00")` パターンを最小限実装。
+/// VB5 風の `Format(value, "##,##0.00")` パターンを最小限実装。
 /// - `0` / `#` の数で小数部桁数を決定（末尾は固定 / トリム）。
 /// - `,` がパターン内にあれば整数部に桁区切りを挿入。
 /// - `%` は数値を 100 倍し、末尾に `%` を付与（`%` 1 個につき ×100）。
-///   SRC.NET の `Format`(= VB6 Format) 準拠。`%` の出力位置は末尾に統一。
+///   SRC.NET の `Format`(= VB5 Format) 準拠。`%` の出力位置は末尾に統一。
 /// - その他の未対応文字は無視。
 fn format_with_pattern(v: f64, fmt: &str) -> String {
     // `%` をパターンから取り除き、個数分だけ値を 100 倍する。
@@ -11442,11 +11442,11 @@ fn format_number_pattern(v: f64, fmt: &str) -> String {
         .count();
     let want_thousands = int_part_fmt.contains(',');
     // 整数部の `0` 数を数えて左 0 埋めの最小桁数を決める。
-    // VB6 `Format(42, "00000")` → "00042" のような桁固定 zero-padding 対応。
+    // VB5 `Format(42, "00000")` → "00042" のような桁固定 zero-padding 対応。
     let int_zero_pad: usize = int_part_fmt.chars().filter(|c| *c == '0').count();
 
-    // VB6 `Format` は銀行丸め (round half to even) を用いる。
-    // SRC.NET `VB.Compatibility.VB6.Support.Format` 準拠。
+    // VB5 `Format` は銀行丸め (round half to even) を用いる。
+    // SRC.NET `VB.Compatibility.VB5.Support.Format` 準拠。
     // 例: Format(0.5,"0")="0"、Format(2.5,"0")="2"、Format(0.125,"0.00")="0.12"。
     let factor = 10f64.powi(max_digits as i32);
     let rounded = round_half_to_even(v * factor) / factor;
@@ -11524,7 +11524,7 @@ fn fullwidth_semivoiced(base: char) -> Option<char> {
     }
 }
 
-/// 半角文字を全角に変換する (VB6 `StrConv(s, vbWide)` 相当)。
+/// 半角文字を全角に変換する (VB5 `StrConv(s, vbWide)` 相当)。
 /// - 半角空白 (0x20) → 全角空白 (U+3000)
 /// - 半角 ASCII (0x21..=0x7E) → 全角形 (U+FF01..=U+FF5E)
 /// - 半角カタカナ (U+FF61..=U+FF9D) → 全角カタカナ。直後の濁点 ﾞ (FF9E) /
@@ -11586,7 +11586,7 @@ fn insert_thousands_separator(s: &str) -> String {
 // Shift-JIS バイト列操作ヘルパー
 // SRC の *B 系関数 (LenB / LeftB / RightB / MidB / InStrB / InStrRevB) は
 // Shift-JIS エンコーディング基準のバイト位置を使う。
-// VB6 実装と同様に ASCII 文字=1バイト、それ以外 (日本語等)=2バイトで近似する。
+// VB5 実装と同様に ASCII 文字=1バイト、それ以外 (日本語等)=2バイトで近似する。
 // ──────────────────────────────────────────────────────────────────────────────
 
 /// 1 文字あたりの Shift-JIS バイト数を返す (ASCII → 1, 非ASCII → 2)
@@ -12617,7 +12617,7 @@ fn fill_dangling_operands(s: &str) -> String {
 /// 判定など、「式中の演算子を認識する」必要のある全箇所はこの関数を参照する。
 ///
 /// 以前は各所が独自に `'+' | '-' | '*' | '/' | ...` をハードコードしていたため、
-/// `tokenize_expr` に VB6 整数除算 `\` と累乗 `^` を追加した際に分割側の更新が
+/// `tokenize_expr` に VB5 整数除算 `\` と累乗 `^` を追加した際に分割側の更新が
 /// 漏れ、`(N - 1) \ 8 + 1` 等が評価されない不具合を生んだ。これを一元化し、
 /// `arith_operator_char_set_matches_tokenizer` テストで `tokenize_expr` との
 /// 整合を機械的に保証する (新演算子の追加漏れをテストが検出する)。
@@ -12636,7 +12636,7 @@ enum ExprTok {
     Minus,
     Star,
     Slash,
-    IntDiv, // `\` VB6 integer division
+    IntDiv, // `\` VB5 integer division
     Mod,    // `Mod` keyword — modulo
     Caret,  // `^` exponentiation
     LParen,
@@ -12678,7 +12678,7 @@ fn tokenize_expr(s: &str) -> Vec<ExprTok> {
                 i += 1;
             }
             b'\\' => {
-                // VB6 integer division
+                // VB5 integer division
                 out.push(ExprTok::IntDiv);
                 i += 1;
             }
@@ -12829,7 +12829,7 @@ fn parse_term(tokens: &[ExprTok], idx: &mut usize) -> Option<f64> {
                 left = if r != 0.0 { left / r } else { 0.0 };
             }
             ExprTok::IntDiv => {
-                // VB6 integer division: truncate toward zero。除数 0 は SRC 同様 0。
+                // VB5 integer division: truncate toward zero。除数 0 は SRC 同様 0。
                 *idx += 1;
                 let r = parse_power(tokens, idx)?;
                 left = if r as i64 != 0 {
@@ -12839,7 +12839,7 @@ fn parse_term(tokens: &[ExprTok], idx: &mut usize) -> Option<f64> {
                 };
             }
             ExprTok::Mod => {
-                // VB6 Mod: integer modulo。除数 0 は SRC 同様 0。
+                // VB5 Mod: integer modulo。除数 0 は SRC 同様 0。
                 *idx += 1;
                 let r = parse_power(tokens, idx)?;
                 left = if r as i64 != 0 {
@@ -12937,7 +12937,7 @@ fn parse_comparison(tokens: &[ExprTok], idx: &mut usize) -> Option<f64> {
     Some(left)
 }
 
-/// `Not` 演算子レベル: 比較より緩く、`And`/`Or` より固く束縛する (VB6 / SRC.Sharp 準拠)。
+/// `Not` 演算子レベル: 比較より緩く、`And`/`Or` より固く束縛する (VB5 / SRC.Sharp 準拠)。
 /// `Not 1 = 2` → `Not (1 = 2)` → `Not 0` → 1。`Not Not x` も許容 (右再帰)。
 /// `Not` が無ければ比較レベルへ素通しする (非 Not 式の挙動は不変)。
 fn parse_not(tokens: &[ExprTok], idx: &mut usize) -> Option<f64> {
@@ -13554,7 +13554,7 @@ pub(crate) fn map_attack(
             continue;
         };
         // 防御特性による装甲調整 (弱点→半減 / 吸収→無視)。通常戦闘と一貫させ、
-        // マップ攻撃でも VB6 `Unit.cls:6949-6951` の防御特性を反映する。
+        // マップ攻撃でも VB5 `Unit.cls:6949-6951` の防御特性を反映する。
         app.apply_defense_armor_mod(def_idx, &weapon.class, &mut def_unit);
         // マップ未設定時は terrain_id=0 (平地) として進める。
         let terrain_id = app
@@ -13604,7 +13604,7 @@ pub(crate) fn map_attack(
                     // (これが無いとスクリプトのマップ兵器で撃破してもシナリオが進まない)。
                     fire_destruction_labels(app, &vp, &vu, vparty);
                 } else {
-                    // プレイヤー/AI 発のマップ攻撃: 原典 (VB6 `Unit.cls:17214`) 準拠で
+                    // プレイヤー/AI 発のマップ攻撃: 原典 (VB5 `Unit.cls:17214`) 準拠で
                     // `破壊` ではなく `マップ攻撃破壊 <対象>` を発火する。`全滅`/勝敗は共通。
                     fire_map_attack_destruction_labels(app, &vp, &vu, vparty);
                 }
@@ -15943,7 +15943,7 @@ Set c StrCmp(\"xyz\", \"abc\")
         // 抜本対策の要: `tokenize_expr` が算術演算子トークンを生む記号は
         // すべて `is_arith_operator_char` に含まれること。新演算子を
         // tokenize_expr に足して SoT 更新を忘れると本テストが落ちる
-        // (VB6 整数除算 `\` / 累乗 `^` 取りこぼし型バグの再発防止)。
+        // (VB5 整数除算 `\` / 累乗 `^` 取りこぼし型バグの再発防止)。
         use ExprTok::*;
         for c in 0u8..=127u8 {
             let ch = c as char;
@@ -16807,7 +16807,7 @@ Exit
         execute(&mut app, &stmts).unwrap();
 
         // 初期状態 (level 1): 格闘 = base 100 + lv 1 = 101
-        // (VB6 `Pilot.cls:582-593` 準拠でレベル 1 でも +lv 成長する)。
+        // (VB5 `Pilot.cls:582-593` 準拠でレベル 1 でも +lv 成長する)。
         let initial = expand_vars(&app, "Info(パイロット, リオ, 格闘)")
             .parse::<i32>()
             .unwrap_or(0);
@@ -18386,7 +18386,7 @@ MapWeapon リオ メガキャノン 6 5
         );
     }
 
-    /// SRC VB6 `Unit.cls:17214`: プレイヤー/AI 発のマップ攻撃 (is_event=false) の撃破は
+    /// SRC VB5 `Unit.cls:17214`: プレイヤー/AI 発のマップ攻撃 (is_event=false) の撃破は
     /// `破壊` ではなく **`マップ攻撃破壊 <対象>`** を発火する。スクリプトの素の `MapAttack`
     /// (is_event=true) はポートの進行保証のため従来どおり `破壊` を発火する。
     #[test]

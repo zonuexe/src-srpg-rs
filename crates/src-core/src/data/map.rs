@@ -31,7 +31,7 @@ pub struct MapCell {
 
 /// マップ全体 / Whole map grid.
 ///
-/// 元 VB6 は 1-origin の配列だが、Rust 側では 0-origin で持つ。
+/// 元 VB5 は 1-origin の配列だが、Rust 側では 0-origin で持つ。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MapData {
     pub width: u32,
@@ -125,7 +125,7 @@ pub fn demo() -> MapData {
 /// [optional: "Layer" + width * height pairs]
 /// ```
 ///
-/// VB6 の `Input #` はカンマ・空白・改行・タブをすべてセパレータとして
+/// VB5 の `Input #` はカンマ・空白・改行・タブをすべてセパレータとして
 /// 扱い、ダブルクオート文字列は囲みを取り除いて 1 トークンとして読む。
 /// 本実装も同等の挙動。`#` 行頭コメント / `//` 行末コメントは未サポート
 /// （元ファイルにも含まれないため）。

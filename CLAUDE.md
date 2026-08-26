@@ -68,7 +68,7 @@ nix --extra-experimental-features 'nix-command flakes' develop --command just <r
 **`src-core`** — プラットフォーム非依存のゲームロジック
 - `#![forbid(unsafe_code)]`
 - WASM 互換: `std::fs` を使わず VFS、スレッド非使用、時刻は `instant` クレート
-- 元 VB6 の `.bas` / `.cls` を 1 モジュール（または型）単位で移植
+- 元 VB5 の `.bas` / `.cls` を 1 モジュール（または型）単位で移植
 
 **`src-web`** — WASM フロントエンド（wasm-bindgen + Canvas 2D）
 - Archive（ZIP展開）/ Assets / Audio / Render モジュール
@@ -143,7 +143,7 @@ PilotInstance (runtime)   UnitInstance (runtime)    Tile (x,y,terrain_id)
 
 ### 命名
 
-- VB6 原典の日本語名は英語化し、コメントで原名を併記
+- VB5 原典の日本語名は英語化し、コメントで原名を併記
 - ユニット識別子: `uid`（一意 ID）、データ参照: `*_data_name`（名前文字列）
 
 ### `.eve` 変数スコープ
@@ -161,6 +161,15 @@ PilotInstance (runtime)   UnitInstance (runtime)    Tile (x,y,terrain_id)
 ---
 
 ## SRC 原典の参照
+
+> **原典 SRC は Visual Basic 5.0 製**（VB6 ではない）。誤記しないこと。
+> 根拠: 配布バイナリ `srcall-2_2_33-111106/Src.exe` / `MapEdit.exe` が
+> `MSVBVM50.DLL` をインポートし (`MSVBVM60` は 0 件)、同梱 `Readme.txt` の
+> 動作環境も「Visual Basic Ver.5.0ランタイムライブラリ(SP3)」と明記する。
+> `SRC.VBP` に `[MS Transaction Server]` セクションがあるため VB6 と
+> 誤認しやすいが、コンパイル済みバイナリが正。
+> なお vendored な `SRC.Sharp/` (C# 移植の上流リポジトリ) は自身のドキュメント
+> で「VB6」と書いているが、そちらは上流の記述なので書き換えない。
 
 原典 SRC / SRC.NET の仕様を確認するときは **`SRC.Sharp/SRC.Sharp.Help/src/menu.md`**
 をインデックスとして使う。各機能ドキュメントへのリンクが目次形式で網羅されており、
@@ -188,7 +197,7 @@ C# 実装 (`SRC.Sharp/SRC.NET/`) を読む前に、まず menu.md でドキュ�
 | スレッド化 | WASM 単一スレッド |
 | ブロッキング I/O | async/await で非同期化すること |
 | 浮動小数点の等値比較 | 移動範囲計算等は整数に統一 |
-| VB6 コードの直訳 | Rust idiom に合わせて再設計 |
+| VB5 コードの直訳 | Rust idiom に合わせて再設計 |
 
 ---
 

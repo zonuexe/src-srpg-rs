@@ -5,18 +5,18 @@
 //! 全コマンドを 1 箇所で宣言する。
 //!
 //! - **Implemented**: `event_runtime::exec_command_pc` に対応 match arm がある。
-//! - **Stub**: 構文受理のみ (VB6 互換の no-op)。dispatcher が即 `Ok(pc+1)` で返す。
+//! - **Stub**: 構文受理のみ (VB5 互換の no-op)。dispatcher が即 `Ok(pc+1)` で返す。
 //! - **ControlFlow**: 制御フロー (If/For/Goto 等)。dispatcher 前段で処理。
 //!
-//! このカタログは VB6 `Event.bas::CmdData` および SRC-Sharp `SRC.Sharp.Event` の
-//! コマンド集合と比較するためのインデックスとしても使う (#4 — VB6 coverage)。
+//! このカタログは VB5 `Event.bas::CmdData` および SRC-Sharp `SRC.Sharp.Event` の
+//! コマンド集合と比較するためのインデックスとしても使う (#4 — VB5 coverage)。
 
 /// コマンドの実装ステータス。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandKind {
     /// `exec_command_pc` の match に対応 arm がある実装済コマンド。
     Implemented,
-    /// 構文受理のみ。実機能は未実装 (VB6 互換のため受理しないとシナリオが
+    /// 構文受理のみ。実機能は未実装 (VB5 互換のため受理しないとシナリオが
     /// 全停止するもの)。
     Stub,
     /// 制御フロー (`Goto` / `If` / `For` 等)。dispatcher 前段で特別扱い。
@@ -26,13 +26,13 @@ pub enum CommandKind {
 /// カタログ 1 エントリ。
 #[derive(Debug, Clone, Copy)]
 pub struct CommandSpec {
-    /// 表示用の標準綴り (なるべく CamelCase で VB6 / SRC.Sharp に合わせる)。
+    /// 表示用の標準綴り (なるべく CamelCase で VB5 / SRC.Sharp に合わせる)。
     pub name: &'static str,
     /// 追加で受理する小文字 alias。`name` 自体の lowercase は自動で含まれる
     /// ので、ここには `gameclear` ↔ `win` のような別綴りだけ書く。
     pub aliases: &'static [&'static str],
     pub kind: CommandKind,
-    /// 1 行の説明。VB6 リファレンスに対応する概要を書く。
+    /// 1 行の説明。VB5 リファレンスに対応する概要を書く。
     pub summary: &'static str,
 }
 
@@ -53,7 +53,7 @@ impl CommandSpec {
 
 /// 全カタログ。**新規コマンド追加時は必ずここにも 1 行加える**。
 ///
-/// 順序は VB6 `Event.bas` のおおよそのカテゴリ順に揃える。
+/// 順序は VB5 `Event.bas` のおおよそのカテゴリ順に揃える。
 pub const COMMAND_CATALOG: &[CommandSpec] = &[
     // ---- 制御フロー -----------------------------------------------------
     sp("Goto", &[], CommandKind::ControlFlow, "ラベルへジャンプ"),
@@ -847,14 +847,14 @@ pub fn lookup(name: &str) -> Option<&'static CommandSpec> {
 ///
 /// いずれもエラーにはしない。シナリオ進行は止めない。
 ///
-/// # VB6 原典との対応
+/// # VB5 原典との対応
 ///
 /// `SRC_20121125/CmdData.cls::Parse` の `Case Else` (line 524-580) では、
 /// 未知の name は **すべて自動的に `CallCmd` に書き換え** られ、ラベルが
 /// 未定義であっても `ArgsType = UndefinedType` で記録するだけで parse は
 /// 成功扱いとなる (実行時に silent skip)。 fuzzy match や typo 補正は
 /// 原典にも無いので本実装でも導入しない。`Retunr` のような typo は
-/// 警告ログを出すだけで silent OK (= VB6 と挙動一致) で済ませる。
+/// 警告ログを出すだけで silent OK (= VB5 と挙動一致) で済ませる。
 pub fn handle_unrecognized(name: &str, line: usize) {
     match lookup(name) {
         Some(spec) if spec.kind == CommandKind::Stub => {

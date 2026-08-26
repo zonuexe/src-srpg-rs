@@ -1,13 +1,13 @@
 //! タイトル画面のロジック層 / Title screen logic layer.
 //!
-//! 元実装: `SRC_20121125/Title.frm` (`frmTitle`)。VB6 の Form をピクセル単位の
+//! 元実装: `SRC_20121125/Title.frm` (`frmTitle`)。VB5 の Form をピクセル単位の
 //! 抽象レイアウトに変換し、描画フロントエンド（`src-web` 等）へ提供する。
 //!
 //! 元 .frm の座標値は twips（1/20 pt）なので `/ 15` でピクセル化している
 //! （ScaleMode=3 = ピクセル）。
 
 /// 元 Title.frm のクライアント領域サイズ（ピクセル）。
-/// Original VB6 form ClientWidth / ClientHeight in pixels.
+/// Original VB5 form ClientWidth / ClientHeight in pixels.
 pub const TITLE_WIDTH: u32 = 386;
 pub const TITLE_HEIGHT: u32 = 233;
 
@@ -28,7 +28,7 @@ impl Rect {
 
 /// タイトル画面の各コントロール配置 / Layout for each title-screen control.
 ///
-/// VB6 の Form/Frame ネストを潰して、すべて Form クライアント座標（ピクセル）に
+/// VB5 の Form/Frame ネストを潰して、すべて Form クライアント座標（ピクセル）に
 /// 平坦化してある。元コントロール名はフィールド名のコメントを参照。
 #[derive(Debug, Clone, Copy)]
 pub struct TitleLayout {
@@ -91,7 +91,7 @@ pub const LICENSE_NOTICE: &str = "This program is distributed under the terms of
 
 /// 元: `Form_Load` で組み立てている
 /// `"Ver " & App.Major & "." & App.Minor & "." & App.Revision & "a"`。
-/// VB6 の `App` プロパティは Cargo パッケージ版で代替する。
+/// VB5 の `App` プロパティは Cargo パッケージ版で代替する。
 pub fn version_string() -> String {
     format!("Ver {}a", env!("CARGO_PKG_VERSION"))
 }

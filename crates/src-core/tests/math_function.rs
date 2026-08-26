@@ -2,7 +2,7 @@
 //! `Min` / `Max`) のエッジケース。
 //!
 //! SRC.Sharp `SRCCoreTests/Expressions/MathFunctionTests.cs` 等を参考に、
-//! VB6 原典 + .NET Math semantics と一致しているかを検証する。
+//! VB5 原典 + .NET Math semantics と一致しているかを検証する。
 //!
 //! 著作権配慮: SRC オリジナルコードは含まない。
 
@@ -51,7 +51,7 @@ fn abs_decimal() {
 }
 
 // ============================================================
-//  Int (Floor semantics, VB6 / SRC.Sharp 共通)
+//  Int (Floor semantics, VB5 / SRC.Sharp 共通)
 // ============================================================
 
 #[test]

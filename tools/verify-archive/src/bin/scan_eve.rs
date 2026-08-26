@@ -179,7 +179,7 @@ fn main() -> ExitCode {
             if !is_command_like(name) {
                 continue;
             }
-            // VB6 風代入文 `name = expr` は runtime で `Set name expr` に解釈
+            // VB5 風代入文 `name = expr` は runtime で `Set name expr` に解釈
             // されるので unknown 扱いしない。
             if args.first().map(String::as_str) == Some("=") {
                 continue;

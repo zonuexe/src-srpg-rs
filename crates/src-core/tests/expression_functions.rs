@@ -1,7 +1,7 @@
 //! 関数式 (`expand_vars` / `eval_script_function`) のエッジケース。
 //!
 //! SRC.Sharp `SRCCoreTests/Expressions/*` を参考に、実シナリオで多用される
-//! 関数の挙動をユニットテストとして固定する。VB6 原典の semantic から
+//! 関数の挙動をユニットテストとして固定する。VB5 原典の semantic から
 //! ずれていたら検出できるようにする。
 //!
 //! 著作権配慮: SRC オリジナルコードは含まない。
@@ -130,7 +130,7 @@ Set b Round(3.149,2)
 
 #[test]
 fn int_floors_toward_negative_infinity() {
-    // VB6 / SRC.Sharp Int() は Floor 仕様 (truncate-to-zero ではない)。
+    // VB5 / SRC.Sharp Int() は Floor 仕様 (truncate-to-zero ではない)。
     // SRC.Sharp `MathFunctionTests.cs::Int_NegativeDecimal_TruncatesDown`
     // → Math.Floor(-3.1) = -4 を要求。
     let app = run(r#"
@@ -320,7 +320,7 @@ Set m Sgn(-7)
 
 #[test]
 fn mod_function_returns_integer_remainder() {
-    // SRC.Sharp と VB6 の Mod は整数演算: 10 mod 3 = 1, (-10) mod 3 = -1
+    // SRC.Sharp と VB5 の Mod は整数演算: 10 mod 3 = 1, (-10) mod 3 = -1
     let app = run(r#"
 Set a Mod(10,3)
 Set b Mod(20,7)
@@ -729,7 +729,7 @@ Set b Format(1000000.789,"#,##0.0")
 
 #[test]
 fn format_percent_pattern() {
-    // `%` は値を 100 倍し末尾に % を付与 (SRC doc / VB6 Format 準拠)
+    // `%` は値を 100 倍し末尾に % を付与 (SRC doc / VB5 Format 準拠)
     let app = run(r##"
 Set a Format(0.5,"0%")
 Set b Format(0.125,"0.0%")
@@ -742,7 +742,7 @@ Set c Format(1.5,"#0%")
 
 #[test]
 fn format_uses_bankers_rounding_at_integer() {
-    // VB6 Format は銀行丸め (round half to even)。
+    // VB5 Format は銀行丸め (round half to even)。
     // 0.5→0, 1.5→2, 2.5→2, 3.5→4 (タイは偶数側へ)。
     let app = run(r#"
 Set a Format(0.5,"0")

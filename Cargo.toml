@@ -28,7 +28,7 @@ serde_json = "1"
 # が落ちる)。`unicode-case` は必須、他の unicode-* もまとめて有効化する。
 regex = { version = "1", default-features = false, features = ["std", "perf", "unicode-case", "unicode-perl"] }
 
-# 元の SRC は VB6 製で描画コストは低い / Original SRC is VB6, low render cost.
+# 元の SRC は VB5 製で描画コストは低い / Original SRC is VB5, low render cost.
 # wasm のサイズ/速度のバランスを優先 / Balance wasm size and speed.
 [profile.release]
 opt-level = "s"

@@ -15,7 +15,7 @@
 pub fn decode_text(bytes: &[u8]) -> String {
     // MS-DOS の EOF マーカー (0x1A / Ctrl-Z) 以降を切り捨てる。
     // 原典 SRC は `Open fname For Input` + `Line Input #` でテキストを読むため、
-    // VB6 (DOS 由来) のファイル入出力が 0x1A を EOF とみなしてそこで読み終える。
+    // VB5 (DOS 由来) のファイル入出力が 0x1A を EOF とみなしてそこで読み終える。
     // 実コーパスには 0x1A で終わる data ファイルがあり、切り捨てないと
     // 末尾に 0x1A だけのレコードが生まれて「基本属性行が見つかりません」に
     // なる。Shift_JIS の 2 バイト目は 0x40 以上なので、単独の 0x1A を
@@ -167,7 +167,7 @@ pub fn split_records(lines: &[SourceLine]) -> Vec<Vec<SourceLine>> {
 /// **数値フィールドには使わないこと。** C# 移植の `IsNumeric`
 /// (`VB/Information.cs` → `decimal.TryParse`) は全角数字を受け付けない
 /// ことを実測で確認済み (`１` / `＋25` いずれも ja-JP でも false)。
-/// VB6 側は実行環境が無く未検証のため、数値は半角のみを受け付ける
+/// VB5 側は実行環境が無く未検証のため、数値は半角のみを受け付ける
 /// C# 準拠とし、不正値は原典どおり既定値へフォールバックさせる。
 ///
 /// 用途は地形適応の解釈に限る。原典 `PilotDataList.cls:270` の判定は
@@ -196,7 +196,7 @@ pub fn normalize_fullwidth(s: &str) -> String {
 
 /// SRC がシナリオデータとして読み込むファイルの basename 一覧。
 ///
-/// 原典 VB6 `SRC.bas::IncludeData` / `LoadData` が `Data\` 配下で
+/// 原典 VB5 `SRC.bas::IncludeData` / `LoadData` が `Data\` 配下で
 /// `FileExists` を確かめて読むファイル名と一致させる。
 pub const DATA_FILE_BASENAMES: &[&str] = &[
     "alias.txt",

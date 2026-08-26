@@ -1,13 +1,13 @@
 //! Math 関数のオラクル準拠テスト (Int / Round / RoundUp / RoundDown / Sqr /
 //! Abs / Min / Max / 三角関数)。
 //!
-//! 突合の基準は **VB6 原典 `Expression.bas` (SRC_20121125)**。C# 移植
+//! 突合の基準は **VB5 原典 `Expression.bas` (SRC_20121125)**。C# 移植
 //! SRC.Sharp `SRCCoreTests/Expressions/MathFunction*` も参照したが、Round の
-//! 負の半数で SRC.Sharp は `MidpointRounding.AwayFromZero` を使い VB6 と乖離する
-//! (`Round(-2.5)`: VB6=-2 / SRC.Sharp=-3)。本実装は VB6 準拠 (-2) が正しいため、
-//! ここでは **VB6 原典の値** を pin する。
+//! 負の半数で SRC.Sharp は `MidpointRounding.AwayFromZero` を使い VB5 と乖離する
+//! (`Round(-2.5)`: VB5=-2 / SRC.Sharp=-3)。本実装は VB5 準拠 (-2) が正しいため、
+//! ここでは **VB5 原典の値** を pin する。
 //!
-//! VB6 Round 系の実装 (Expression.bas:2991):
+//! VB5 Round 系の実装 (Expression.bas:2991):
 //!   num = Int(ldbl * 10 ^ digits)         ' Int = floor (−∞方向)
 //!   round    : if frac >= 0.5 then num+1   ' floor-then-+1 = +∞方向の半数丸め
 //!   roundup  : if frac >  0   then num+1   ' = ceil
@@ -46,7 +46,7 @@ fn int_is_floor_not_truncate() {
 }
 
 // ============================================================
-//  Round — VB6: floor(x*10^d) して frac>=0.5 で +1 (= +∞方向の半数丸め)
+//  Round — VB5: floor(x*10^d) して frac>=0.5 で +1 (= +∞方向の半数丸め)
 // ============================================================
 
 #[test]
@@ -63,9 +63,9 @@ fn round_positive_half_rounds_up() {
 
 #[test]
 fn round_negative_half_goes_toward_positive_infinity() {
-    // VB6 原典: Int(-2.5)=-3, frac=0.5>=0.5 → -3+1 = -2。
+    // VB5 原典: Int(-2.5)=-3, frac=0.5>=0.5 → -3+1 = -2。
     // ※ SRC.Sharp オラクルは AwayFromZero で -3 を返す (原典から乖離)。
-    //    本実装は VB6 準拠の -2 が正しい。
+    //    本実装は VB5 準拠の -2 が正しい。
     assert_eq!(f("Round(-2.5,0)"), "-2");
 }
 

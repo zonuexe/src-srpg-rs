@@ -59,12 +59,12 @@ fn divide_even_integers_returns_whole_number() {
 }
 
 // ============================================================
-//  VB6 特有: 整数除算 / 指数 / Mod
+//  VB5 特有: 整数除算 / 指数 / Mod
 // ============================================================
 
 #[test]
 fn integer_divide_backslash() {
-    // VB6: `5 \ 2` = 2 (整数除算・切り捨て)
+    // VB5: `5 \ 2` = 2 (整数除算・切り捨て)
     assert_eq!(arith("Eval(5 \\ 2)"), "2");
     // 負数: `-7 \ 2` = -3 (truncate-toward-zero)
     assert_eq!(arith("Eval(-7 \\ 2)"), "-3");
@@ -72,7 +72,7 @@ fn integer_divide_backslash() {
 
 #[test]
 fn exponent_caret() {
-    // VB6: `2 ^ 3` = 8
+    // VB5: `2 ^ 3` = 8
     assert_eq!(arith("Eval(2 ^ 3)"), "8");
     // `2 ^ 0.5` ≈ 1.4142…
     let v: f64 = arith("Eval(2 ^ 0.5)").parse().unwrap();
@@ -81,7 +81,7 @@ fn exponent_caret() {
 
 #[test]
 fn modulo_keyword() {
-    // VB6: `7 Mod 3` = 1
+    // VB5: `7 Mod 3` = 1
     assert_eq!(arith("Eval(7 Mod 3)"), "1");
     assert_eq!(arith("Eval(10 Mod 3)"), "1");
 }

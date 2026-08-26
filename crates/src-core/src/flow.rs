@@ -1,8 +1,8 @@
 //! 進行フローの明示的継続 (continuation)。
 //!
-//! VB6 原典 (`SRC_20121125/SRC.bas`) では `StartScenario` / `StartTurn` が
+//! VB5 原典 (`SRC_20121125/SRC.bas`) では `StartScenario` / `StartTurn` が
 //! 線形手続きで、「`HandleEvent "スタート"` から戻ったら次は `StartTurn "味方"`」
-//! のように **「次にやること」は VB6 のコールスタックが暗黙に保持** していた。
+//! のように **「次にやること」は VB5 のコールスタックが暗黙に保持** していた。
 //! 非ブロッキング化した本実装ではスクリプトが suspend/resume するため、その
 //! 継続情報を serde 可能なデータ ([`FlowCont`]) として `App::flow` スタックに
 //! 明示的に積む。
@@ -23,7 +23,7 @@
 
 /// スクリプト完了後に実行する継続 1 件。
 ///
-/// 1 バリアント = VB6 原典の「`HandleEvent` 呼び出し直後のコード」に相当する。
+/// 1 バリアント = VB5 原典の「`HandleEvent` 呼び出し直後のコード」に相当する。
 /// `App::flow: Vec<FlowCont>` にスタックとして積まれ、
 /// `App::on_script_completed()` が idle 時に pop して実行する。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

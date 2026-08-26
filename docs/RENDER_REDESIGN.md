@@ -7,7 +7,7 @@
 
 ## 1. 診断 — なぜ座標・重なりバグが繰り返されるのか
 
-VB6 版 SRC (`SRC_20121125/`) / C# 移植 (`SRC.Sharp/`) からの移植で、画像・文字の
+VB5 版 SRC (`SRC_20121125/`) / C# 移植 (`SRC.Sharp/`) からの移植で、画像・文字の
 座標位置や重なりが期待と合わず、アドホック修正が繰り返されてきた。調査の結果、
 個別バグではなく**構造的要因**が特定された:
 
@@ -91,7 +91,7 @@ pub fn map_to_pixel(map_xy, view_center) -> (i32, i32);  // SRC.Sharp 式
 pub fn pixel_to_map(px_xy, view_center) -> (i32, i32);   // 逆変換(入力用)
 
 // frame.rs — Z 層付き表示リスト
-pub enum Layer {  // VB6 の描画順を enum 化。u8 順でソート
+pub enum Layer {  // VB5 の描画順を enum 化。u8 順でソート
     MapLower, MapUpper, Units, Ranges, Cursor,
     ScriptOverlay, BattleAnim, StatusWindow, Menu, Message, Dialog, Fade,
 }

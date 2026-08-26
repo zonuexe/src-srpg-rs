@@ -1,6 +1,6 @@
 //! Canvas 2D 描画レイヤ / Canvas 2D drawing layer.
 //!
-//! `src-core` の論理シーン定義を受け取り、Canvas に描画する。原典 VB6 の
+//! `src-core` の論理シーン定義を受け取り、Canvas に描画する。原典 VB5 の
 //! `Form` 描画と等価な役割。
 
 use web_sys::CanvasRenderingContext2d;
@@ -1357,7 +1357,7 @@ fn draw_combatant_hud(
 }
 
 /// 戦闘演出中に重ねる戦闘会話 (メッセージ) ウィンドウ。非戦闘の Talk ダイアログと
-/// 同じ暗色パネル + 金枠・同サイズ (画面下部) に統一し、Windows 風 VB6 デザインは廃止。
+/// 同じ暗色パネル + 金枠・同サイズ (画面下部) に統一し、Windows 風 VB5 デザインは廃止。
 /// 上段に攻防 2 機の HUD (機体アイコン + HP/EN)、下段に発話者 (攻撃側) の顔・名前・
 /// メッセージを表示する。データは `battle_anim` の攻撃側 / 防御側タイルから live
 /// `database` を引いて解決する (撃破され盤面から除去された側は欠落 → 非表示)。
@@ -1457,7 +1457,7 @@ fn draw_combat_window(
     }
 }
 
-/// 反撃手段選択ウィンドウ (オリジナル SRC 戦闘窓風)。中央寄せの明色 VB6 窓に、
+/// 反撃手段選択ウィンドウ (オリジナル SRC 戦闘窓風)。中央寄せの明色 VB5 窓に、
 /// タイトル (反撃：<武器> 攻撃力=N 命中率=N%) + 攻防 2 機の HUD + 防御側
 /// 「機体 パイロット」+ 各選択肢 (反撃/回避/防御/援護防御) を命中率付きで描く。
 /// 選択肢行のジオメトリは src-core `dialog::reaction_choice_at` と共有する。
@@ -1552,7 +1552,7 @@ fn draw_reaction_window(
     let _ = ctx.fill_text("番号キー / クリックで選択", wx + ww - pad, wy + wh - 6.0);
 }
 
-/// 武器選択ウィンドウ (オリジナル SRC 武器選択窓風)。中央寄せの明色 VB6 窓に、
+/// 武器選択ウィンドウ (オリジナル SRC 武器選択窓風)。中央寄せの明色 VB5 窓に、
 /// タイトル + 攻防 2 機の HUD + 武器表 (名称/攻撃/命中/CT/弾EN/適応/分類)。
 /// ×=使用不可 (グレー)。行のジオメトリは src-core `dialog::weapon_select_choice_at`
 /// と共有する。
@@ -1932,7 +1932,7 @@ fn draw_title(ctx: &CanvasRenderingContext2d, assets: &Assets) {
     let offset_x = (i64::from(CANVAS_WIDTH) - i64::from(TITLE_WIDTH)) / 2;
     let offset_y = (i64::from(CANVAS_HEIGHT) - i64::from(TITLE_HEIGHT)) / 2;
 
-    // タイトル本体の背景 (VB6 BUTTONFACE 相当)
+    // タイトル本体の背景 (VB5 BUTTONFACE 相当)
     ctx.set_fill_style_str("#c0c0c0");
     ctx.fill_rect(
         offset_x as f64,
@@ -2399,7 +2399,7 @@ fn draw_status_panel(
     const HEADER: &str = "#13409a"; // 武器列ヘッダ (青)
     const MUTED: &str = "#76736a";
 
-    // 背景 + VB6 風の凹枠 (外=暗シャドウ / 内=明ハイライト)。
+    // 背景 + VB5 風の凹枠 (外=暗シャドウ / 内=明ハイライト)。
     ctx.set_fill_style_str(BG);
     ctx.fill_rect(ox as f64, oy as f64, w, h);
     ctx.set_stroke_style_str("#ffffff");
@@ -3451,9 +3451,9 @@ fn draw_wrapped(
     }
 }
 
-// ===== VB6 ウィジェット描画ヘルパ / VB6 widget drawing helpers =====
+// ===== VB5 ウィジェット描画ヘルパ / VB5 widget drawing helpers =====
 
-/// VB6 標準の凹型枠（Frame1 など）/ Etched frame.
+/// VB5 標準の凹型枠（Frame1 など）/ Etched frame.
 fn draw_vb6_etched_frame(ctx: &CanvasRenderingContext2d, x: i64, y: i64, w: u32, h: u32) {
     let xf = x as f64;
     let yf = y as f64;
@@ -3476,7 +3476,7 @@ fn draw_vb6_etched_frame(ctx: &CanvasRenderingContext2d, x: i64, y: i64, w: u32,
     ctx.stroke();
 }
 
-/// VB6 ダイアログ枠（タイトルバー付き）/ VB6 modal dialog frame with title bar.
+/// VB5 ダイアログ枠（タイトルバー付き）/ VB5 modal dialog frame with title bar.
 fn draw_vb6_dialog(ctx: &CanvasRenderingContext2d, x: i64, y: i64, w: u32, h: u32, caption: &str) {
     let xf = x as f64;
     let yf = y as f64;

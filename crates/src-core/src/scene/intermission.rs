@@ -1,7 +1,7 @@
 //! インターミッション画面のロジック層 / Intermission screen logic layer.
 //!
 //! 元実装: `SRC.Sharp/SRCCore/Intermissions/Intermission.cs` の
-//! `InterMissionCommand()`。VB6 原典では `frmIntermission` フォームに相当。
+//! `InterMissionCommand()`。VB5 原典では `frmIntermission` フォームに相当。
 //!
 //! 戦闘外で表示され、シナリオが `IntermissionCommand <name> <file>` で
 //! 登録したメニュー項目 (キャラクターメイキング / 改造 / ショップ / ...) と、

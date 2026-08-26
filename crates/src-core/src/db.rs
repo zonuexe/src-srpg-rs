@@ -652,15 +652,15 @@ impl GameDatabase {
         with_items + u.upgrade_level * UPGRADE_EN_PER_LEVEL
     }
 
-    /// 主パイロットの実効最大霊力 (プラーナ)。VB6 原典 `Pilot.cls:1423` 準拠。
+    /// 主パイロットの実効最大霊力 (プラーナ)。VB5 原典 `Pilot.cls:1423` 準拠。
     /// 主パイロットの `PilotInstance` が無い、または `霊力` 技能を持たない場合は 0
     /// (プラーナを持たない)。あれば `霊力Lv + 成長分` で、成長分は
     ///
     /// - `霊力成長` 技能あり: `(1.5 * lv * (10 + 霊力成長Lv)) \ 10`
     /// - なし: `1.5 * lv`
     ///
-    /// (`lv = min(level, 100)`、`\` は VB6 の整数除算で float→Long 変換は銀行家丸め
-    /// = 最近接偶数丸め)。※ VB6 の「追加パイロットは第1パイロットの MaxPlana を
+    /// (`lv = min(level, 100)`、`\` は VB5 の整数除算で float→Long 変換は銀行家丸め
+    /// = 最近接偶数丸め)。※ VB5 の「追加パイロットは第1パイロットの MaxPlana を
     /// 使う」分岐は簡略化のため未対応 (主パイロットのみ)。
     pub fn effective_max_plana(&self, u: &UnitInstance) -> i32 {
         let Some(pi) = self.pilot_instance_by_id(u.main_pilot_name()) else {
@@ -1025,7 +1025,7 @@ pub struct CombatBonuses {
 /// `base` パイロットに `total_exp` 由来のレベル成長を適用した `PilotData` を返す。
 /// レベルは `pilot_instance::level_from_exp` (SRC 原典: 500 exp/level、1..=99)。
 ///
-/// 成長式は VB6 原典 `Pilot.cls:582-593` 準拠: **`lv = Level`**(level-1 ではなく Level そのもの。
+/// 成長式は VB5 原典 `Pilot.cls:582-593` 準拠: **`lv = Level`**(level-1 ではなく Level そのもの。
 /// レベル 1 でも成長する)、格闘/射撃/技量/反応 `+= lv`、命中/回避 `+= 2*lv`。差分オラクル
 /// placeunit で C# SRCCore と一致を確認 (人工知能 lv10 格闘=110・命中=165・反応=90)。成長スキル
 /// (`格闘成長` 等)・`追加レベル`・`攻撃力低成長` Option は未モデル (素の式)。

@@ -8,7 +8,7 @@ Phase 2 残り（idle 述語 shim の削除＝実機検証後）と Phase 3 は�
 
 ## 1. 診断 — なぜガード追加が繰り返されるのか
 
-### 1.1 原典 VB6 の制御モデル（確認済み事実）
+### 1.1 原典 VB5 の制御モデル（確認済み事実）
 
 `SRC_20121125/SRC.bas` の `StartScenario`（L1069）/ `StartTurn`（L1266）は**線形手続き**である:
 
@@ -35,7 +35,7 @@ StartTurn "味方":
 
 1. **「次に何をするか」= コールスタック上の戻り先**。`HandleEvent "スタート"` が
    （内部の DoEvents ブロッキング待ちを何度経ようと）returnすれば、次の行
-   `StartTurn "味方"` が必ず実行される。継続情報は VB6 スタックが暗黙に保持。
+   `StartTurn "味方"` が必ず実行される。継続情報は VB5 スタックが暗黙に保持。
 2. **大域中断は `IsScenarioFinished` の手動巻き戻し**。すべての `HandleEvent`
    呼び出し直後に `Exit Sub` 判定があり、`Continue` 実行はスタック全体を
    巻き戻して次シナリオの `StartScenario` に到達する。
@@ -103,7 +103,7 @@ pub enum ExecOutcome {
 「完了後にやること」を必ず積む:
 
 ```rust
-/// VB6 の「HandleEvent から戻った後の次の行」に相当する継続。
+/// VB5 の「HandleEvent から戻った後の次の行」に相当する継続。
 /// 1 バリアント = SRC.bas の 1 ブロッキング点直後のコード。
 #[derive(Serialize, Deserialize)]
 pub enum FlowCont {
@@ -136,7 +136,7 @@ pub struct App {
 1. イベントを起動する側は `trigger_label_with(label, cont)` で継続を積む。
 2. `on_script_completed()` は `flow.pop()` して継続を実行する。継続の実行が
    さらにイベントを起動して suspend したら、そこで止まる（次の完了でまた pop）。
-3. `Continue` / `GameOver` 等の大域中断は、VB6 の `IsScenarioFinished` 巻き戻しに
+3. `Continue` / `GameOver` 等の大域中断は、VB5 の `IsScenarioFinished` 巻き戻しに
    対応する **`flow` の一括差し替え**（例: 全部捨てて `LoadNextStage` を積む）。
    「次ステージ非空なら…」のような事後推定が、明示的なスタック操作になる。
 4. 割込みイベント（ユニット破壊・接触・行動終了など、処理の途中で発火するもの）

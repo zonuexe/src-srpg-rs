@@ -49,7 +49,7 @@ impl CombatPreview {
 }
 
 /// 貫通型攻撃 (武器 class に `貫` / `貫Ln`) による防御側装甲の低減。
-/// SRC 原典 VB6 `Unit.cls:6812-6819`: `貫` (レベル無し) は装甲 1/2、`貫Ln` は
+/// SRC 原典 VB5 `Unit.cls:6812-6819`: `貫` (レベル無し) は装甲 1/2、`貫Ln` は
 /// 装甲 ×(10-n)/10 (例: `貫L3` → ×0.7)。`貫` を含まなければ素の装甲のまま。
 /// `is_true_value` ゲートの外で適用される＝予測 (プレビュー) にも反映する。
 pub fn pierce_armor(weapon_class: &str, armor: i64) -> i64 {
@@ -428,7 +428,7 @@ pub fn predict_with_status_terrain(
     };
 
     let raw_hit_f = ((ed_hit - ed_avd + hit_adj) as f64 * terrain_hit_mult * size_mult) as i32;
-    // SRC `Unit.cls:6694-6696`（VB6 原典）/ C# `UnitWeapon.cs` `Math.Max(0, prob)`:
+    // SRC `Unit.cls:6694-6696`（VB5 原典）/ C# `UnitWeapon.cs` `Math.Max(0, prob)`:
     // 命中率は最低 0 のみクランプし、上限は設けない（100 超は必中。判定は各所
     // `roll(0..=99) < hit_chance` のため >100 は常に命中、<1 は殆ど命中しない）。
     // 旧実装の `clamp(5, 95)` は他 SRPG 慣習由来で原典非準拠だった。表示上の 100 上限は
@@ -1610,7 +1610,7 @@ mod tests {
     }
 
     /// 貫 (貫通) 属性: 防御側装甲を `貫`=1/2 / `貫Ln`=×(10-n)/10 に低減する
-    /// (SRC VB6 `Unit.cls:6812-6819`)。`pierce_armor` 単体と予測での増ダメージを検証。
+    /// (SRC VB5 `Unit.cls:6812-6819`)。`pierce_armor` 単体と予測での増ダメージを検証。
     #[test]
     fn pierce_weapon_reduces_armor_and_increases_damage() {
         assert_eq!(pierce_armor("格貫", 1000), 500, "貫 は装甲半減");

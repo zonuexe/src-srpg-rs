@@ -1,7 +1,7 @@
 //! `Like` 演算子のテスト。
 //!
 //! SRC.Sharp `AdditionalFunctionTests` の Like ケースから移植。
-//! VB6 の Like 演算子仕様: *, ?, #, [charlist], [!charlist]
+//! VB5 の Like 演算子仕様: *, ?, #, [charlist], [!charlist]
 //!
 //! 主要な使用場面: `If $(var) Like "パターン" Then ...`
 

@@ -33,7 +33,7 @@ pub enum Party {
 }
 
 impl Party {
-    /// 描画用の塗り色（CSS カラー）。VB6 SRC は HUD の色付けで似た区別をしていた。
+    /// 描画用の塗り色（CSS カラー）。VB5 SRC は HUD の色付けで似た区別をしていた。
     pub const fn color(self) -> &'static str {
         match self {
             Self::Player => "#1e88e5",

@@ -14,7 +14,7 @@ use web_sys::{
 use src_core::asset::frx;
 
 /// 元 `Title.frx` をビルド時にバイナリ埋め込み。10KB 弱なので wasm に直接同梱。
-/// Embed the entire VB6 `Title.frx` (~10 KB) into the wasm binary at build time.
+/// Embed the entire VB5 `Title.frx` (~10 KB) into the wasm binary at build time.
 const TITLE_FRX: &[u8] = include_bytes!("../../../SRC_20121125/Title.frx");
 
 /// `Title.frm` の `Picture1.Picture = "Title.frx":030A`。200x40, 8bpp BMP ("SRC" ロゴ)。

@@ -1,6 +1,6 @@
 //! SRC セーブデータ (`.src`) パーサ / SRC save-data (`.src`) parser.
 //!
-//! 原典 VB6 `SRC.bas` の 2 系統の書式に対応する。
+//! 原典 VB5 `SRC.bas` の 2 系統の書式に対応する。
 //!
 //! - `SaveData` (通常セーブ, `SRC.bas:1853`) — 「ここから開始」用に配布される
 //!   `スタート.src` / `Start.src` 等はこちら。
@@ -69,7 +69,7 @@ impl SaveFile {
     }
 }
 
-/// VB6 `Input #` 相当のトークン列。値はカンマ / 改行区切り、文字列は `"` で
+/// VB5 `Input #` 相当のトークン列。値はカンマ / 改行区切り、文字列は `"` で
 /// 括られ `""` が 1 個の `"` を表す。
 fn tokenize(text: &str) -> Vec<String> {
     let mut out = Vec::new();

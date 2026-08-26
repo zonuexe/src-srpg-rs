@@ -842,7 +842,7 @@ fn install_menu_bar(
         if let Some(w) = web_sys::window() {
             let _ = w.alert_with_message(
                 "SRC (Simulation RPG Construction) — Rust / WebAssembly port\n\
-                 VB6 / SRC.NET 原典を Rust + wasm-bindgen に移植。",
+                 VB5 / SRC.NET 原典を Rust + wasm-bindgen に移植。",
             );
         }
     })?;

@@ -1,9 +1,9 @@
 //! src-core — platform-agnostic engine core for the SRC SRPG port.
 //!
-//! VB6 製の元コード（`SRC_20121125/` 配下）から段階的に移植する予定。
+//! VB5 製の元コード（`SRC_20121125/` 配下）から段階的に移植する予定。
 //! Windows GUI 非依存のロジックをこのクレートに集約し、`src-web` から呼び出す。
 //!
-//! Originally a VB6 program (see `SRC_20121125/`). This crate will hold the
+//! Originally a VB5 program (see `SRC_20121125/`). This crate will hold the
 //! platform-independent engine logic so that `src-web` (or future native
 //! frontends) can drive it.
 

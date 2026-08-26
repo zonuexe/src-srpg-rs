@@ -1,5 +1,5 @@
-//! VB6 .frx (Form resource) ファイルの最小パーサ。
-//! Minimal parser for VB6 .frx (Form resource) files.
+//! VB5 .frx (Form resource) ファイルの最小パーサ。
+//! Minimal parser for VB5 .frx (Form resource) files.
 //!
 //! .frm 内の `Picture = "Foo.frx":HEX` のような参照は、`Foo.frx` のオフセット
 //! `HEX` から以下のレイアウトでリソースを取り出す:
@@ -17,7 +17,7 @@
 /// 1 リソース分のスライスとメタ情報 / One extracted resource slice plus metadata.
 #[derive(Debug, Clone, Copy)]
 pub struct FrxResource<'a> {
-    /// VB6 内部の型タグ。多くの埋め込み画像で `0x0000746c`。
+    /// VB5 内部の型タグ。多くの埋め込み画像で `0x0000746c`。
     pub kind: u32,
     /// 解析時に確認した outer length（呼び出し側がリソース全体長を必要とする場合用）。
     pub outer_len: u32,

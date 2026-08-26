@@ -189,7 +189,7 @@ Return
 
 #[test]
 fn implicit_call_unknown_label_warns_silent_ok() {
-    // typo / 未定義は silent OK (VB6 と同じ挙動)
+    // typo / 未定義は silent OK (VB5 と同じ挙動)
     let app = run(r#"
 Set a 1
 Retunr

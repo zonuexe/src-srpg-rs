@@ -2,14 +2,14 @@
 //! Settings exposed via the original `frmConfiguration` map command dialog.
 //!
 //! 元 `Configuration.frm` の各コントロールが書き込む設定項目を Rust 側で集約する。
-//! 持続化 / 読み書きの実装は今のところ未定。デフォルト値は VB6 原典の挙動に
+//! 持続化 / 読み書きの実装は今のところ未定。デフォルト値は VB5 原典の挙動に
 //! 寄せている。
 
 use serde::{Deserialize, Serialize};
 
 /// メッセージ送り速度 / Message scroll speed.
 ///
-/// 元 `cboMessageSpeed` の選択肢。VB6 では文字列として保存されるが、ここでは
+/// 元 `cboMessageSpeed` の選択肢。VB5 では文字列として保存されるが、ここでは
 /// 型安全な enum で表現する。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum MessageSpeed {

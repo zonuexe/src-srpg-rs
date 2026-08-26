@@ -1,8 +1,8 @@
 # SRC.Sharp との互換性・意図的な乖離
 
-本プロジェクトは VB6 オリジナル SRC を一次資料、SRC.Sharp (C# 移植) を二次資料
+本プロジェクトは VB5 オリジナル SRC を一次資料、SRC.Sharp (C# 移植) を二次資料
 として参考にしている。両者がセマンティクスで食い違っていたり、SRC.Sharp の
-実装に明確な FIXME / 設計バグがあると判断した場合は、Rust 実装は **VB6
+実装に明確な FIXME / 設計バグがあると判断した場合は、Rust 実装は **VB5
 オリジナルに寄せて再設計** する。本ドキュメントはそうした「意図的な乖離」を
 記録する。
 
@@ -11,7 +11,7 @@
 - **対象**: 関数 / コマンド名
 - **Rust 実装**: 採用したセマンティクス
 - **SRC.Sharp**: 比較対象の挙動
-- **VB6**: 原典の挙動 (参考)
+- **VB5**: 原典の挙動 (参考)
 - **乖離の理由**: なぜ SRC.Sharp に追従しないか
 - **検証**: 関連するテスト
 
@@ -41,17 +41,17 @@
   には `// XXX 文字コード` という FIXME コメントが残っており、この非対称が
   未解決の既知問題と認識されている。
 
-### VB6
+### VB5
 SJIS で一貫。`Asc("あ")` = 33440、`Chr(33440)` = "あ" で round-trip する。
 
 ### 乖離の理由
-- VB6 SRC のシナリオは SJIS 文字列を前提に書かれている (実 .eve ファイルも
+- VB5 SRC のシナリオは SJIS 文字列を前提に書かれている (実 .eve ファイルも
   SJIS で保存されており、loader で UTF-8 に変換している)。
 - SRC.Sharp の不整合は同プロジェクトでも FIXME 扱い。
 - `Chr(Asc(s)) == s` が成り立たないと、文字列を分解・再構築する処理 (例:
   SetWindow タイトル整形、ファイル名生成) が破綻する可能性がある。
 - 実シナリオでの非 ASCII Asc/Chr 使用は 0 件と確認済 (定量影響無し) だが、
-  将来のシナリオが SJIS 値を直接書いてもよう、VB6 互換を取った方が安全。
+  将来のシナリオが SJIS 値を直接書いてもよう、VB5 互換を取った方が安全。
 
 ### 検証
 - [`crates/src-core/tests/string_function.rs`](../crates/src-core/tests/string_function.rs)
@@ -66,33 +66,33 @@ SJIS で一貫。`Asc("あ")` = 33440、`Chr(33440)` = "あ" で round-trip す�
 
 ---
 
-## 2. `Round(x [, n])` — 負の半数は VB6 (+∞方向丸め) に従う
+## 2. `Round(x [, n])` — 負の半数は VB5 (+∞方向丸め) に従う
 
 ### 対象
 [`Round`](../crates/src-core/src/event_runtime.rs)（数値関数）
 
 ### Rust 実装
-VB6 原典 `Expression.bas:2991-2996` 準拠: `num = Int(x*10^n)`（Int=floor）して
+VB5 原典 `Expression.bas:2991-2996` 準拠: `num = Int(x*10^n)`（Int=floor）して
 小数部 ≥ 0.5 なら +1。すなわち **+∞方向への半数丸め**。
 - `Round(2.5)` = 3 / `Round(-2.5)` = **-2** / `Round(1.5)` = 2
 
 ### SRC.Sharp
 `Math.Round(x, n, MidpointRounding.AwayFromZero)`（**ゼロから遠ざける半数丸め**）。
-- `Round(2.5)` = 3（正は一致） / `Round(-2.5)` = **-3**（VB6 と乖離）
+- `Round(2.5)` = 3（正は一致） / `Round(-2.5)` = **-3**（VB5 と乖離）
 
-### VB6
+### VB5
 `Round(-2.5)` = -2（`Int(-2.5)=-3`、`-2.5-(-3)=0.5≥0.5` → +1 → -2）。
 
 ### 乖離の理由
-オラクル (SRC.Sharp) が VB6 原典から乖離しているケース。負の半数値の丸めは
-VB6 が一次資料のため VB6 に従う。正の値は三者一致。
+オラクル (SRC.Sharp) が VB5 原典から乖離しているケース。負の半数値の丸めは
+VB5 が一次資料のため VB5 に従う。正の値は三者一致。
 
 ### 検証
 [`crates/src-core/tests/math_function_oracle.rs`](../crates/src-core/tests/math_function_oracle.rs)
 の `round_negative_half_goes_toward_positive_infinity`。
 
 ### コミット
-`a171af3`（Math オラクルテスト追加時に VB6 で裏取り、Rust が正しいと確認）
+`a171af3`（Math オラクルテスト追加時に VB5 で裏取り、Rust が正しいと確認）
 
 ---
 
@@ -104,7 +104,7 @@ VB6 が一次資料のため VB6 に従う。正の値は三者一致。
 ### 旧 Rust 実装 (是正前)
 `Not` を最高優先 (`parse_factor`) で束縛していた。`Not 1 = 2` → `(Not 1) = 2` → `0 = 2` → 0。
 
-### SRC.Sharp / VB6 (正)
+### SRC.Sharp / VB5 (正)
 `Not` は比較より緩く、`And`/`Or` より固く束縛する。`Not 1 = 2` → `Not (1 = 2)` → `Not 0` → 1。
 
 ### 是正
@@ -122,10 +122,10 @@ VB6 が一次資料のため VB6 に従う。正の値は三者一致。
 
 ## 4. 是正済みの旧乖離 (2026-06-17 オラクル監査で発見・整合)
 
-C# オラクル × VB6 原典の突合で、本実装が原典から乖離していた箇所を是正した記録。
-いずれも C# = VB6 で、Rust が異端だった (上記 1〜3 とは逆向き)。
+C# オラクル × VB5 原典の突合で、本実装が原典から乖離していた箇所を是正した記録。
+いずれも C# = VB5 で、Rust が異端だった (上記 1〜3 とは逆向き)。
 
-| 項目 | 旧 Rust | SRC/VB6 原典 | コミット |
+| 項目 | 旧 Rust | SRC/VB5 原典 | コミット |
 |------|---------|--------------|----------|
 | 式のゼロ除算 | `5/0 == 5`（分子残し） | `0`（`EvalExpr` の rnum≠0 ガード） | `b994e08` |
 | 改造 1 段の HP | +100 | +200（`Unit.cls:1719`） | `0458a0e` |
@@ -156,7 +156,7 @@ exp→level は併せて、実装中に 16 箇所重複していた `total_exp/1
 
 命中率クランプは差分オラクルの**戦闘予測モード**（`placeattack` / `combat_prediction.txt`）で検出した。
 実 fixture のユニットで `Info` 経由ではなく `HitProbability` を直接突合したところ、C# は 115/155/170 等
-（上限なし）を返すのに対し旧 Rust は一律 95 へ丸めていた。VB6 `Unit.cls:6694-6696`（`If prob < 0 Then
+（上限なし）を返すのに対し旧 Rust は一律 95 へ丸めていた。VB5 `Unit.cls:6694-6696`（`If prob < 0 Then
 HitProbability = 0 Else HitProbability = prob`）は**最低 0 のみ**で上限がなく、C# も `Math.Max(0, prob)`
 で一致。クランプ撤去後は命中率・クリティカル率とも **18/18 cross-engine 一致**＝旧クランプが唯一の乖離で、
 その下に隠れた式の不整合は無かった（命中=`100+命中+直感+運動性+命中補正 − (回避+直感+運動性)`×地形×サイズ
@@ -166,13 +166,13 @@ HitProbability = 0 Else HitProbability = prob`）は**最低 0 のみ**で上限
 中立地形の地上に配置し実データの地形適応（S/A/B/C/D）を効かせて突合した結果、装甲＞攻撃力の 1 ケースのみ
 C#=10 / 旧 Rust=1 と乖離。`戦闘システム詳細.md` のダメージ式は `(攻撃力−防御力)×地形ダメージ修正`
 （攻撃力=武器攻撃力×ﾊﾟｲﾛｯﾄ攻撃力/100×気力/100×地形適応、防御力=装甲×気力/100×地形適応）で**構造は
-Rust と同一**＝唯一の差は下限（VB6 `Unit.cls:7460` 既定 10、Rust は 1）。是正後は **14/14 cross-engine 一致**。
+Rust と同一**＝唯一の差は下限（VB5 `Unit.cls:7460` 既定 10、Rust は 1）。是正後は **14/14 cross-engine 一致**。
 （教訓: 当初 C# `Damage` の静的読みでは「攻撃力に地形適応は乗らない」と誤読したが、実数突合で攻撃力にも
 武器/ユニット地形適応が乗ると確定＝Rust の `atk_adapt` 適用は原典準拠で正しい。spec 裏取りが決定的。）
 
-地形の命中修正の符号は combat 予測オラクルの terrain 拡張を設計する過程で発見（静的解析＋VB6/help 裏取り）。
+地形の命中修正の符号は combat 予測オラクルの terrain 拡張を設計する過程で発見（静的解析＋VB5/help 裏取り）。
 SRC は terrain.txt の「命中修正」列を**正=防御地形**で格納し（`マップデータ.md`、森林 10/山 30 等）、combat は
-VB6 `Unit.cls:6295` `ed_aradap *= (100 - TerrainEffectForHit)/100`・C# 同様に**引き算**で適用する。
+VB5 `Unit.cls:6295` `ed_aradap *= (100 - TerrainEffectForHit)/100`・C# 同様に**引き算**で適用する。
 `Info(マップ,x,y,回避修正)` もこの正値を返す。一方旧 Rust は combat を `(100 + hit_mod)` とし、辻褄合わせで
 ビルトイン地形カタログに**負値**を格納する独自規約だった。terrain.txt パーサは（正しく）正値を格納するため、
 **実シナリオ（terrain.txt をロードするほぼ全シナリオ）で防御地形の被命中が逆転**（森林・山・都市で当たりやすくなる）
@@ -205,7 +205,7 @@ down=`1-0.1*atk.ダメージ低下-0.1*def.被ダメージ低下`）へ揃え、
 combat_morale.txt に防御側 鉄壁/不屈 ケースを追加し cross-engine **13/13 一致**。**残（任意・低優先）**: バリア強度吸収の精緻化、捨て身/攻撃力ＵＰ の効果統合。
 
 防御側パイロットの Defense（耐久 技能）は damage オラクル（cut 2a）の representative 突合で C# が `Info(パイロット,防御)=100`
-を返すのを見て C# `Damage` の `arm *= Defense/100` を確認し、Rust 側に Defense 係数が**全く無い**ことから発掘。VB6
+を返すのを見て C# `Damage` の `arm *= Defense/100` を確認し、Rust 側に Defense 係数が**全く無い**ことから発掘。VB5
 `Pilot.cls:402` の既定 Defense = `100 + 5*SkillLevel("耐久")`（オプション下の Level 加算項は既定オフ＝未モデル）。
 人工知能 は耐久を持たず Defense=100 のため cut 2 の 14/14 は一致していた（基底ケースは健全）が、**耐久 技能持ちの防御側は
 被ダメージが過大**だった。`combat.rs` の `def_power` に `Defense/100` 係数を追加（耐久 Lv は features の `耐久Lv<n>` から
@@ -218,15 +218,15 @@ combat_morale.txt に防御側 鉄壁/不屈 ケースを追加し cross-engine 
 ## 乖離候補 (まだ着手していない / 暫定の判断保留)
 
 以下は SRC.Sharp と Rust 実装で挙動が異なるが、本ドキュメントに正式エントリと
-してまとめる前段階。各項目は今後の調査で「VB6 寄りに揃える」「SRC.Sharp に
+してまとめる前段階。各項目は今後の調査で「VB5 寄りに揃える」「SRC.Sharp に
 合わせる」「現行 Rust 実装を維持する」のいずれかに決定される予定。
 
 ### `Ride pilot unit`
 - **Rust 実装**: `unit_a` の座標を `unit_b` の座標に移動する (= 「キャリアに搭乗」
   をマップ位置だけで表現)。
-- **SRC.Sharp / VB6**: パイロットを別ユニットに乗せ換え (`pilot_name` 差替え +
+- **SRC.Sharp / VB5**: パイロットを別ユニットに乗せ換え (`pilot_name` 差替え +
   party 同期)。空き席探索や副パイロット降車を伴う多段ロジック。
-- **判断保留の理由**: 本実装の `Unit` / `Pilot` コマンドは VB6 の「データ定義
+- **判断保留の理由**: 本実装の `Unit` / `Pilot` コマンドは VB5 の「データ定義
   形式」(2 引数 + level) と「全フィールド指定」(12〜14 引数) を別物として
   受理しており、前者で declare → `Ride` で実体化、というフローがまだ
   通っていない。`Ride` だけ直しても破綻するので、後段の `Unit name level`
@@ -235,7 +235,7 @@ combat_morale.txt に防御側 鉄壁/不屈 ケースを追加し cross-engine 
 ### `Plana(pilot)` / `Relation(p1, p2)` / `SP(pilot)` 等
 - **Rust 実装**: 霊力 / 関係値は modeling していないためスタブで 0 を返す。
   `SP` は `PilotData.sp - sp_consumed` で近似。
-- **SRC.Sharp / VB6**: 独立した `PilotInstance` を持ち、関係値や霊力を
+- **SRC.Sharp / VB5**: 独立した `PilotInstance` を持ち、関係値や霊力を
   per-instance で保持する。
 - **判断保留の理由**: `PilotInstance` の独立化は CURRENT_WORK.md §6.1 で
   整理されている大規模リファクタの一部。実シナリオで `Plana` / `Relation`
@@ -246,7 +246,7 @@ combat_morale.txt に防御側 鉄壁/不屈 ケースを追加し cross-engine 
 - **Rust 実装**: `Pilot "リオ" リオ 男性 超能力者 AAAA 100 160 ...` のような **12〜14 フィールド
   inline 定義形式**を受理し、パイロット/ユニットをその場で定義する (テストの利便性のための拡張)。
   SRC 正規の参照形式 (3〜4 引数) も受理する superset。
-- **SRC.Sharp / VB6**: `Pilot` コマンドは **3〜4 引数**のみ (`PilotCmd.cs:18` `ArgNum != 3 && != 4`)、
+- **SRC.Sharp / VB5**: `Pilot` コマンドは **3〜4 引数**のみ (`PilotCmd.cs:18` `ArgNum != 3 && != 4`)、
   arg2 は **pilot.txt で事前定義済みの名前** (`PDList.IsDefined` 必須)。inline 12 フィールド形式は
   「Pilotコマンドの引数の数が違います」で拒否。`Unit` も同様。
 - **判断保留の理由**: Rust の inline 形式は superset (SRC 正規の参照形式も動く) なので実シナリオの
@@ -258,7 +258,7 @@ combat_morale.txt に防御側 鉄壁/不屈 ケースを追加し cross-engine 
 ### `Set var "x" & y` (Set 値の `&` 連結) — Rust が寛容
 
 - **Rust 実装**: `Set msg "HP:" & $(hp)` を受理し連結して代入する。
-- **SRC.Sharp / VB6**: 「Setコマンドの引数の数が違います」エラーで拒否する (Set は
+- **SRC.Sharp / VB5**: 「Setコマンドの引数の数が違います」エラーで拒否する (Set は
   値を 1 トークン/式として取り、空白区切りの `& ` を余分な引数と見なす)。正規の SRC
   形式は補間 `Set msg "HP:$(hp)"`。
 - **判断保留の理由**: Rust の寛容化は無害 (正規形式も動く) だが、原典では実行時エラーに
@@ -269,7 +269,7 @@ combat_morale.txt に防御側 鉄壁/不屈 ケースを追加し cross-engine 
 
 - **Rust 実装**: `Sex` enum を {Male, Female, Unspecified} の 3 値で持ち、pilot.txt の
   性別フィールド `-` を **Unspecified** に畳む。`Info(…, 性別)` は Unspecified で空文字を返す。
-- **SRC.Sharp / VB6**: `.Sex` を生文字列で保持 (`PilotDataList.cls:223/247` で `Case "-"` を
+- **SRC.Sharp / VB5**: `.Sex` を生文字列で保持 (`PilotDataList.cls:223/247` で `Case "-"` を
   そのまま格納)。`Info(…, 性別)` は格納値 `"-"` を返す。
 - **判断保留の理由**: 性別限定の判定 (男性/女性) では `-`・空とも「いずれでもない」で等価。
   観測差は Info 文字列のみ (`-` vs 空)。`Sex` enum 拡張は save 形式・combat/condition への
@@ -278,7 +278,7 @@ combat_morale.txt に防御側 鉄壁/不屈 ケースを追加し cross-engine 
 ### `Info(パイロットデータ, …, クラス)` 別名 — Rust が寛容 (機能差なし)
 
 - **Rust 実装**: パイロットの機体クラス照会で `クラス` / `ユニットクラス` 両別名を受理する
-  (`info_pilot`)。両者とも `PilotData.Class`（= `汎用` 等、VB6 準拠値）を返す。
+  (`info_pilot`)。両者とも `PilotData.Class`（= `汎用` 等、VB5 準拠値）を返す。
 - **SRC.Sharp**: `Info.cs` のパイロット分岐は `ユニットクラス` / `機体クラス` のみ受理し、
   `クラス` キーには未対応 (空文字を返す)。
 - **判断保留の理由**: Rust が別名を 1 つ多く受ける superset 差で、返す値自体は両エンジン一致。
@@ -290,7 +290,7 @@ combat_morale.txt に防御側 鉄壁/不屈 ケースを追加し cross-engine 
 
 - **Rust 実装**: `feature_name` は `(name, value)` の **name (LHS)** を返す。`メッセージ=無口(ザコ)` →
   `メッセージ`、`ザコパイロット=非表示` → `ザコパイロット`。
-- **SRC.Sharp / VB6**: パイロットは `pd.SkillName(…)` 経由で **別名 (RHS)** を返す (`Info.cs:1016-1026`)。
+- **SRC.Sharp / VB5**: パイロットは `pd.SkillName(…)` 経由で **別名 (RHS)** を返す (`Info.cs:1016-1026`)。
   `メッセージ=無口(ザコ)` → `無口(ザコ)`、`ザコパイロット=非表示` → `非表示`。`=` 無しの `成長タイプB` は両者一致。
 - **判断保留の理由**: `特殊能力所有(名前)` (所有判定) は両エンジンとも **key(LHS)** で一致するため機能差は無く、
   乖離は `特殊能力名称` 列挙 (表示用) のみ。是正は pilot 用 `特殊能力名称` が value(別名・末尾 `,N` 除去) を
@@ -309,7 +309,7 @@ combat_morale.txt に防御側 鉄壁/不屈 ケースを追加し cross-engine 
 - **Rust 実装**: unit パーサは `名前=値` 形の特殊能力行のみ取り込み、`=` を持たない
   `全ユニット共通` のような marker/ディレクティブ行を捨てる (`data/unit.rs`)。マジンガーＺの
   `特殊能力数` は 12・先頭は `ＢＧＭ`。
-- **SRC.Sharp / VB6**: `全ユニット共通` を含む bare 行も特殊能力として保持する。`特殊能力数`
+- **SRC.Sharp / VB5**: `全ユニット共通` を含む bare 行も特殊能力として保持する。`特殊能力数`
   は 13・先頭は `全ユニット共通`。
 - **判断保留の理由**: 「全ユニット共通能力の継承」機構自体が Rust 未実装のため、marker を
   捨てても現状の機能影響は無い (継承を実装するときに併せて取り込み方を揃える)。差分オラクル
@@ -318,7 +318,7 @@ combat_morale.txt に防御側 鉄壁/不屈 ケースを追加し cross-engine 
 ### ✅ パイロットのレベル成長式 — 是正済 (§4 表参照)
 
 差分オラクル placeunit (有人モード `unit_pilot.txt`) で発掘し是正した pervasive bug。旧 Rust は
-class ベース `base+(level-1)*rate` で過大成長していた。VB6 `Pilot.cls:582-593` 準拠の
+class ベース `base+(level-1)*rate` で過大成長していた。VB5 `Pilot.cls:582-593` 準拠の
 **`lv=Level` (レベル 1 でも成長)・格闘/射撃/技量/反応 +=lv・命中/回避 +=2*lv** へ `db::grown_pilot` /
 `pilot_instance::apply_stat_growth` を是正 (成長スキル/`追加レベル`/`攻撃力低成長` Option は未モデル)。
 併せて `Info(パイロットデータ,…)` が配置済みパイロットで成長後を返していた conflation も是正 (静的データを返す)。
@@ -328,7 +328,7 @@ class ベース `base+(level-1)*rate` で過大成長していた。VB6 `Pilot.c
 
 - **Rust 実装**: 気力 (morale) を `UnitInstance` に持ち、生成直後の既定値 100 を返す
   (パイロットの有無に依らない)。
-- **SRC.Sharp / VB6**: 気力はパイロット属性で、`Info(ユニット, name, 気力)` は乗っているパイロットの
+- **SRC.Sharp / VB5**: 気力はパイロット属性で、`Info(ユニット, name, 気力)` は乗っているパイロットの
   気力を読む。**無人ユニット (CountPilot()==0) では空文字**を返す。
 - **判断保留の理由**: 有人ユニットでは両者一致 (既定気力 100)。差が出るのは無人ユニットのみで、
   Rust が morale を instance に持つ設計上の選択。実プレイでユニットは原則有人なので影響は限定的。
@@ -337,4 +337,4 @@ class ベース `base+(level-1)*rate` で過大成長していた。VB6 `Pilot.c
 ---
 
 最終更新: 2026-06-18（差分オラクル placeunit 有人モードでパイロットのレベル成長式の大乖離を発掘・
-VB6 準拠へ是正＋Create level 配線＋パイロットデータ成長 conflation 是正）
+VB5 準拠へ是正＋Create level 配線＋パイロットデータ成長 conflation 是正）

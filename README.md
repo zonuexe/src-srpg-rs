@@ -7,7 +7,7 @@
 
 | Crate | 役割 |
 | --- | --- |
-| `crates/src-core` | プラットフォーム非依存のエンジン本体。元 VB6 の `*.bas` / `*.cls` を移植していく先 |
+| `crates/src-core` | プラットフォーム非依存のエンジン本体。元 VB5 の `*.bas` / `*.cls` を移植していく先 |
 | `crates/src-web` | wasm-bindgen + web-sys + Canvas 2D によるブラウザフロントエンド |
 
 現状は **環境構築フェーズ**。ブラウザに「Hello SRC」スプラッシュを表示するだけの最小構成が動く。以降の移植のための土台。
@@ -82,25 +82,25 @@ nix develop --command just build
 ├── crates/
 │   ├── src-core/          # エンジン本体（プラットフォーム非依存）
 │   └── src-web/           # WASM フロントエンド + index.html
-└── SRC_20121125/          # 原典 VB6 ソース (GPL-3.0)
+└── SRC_20121125/          # 原典 VB5 ソース (GPL-3.0)
 ```
 
 ## 移植方針
 
-- **コード対応関係**: VB6の`*.bas`/`*.cls`は基本1ファイル＝1モジュール（または型）として `crates/src-core/src/` 配下にマッピングする予定。
+- **コード対応関係**: VB5の`*.bas`/`*.cls`は基本1ファイル＝1モジュール（または型）として `crates/src-core/src/` 配下にマッピングする予定。
 - **識別子**: 原典の日本語識別子は英語化し、元の名前はコメントで併記する（例: `// 元: ユニットを移動させる`）。
 - **エンコーディング**: 原典はShift_JIS。読込時は変換する。Rust側ソースはすべてUTF-8。
-- **GUI**: VB6の`*.frm`（Form）はCanvas 2D上で再現。ウィンドウやダイアログはブラウザのHTML/CSSとCanvasを組み合わせて表現する。
+- **GUI**: VB5の`*.frm`（Form）はCanvas 2D上で再現。ウィンドウやダイアログはブラウザのHTML/CSSとCanvasを組み合わせて表現する。
 - **プラットフォーム非依存の徹底**: `src-core` は `#![forbid(unsafe_code)]`。`std::fs`・スレッド・ブロッキングI/Oを使わず、ファイルアクセスはVFS（仮想ファイルシステム）、待機処理は async/await で表現する。WASM以外への移植余地を残すため、描画・音声・入力は trait 層で抽象化し `src-web` が実装する。
 - **`.eve` スクリプト互換の維持**: 原典のイベントスクリプト言語（式評価器・3層変数スコープ Local/Global/Sub-local・`${name}` / `$(name)` 展開）を再現し、既存シナリオを無改変で実行できることを目標とする。
 - **整数演算で統一**: 移動範囲・射程などの計算では浮動小数点の等値比較を避け、整数で計算する（原典との結果一致のため）。
-- **VB6 の直訳を避ける**: 挙動を保ったまま Rust idiom へ再設計する。原典の構造をそのまま写すのではなく、型・所有権・エラー処理を Rust 流に組み直す。
+- **VB5 の直訳を避ける**: 挙動を保ったまま Rust idiom へ再設計する。原典の構造をそのまま写すのではなく、型・所有権・エラー処理を Rust 流に組み直す。
 - **セーブ互換**: 動的状態型には `Serialize` / `Deserialize` を付与し、新フィールドは `#[serde(default)]` で後方互換を確保する。
 
 ## テスト・検証
 
 - **挙動一致の検証**: ネイティブの単体/統合テスト（`just test`）に加え、実在の第三者シナリオ（`.eve`）を丸ごとロード・実行するスモークテストで原典との挙動一致・回帰を検出する（シナリオ素材は非同梱・各自取得）。
-- **SRC.Sharp との差分管理**: 原典 VB6 と SRC# で挙動が分かれる箇所や意図的な乖離は [`docs/SRC_SHARP_DIVERGENCE.md`](docs/SRC_SHARP_DIVERGENCE.md) に記録し、原典準拠を基本とする。
+- **SRC.Sharp との差分管理**: 原典 VB5 と SRC# で挙動が分かれる箇所や意図的な乖離は [`docs/SRC_SHARP_DIVERGENCE.md`](docs/SRC_SHARP_DIVERGENCE.md) に記録し、原典準拠を基本とする。
 - **仕様カバレッジの追跡**: 原典ヘルプ（`SRC.Sharp.Help`）に対する実装カバレッジを [`docs/SRC_COVERAGE_REPORT.md`](docs/SRC_COVERAGE_REPORT.md) で管理する。
 
 ## ライセンス

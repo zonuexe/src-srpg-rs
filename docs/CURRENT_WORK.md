@@ -1,6 +1,6 @@
 # 現在の作業状況 (Session Handoff)
 
-VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
+VB5 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 本ドキュメントは作業継続のための要約。**解決済み課題は §9 に 1 行で要約**し、本文は
 「現状・残課題・恒久リファレンス」に絞る。各課題の commit ハッシュ・実装詳細は memory
 `project_gap_audit_roadmap`（穴埋めロードマップ）/ `project_spirit_commands_status`（精神コマンド）に集約。
@@ -11,15 +11,15 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 
 **ブランチ**: `feat/status-panel-src-ui`（`master` ではない。**push 未指示**）。
 **テスト**: `cargo test -p src-core` 全緑／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。作業ツリーはクリーン（全コミット済み）。
-**主題**: ゲーム画面のレイアウト・配色を **オリジナル SRC（VB6）/ SRC.Sharp の見た目**に寄せる UI 忠実度の作業。コア仕様は不変、描画層（`src-web/render.rs`）中心＋必要な読み取り専用ビューモデルを `src-core` に追加。
+**主題**: ゲーム画面のレイアウト・配色を **オリジナル SRC（VB5）/ SRC.Sharp の見た目**に寄せる UI 忠実度の作業。コア仕様は不変、描画層（`src-web/render.rs`）中心＋必要な読み取り専用ビューモデルを `src-core` に追加。
 
 **権威ある参照**: 右ステータス窓 = `SRC.Sharp/SRC.NET/Status.cs`。配色定数 = `GUI.cs:504-507`（能力名=青 `RGB(0,0,150)`／無効武器=暗赤 `RGB(150,0,0)`／通常=黒）。気力後の `(強気)` 等は閾値でなく**パイロット性格**。タイプ(移動形態) = `Unit.cs::Transportation`。
 
 **このセッションで完了（各段ゲート緑・コミット済み）**:
 - **右ステータスパネル刷新**（`56ab8b0`）: 明グレー地＋シアン系ラベル＋黒値、並びを パイロット→機体→武器 に、武器は 攻撃/射程 右寄せ2カラム。ランタイム値は `GameDatabase::effective_*` / `PilotInstance` から解決。
-- **戦闘メッセージ窓**（`d599ae7`）: 戦闘演出中に攻防2機の HP/EN 緑バー＋結果を VB6 窓で表示（`draw_combat_window`、`battle_anim` 位置から live DB 解決）。演出長を 0.9s/0.6s に延長。
+- **戦闘メッセージ窓**（`d599ae7`）: 戦闘演出中に攻防2機の HP/EN 緑バー＋結果を VB5 窓で表示（`draw_combat_window`、`battle_anim` 位置から live DB 解決）。演出長を 0.9s/0.6s に延長。
 - **パネル細部**（`4aff365`）: 撃墜数（`PilotInstance` の「撃墜数 N」技能を実値表示）／装甲 base+bonus 分割／戦闘予測行を 160px 内に短縮。
-- **メッセージ窓 VB6 化＋武器 M 表記**（`2ca958b`）: 下部メッセージ窓の幅バグ修正（640→160px）＋青タイトルバー化。MAP兵器（class 全角Ｍ）の射程に M。
+- **メッセージ窓 VB5 化＋武器 M 表記**（`2ca958b`）: 下部メッセージ窓の幅バグ修正（640→160px）＋青タイトルバー化。MAP兵器（class 全角Ｍ）の射程に M。
 - **反撃手段選択窓**（`bf4335f`）: 既存の反撃/回避/防御フロー（`begin_reaction_prompt`、自動反撃オフ＝既定で発火）を、2機HUD＋各選択肢の命中率付きオリジナル窓に。`scene::reaction::ReactionWindowData` ＋ `App::reaction_window_data`（命中率は `attack_hit_forecast`）＋ `dialog::reaction_choice_at`（描画とジオメトリ共有）。
 - **攻撃側 武器選択窓**（`daa83d7`）: 目標確定後に武器表（名称/攻撃/命中/CT/弾EN/適応/分類, ×=不可）を挟む。**唯一フローに入力待ち1ステップ追加**。既存テスト保護のため `animate_battle`（UI）＋ `weapon_window_enabled`（既定true・マップコマンドでトグル）時のみ発火（ヘッドレステストは迂回）。`scene::weapon_select::*` ＋ `begin/build/resolve_weapon_select` ＋ `dialog::weapon_select_choice_at`。
 - **タイプ(移動形態)**（`ab1d0a8`）: `data::unit::move_type_label`（テスト付き）でステータスに「タイプ」行を追加。
@@ -36,34 +36,34 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 
 ---
 
-## 現在地（2026-06-21）— サンプル戦闘系特殊能力を VB6 原典で網羅実装（セッション区切り）
+## 現在地（2026-06-21）— サンプル戦闘系特殊能力を VB5 原典で網羅実装（セッション区切り）
 
 **ブランチ**: `feat/sample-scenario-smoke`（`master` ではない。**push 未指示**）。
 **テスト**: `cargo test -p src-core` 全緑（約 2018 件）／ clippy clean（`-D warnings`）／ wasm `cargo check` OK。作業ツリーはクリーン（全コミット済み）。
 
-**★ このセッションの最大の収穫＝VB6 原典ソースの発見**: 非再配布パッケージ `srcall-2_2_33-111106/Source/Src/`
-に **VB6 原典ソース一式（`*.cls`/`*.bas`）** が同梱されている。C#（SRC.Sharp/SRCCore）より上流の最終 ground truth。
-**今後の SRC 仕様確認はここを引く**（例: C# オラクルでは検証不能だった防御特性・未文書の `マップ攻撃破壊` を VB6 で確定できた）。
+**★ このセッションの最大の収穫＝VB5 原典ソースの発見**: 非再配布パッケージ `srcall-2_2_33-111106/Source/Src/`
+に **VB5 原典ソース一式（`*.cls`/`*.bas`）** が同梱されている。C#（SRC.Sharp/SRCCore）より上流の最終 ground truth。
+**今後の SRC 仕様確認はここを引く**（例: C# オラクルでは検証不能だった防御特性・未文書の `マップ攻撃破壊` を VB5 で確定できた）。
 
-**この区切りで完了した実装**（すべて VB6 を ground truth に・各段ゲート緑・コミット済み。詳細は下記 §現在地(2026-06-20) の続き節）:
+**この区切りで完了した実装**（すべて VB5 を ground truth に・各段ゲート緑・コミット済み。詳細は下記 §現在地(2026-06-20) の続き節）:
 - **マップ兵器の発火イベント**: プレイヤー/AI 使用で 使用/攻撃/使用後/攻撃後/損傷率 を発火（通常攻撃と対称化）。撃破は原典どおり `マップ攻撃破壊`（スクリプト `MapAttack` は `破壊`）。
 - **攻撃系精神の `スペシャルパワー無効化` 免疫** / **`Not` 演算子の優先順位是正**（記録済み乖離 §3 解消）。
 - **自作SP「生贄→みがわり」**（`イベント=` SP効果種別＋身代わり戦闘リダイレクト、通常/反撃/援護 全経路）。
-- **貫（貫通）属性**（VB6 突合監査で発見した未実装の実バグ。サンプル使用武器が装甲半減せず過少ダメージだった）。
-- **防御特性監査**（弱点/吸収/耐性/無効化 が VB6 と一致を確認）。
+- **貫（貫通）属性**（VB5 突合監査で発見した未実装の実バグ。サンプル使用武器が装甲半減せず過少ダメージだった）。
+- **防御特性監査**（弱点/吸収/耐性/無効化 が VB5 と一致を確認）。
 - **再攻撃**（大鳥霞・確率的2回目攻撃）／**カウンター＋先読み**（ロイ・先制反撃）。
 
 **到達点＝サンプルの戦闘系特殊能力は網羅完了**: 霊力/術（既存）＋ 再攻撃/カウンター/みがわり（本セッション）。
-**連続行動・連続ターゲットはサンプル data にも VB6 Source にも不在＝N/A**（旧メモは別 fixture の混同と判明）。
+**連続行動・連続ターゲットはサンプル data にも VB5 Source にも不在＝N/A**（旧メモは別 fixture の混同と判明）。
 
 **残（次セッション候補）**:
-1. **みがわり肩代わりダメージの再計算**（低優先・近似）: VB6 は身代わりを新被弾対象として Damage を再算出するが、ポートは
+1. **みがわり肩代わりダメージの再計算**（低優先・近似）: VB5 は身代わりを新被弾対象として Damage を再算出するが、ポートは
    防御側向け予測値を流用（身代わりの バリア/シールド/不死身 は適用済み・差は核式の基礎装甲のみ）。完全再算出は
    `predict_with_status_terrain`(~13引数) の redirect 内重複構築が要り限界利得に不相応のため据え置き。
 2. **非戦闘の sample 機能**: Welcome.eve メニュー導線の駆動 / 1ターン実プレイ通し / 画像(PaintPicture)・戦闘アニメ(GBA)・
    共有 Lib の VFS 同梱 / ブラウザ実レンダリング確認（要実機）。
-3. **VB6 を ground truth にした横断監査の継続**（"原典/fixture の多様性が新種バグの鉱脈" の踏襲。貫 はこの手法で発見）。
-> 詳細・VB6 機構・コミットハッシュは memory [[project_sample_scenario_goal]] に集約。
+3. **VB5 を ground truth にした横断監査の継続**（"原典/fixture の多様性が新種バグの鉱脈" の踏襲。貫 はこの手法で発見）。
+> 詳細・VB5 機構・コミットハッシュは memory [[project_sample_scenario_goal]] に集約。
 
 ---
 
@@ -106,7 +106,7 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
   （脱力 で無効化あり=気力不変・なし=気力-10）。
 
 **★ 追加（2026-06-20・続き）= `Not` 演算子の優先順位をオラクルと整合**（記録済み乖離 §3 を是正）:
-- 式評価器の `Not` は最高優先（`parse_factor`）で束縛していたが、VB6/SRC.Sharp は比較より緩く
+- 式評価器の `Not` は最高優先（`parse_factor`）で束縛していたが、VB5/SRC.Sharp は比較より緩く
   `And`/`Or` より固い。`Not 1 = 2` がポート 0／オラクル 1 と乖離していた（`docs/SRC_SHARP_DIVERGENCE.md` §3）。
 - **是正**: 比較（`parse_comparison`）と論理（`parse_logical`）の間に `parse_not` レベルを挿入し
   `parse_factor` から `Not` を外す。`Not 1 = 2`=1・`Not 0 And 1`=`(Not 0) And 1`=1、単項/括弧付きは不変。
@@ -136,37 +136,37 @@ VB6 製 SRC (Simulation RPG Construction) を Rust + WebAssembly に移植中。
 - **残（次段）**: 近似（肩代わりダメージは身代わりの装甲で再計算せず防御側向け値を流用）。プレイヤー UI の
   SP メニューからの実発動（対象種別是正で導線は通る）はブラウザ目視のみ。
 
-**★ 追加（2026-06-21）= 貫（貫通）属性を実装（VB6 突合監査で発見した実バグ）**:
-- VB6 原典で **防御特性（弱点/吸収/耐性/無効化）の Rust 実装が正しい**ことを確認した監査中に、**`貫`
-  （貫通）属性が完全未実装**と判明。VB6 `Unit.cls:6812-6819`／C# SRC.NET `Unit.cs:11173`: `貫`=防御側装甲
+**★ 追加（2026-06-21）= 貫（貫通）属性を実装（VB5 突合監査で発見した実バグ）**:
+- VB5 原典で **防御特性（弱点/吸収/耐性/無効化）の Rust 実装が正しい**ことを確認した監査中に、**`貫`
+  （貫通）属性が完全未実装**と判明。VB5 `Unit.cls:6812-6819`／C# SRC.NET `Unit.cs:11173`: `貫`=防御側装甲
   1/2・`貫Ln`=×(10-n)/10。`is_true_value` ゲートの外＝常時適用（予測にも反映）。
 - **サンプルに 貫 武器が存在**（`クウィンテセンス`=`貫間`／`超高速蹴`=`突貫Ｃ`）＝これらが装甲半減せず
   過少ダメージだった実バグ。`combat::pierce_armor` を新設し `predict_with_status_terrain` の def_power
   算出（装甲×気力×Defense×適応 の前）に配線。テスト `pierce_weapon_reduces_armor_and_increases_damage`。
-- **残**: `貫通攻撃` SP（攻撃側 condition も装甲半減）は未対応（サンプル未使用）。防御特性の核は VB6 と一致を確認。
+- **残**: `貫通攻撃` SP（攻撃側 condition も装甲半減）は未対応（サンプル未使用）。防御特性の核は VB5 と一致を確認。
 - **残**: `貫通攻撃` SP は未対応（サンプル未使用）。
 
 **★ 追加（2026-06-21）= 再攻撃（パイロット特殊能力）を実装**:
-- 大鳥霞（龍神機）が `再攻撃Lv1-3` を所持。VB6 `Unit.cls:10239-10270` 準拠で、主攻撃後に
+- 大鳥霞（龍神機）が `再攻撃Lv1-3` を所持。VB5 `Unit.cls:10239-10270` 準拠で、主攻撃後に
   `slevel=(直感>=相手直感?2*Lv:Lv)` が `Dice(32)` 以上なら同じ攻撃をもう一度（武器 `再Ln` 属性は
   `n>=Dice(16)`、SP効果「再攻撃」condition は無条件）。`attack_resolve_and_run` を `reattack_in_progress`
-  フラグ付きで**再帰**させ、再攻撃側は使用イベント再発火と3回目の再攻撃を抑止（VB6 `begin` ラベルは
+  フラグ付きで**再帰**させ、再攻撃側は使用イベント再発火と3回目の再攻撃を抑止（VB5 `begin` ラベルは
   使用イベントより後ろ＝再攻撃で 使用 は再発火しないが 攻撃/反撃 は再交戦する）。能力非保持ユニットは
   乱数非消費＝既存 RNG 列不変。テスト `reattack_skill_strikes_twice`。
 **★ 追加（2026-06-21）= カウンター（先制反撃・パイロット特殊能力）を実装**:
-- ロイ（キャリバーン）が `カウンターLv1-4` を所持。VB6 `COM.bas:1040-1058` 準拠で、攻撃を受ける際に
-  防御側が反撃武器を射程内に持ち先手を取れるなら、**主攻撃の前に**先制反撃する。発動条件（VB6 判定順）:
+- ロイ（キャリバーン）が `カウンターLv1-4` を所持。VB5 `COM.bas:1040-1058` 準拠で、攻撃を受ける際に
+  防御側が反撃武器を射程内に持ち先手を取れるなら、**主攻撃の前に**先制反撃する。発動条件（VB5 判定順）:
   ① 攻撃側武器が `後`（後攻）／防御側反撃武器が `先`（先制）属性、② `カウンター` SP、③ `先読み` 技能
   `Lv>=Dice(16)`、④ `カウンター` 技能で使用回数残あり（`used<Lv`、使うたび `used_counter_attack` 加算・
   `begin_phase` で 0 リセット）。先制反撃で攻撃側を撃破すれば主攻撃は不発、主攻撃後の通常反撃は抑止。
   `try_preemptive_counter`＋`attack_resolve_and_run` の予測前に配線、先制で index がずれ得るため位置で
   引き直す。能力非保持ユニットは乱数非消費＝既存 RNG 列不変。テスト `counter_skill_strikes_pre_emptively`
   （先読み の base 機構も同時に実装）。
-- **残（次の sample-used 特殊能力）**: **連続行動・連続ターゲット**。VB6 機構は要調査。
+- **残（次の sample-used 特殊能力）**: **連続行動・連続ターゲット**。VB5 機構は要調査。
   みがわり肩代わりダメージの身代わり装甲再計算も残（近似）。
 
 **★ 追加（2026-06-20・続き）= マップ攻撃の撃破を `マップ攻撃破壊` で発火（原典忠実・ユーザ決定）**:
-- **VB6 原典ソース発見**: `srcall-2_2_33-111106/Source/Src/`（C# より上流の ground truth）。`Event.bas:1744` で
+- **VB5 原典ソース発見**: `srcall-2_2_33-111106/Source/Src/`（C# より上流の ground truth）。`Event.bas:1744` で
   `マップ攻撃破壊` は `破壊` と同列の `DestructionEventLabel`、`Unit.cls:17214` がマップ撃破された**対象**に発火。
 - **是正**: プレイヤー/AI 発のマップ攻撃（`is_event=false`）の撃破は原典どおり `破壊` ではなく
   **`マップ攻撃破壊 <対象>`** を発火（`fire_map_attack_destruction_labels`、`全滅`/対象ユニット設定は共通）。
@@ -249,21 +249,21 @@ native test 11 件＋統合 2 件。**Phase 1/2 完了・Phase 3 headless 完了
 ユーザがスクショで確認。攻撃実行でクローズアップ本体が再生（図形/ClearPicture/ペン状態の実機検証）。
 **⏸ クローズアップ各フレームの目視確認はユーザ判断で保留（Windows 動作環境を確保済み・そちらで実施予定）**＝GBA はエンジン側の検証可能範囲を完了し残は実機の見栄え微調整のみ。詳細は §4「GBA 着手準備」。
 
-**★★ 次セッション＝「オリジナル SRC との互換性向上」（ユーザ決定 2026-06-19）**: GBA は一区切り。次は VB6 `SRC_20121125` / C# `SRC.Sharp` を ground truth とした
+**★★ 次セッション＝「オリジナル SRC との互換性向上」（ユーザ決定 2026-06-19）**: GBA は一区切り。次は VB5 `SRC_20121125` / C# `SRC.Sharp` を ground truth とした
 **差分検証の拡張と乖離の是正**を主題にする。起点は **§1.1「次フロンティア」** ＋ 既存差分 harness `tools/oracle-diff`（式層/Commands/データ層/combat 予測/移動/気力・精神を
 カバー済）＋ 記録済み乖離 `docs/SRC_SHARP_DIVERGENCE.md` ＋ memory [[reference_csharp_oracle]]（C# は macOS で 7490 tests 緑・`nix develop .#dotnet`）。
 **有望な着手候補**（詳細・優先度は §1.1 / §4 テーブル参照）: ① **未カバー領域の差分 corpus 化**（状態異常/SetStatus の実効、ZoC・遮蔽、水中/宇宙 passability＝該当ユニットを `@unit` で合成、
 クリティカル技能項の C# 突合）② **記録済み乖離の解消**（`SRC_SHARP_DIVERGENCE.md` の継承/性別正規化/`特殊能力名称` 列挙差）③ **別 fixture 駆動で新種バグ発掘**（"fixture の多様性が鉱脈" の踏襲）。
-**手法**: 「実 fixture or 合成入力を両エンジンで評価して diff → 乖離は VB6/C# で裏取り → 是正 → synthetic＋oracle 回帰」を継続（推測実装はしない）。
+**手法**: 「実 fixture or 合成入力を両エンジンで評価して diff → 乖離は VB5/C# で裏取り → 是正 → synthetic＋oracle 回帰」を継続（推測実装はしない）。
 
 **前セッション（2026-06-18・`master` 直接コミット）**: ① ✅ **B 単機ステータス詳細（`Scene::UnitDetail`）完了**（§1.2 B）。
 ② ✅ **差分オラクルを combat 予測（c）＋移動（d）＋気力/精神（e）＋改造/極端 level（f）＋別 fixture/サイズ差（g）へ拡張**。combat `placeattack` 45/45・移動 `moverange` 平地一致・
-気力/精神 10/10・改造/level `combat_rank_level` **20/20**・サイズ差 `combat_size_tales` **7/7**。過程で **実バグ 11 件**を発掘・是正（全て VB6/C# 裏取り）: ①命中率クランプ→上限なし・最低0
+気力/精神 10/10・改造/level `combat_rank_level` **20/20**・サイズ差 `combat_size_tales` **7/7**。過程で **実バグ 11 件**を発掘・是正（全て VB5/C# 裏取り）: ①命中率クランプ→上限なし・最低0
 ②最低ダメージ→既定10 ③地形命中修正の符号（正=防御地形）④防御側パイロット Defense（耐久）⑤飛行/水中等の特殊移動コスト（2→1 game MP）
 ⑥ブースト の高気力 ×1.25 配線 ⑦攻撃側ダメージ増加精神を sp.txt データ駆動・MaxDbl 非加算へ ⑧防御側 被ダメージ低下も data 駆動・C# up/down-mod へ（**不屈 1→×0.1**）
 ⑨ **機体改造の武器攻撃力を乗算 `+base×10%×Rank` → C# 加算（通常+100×Rank/固据置/Ｒ・改 +50 or +10×n×Rank）へ是正**（改造ユニットの攻撃が過大だった pervasive bug）。
 ⑩ **散（散布）属性武器の距離補正を実装**（manhattan 距離 1-5+ で 命中 +0/+5/+10/+15/+20・ダメージ ×1.0/0.95/0.90/0.85/0.80。ライブ戦闘 3 経路＋プレビューに配線。Rust は 散 を一切未実装だった）。
-⑪ **防御特性「弱点」の装甲半減を実装＋属性照合を字単位部分一致へ是正**（VB6 `Unit.cls:6949` `arm \ 2`。旧 Rust は弱点＝ダメージ変化なし＋照合が完全トークン一致で複合 class "格実火" が弱点 "火" に不一致＝耐性/吸収/無効化も事実上機能せず。**oracle は SRCCore の未完成ポート＝検証不能で VB6 が唯一の ground truth**）。詳細は §1.1 stage c-g＋防御特性節。  
+⑪ **防御特性「弱点」の装甲半減を実装＋属性照合を字単位部分一致へ是正**（VB5 `Unit.cls:6949` `arm \ 2`。旧 Rust は弱点＝ダメージ変化なし＋照合が完全トークン一致で複合 class "格実火" が弱点 "火" に不一致＝耐性/吸収/無効化も事実上機能せず。**oracle は SRCCore の未完成ポート＝検証不能で VB5 が唯一の ground truth**）。詳細は §1.1 stage c-g＋防御特性節。  
 **本セッション後半の追加完了**: ✅ **A2 着地点選択 UI 完了**（§1.2 A・発進 `09480eb`＋分離 `a533da3`）／✅ **防御特性を全 3 経路（通常/援護/反撃）で完成**（弱点装甲半減＋字単位照合＋吸収装甲無視＋魔例外、`cb4ce83`/`960e35e`/`d13bfe9`）／
 ✅ **単機ステータス詳細に必要技能の武器使用可否を反映**（`b1504b3`）／✅ **空 passability をオラクル実証**（`018f4bd`）。  
 **★★ GBA クローズアップ戦闘アニメ＝Phase 1〜3 完了・Phase 4(実機目視)保留（ユーザ決定 2026-06-18／2026-06-19 完了・保留）**: 偵察結果・段階計画は **§4「GBA 着手準備」**に集約。
@@ -287,7 +287,7 @@ push はユーザの明示指示で行う（no-auto-push）。**D スパロボ�
 proper（パーサ＋操作＋効果）・敵 AI 戦術判断（攻撃補助/回復/補給/召喚/敵対象アビリティ・回復精神・マップ兵器・防御地形選好・復活
 pre-buff・散開・ChangeMode 逃亡/護衛）。**残るのは外部依存・大規模・設計判断・検証制約のある項目のみ**（§1）。
 
-**方針メモ**: エンジンは SRC_20121125 (VB6) / SRC.Sharp (C#) の**忠実移植**であるべき。原典に定義の無いシナリオ独自要素
+**方針メモ**: エンジンは SRC_20121125 (VB5) / SRC.Sharp (C#) の**忠実移植**であるべき。原典に定義の無いシナリオ独自要素
 （例: 東方夢想伝の精神 決意/気迫/希望）は**推測実装せず**、シナリオ側（sp.txt 効果種別/イベント）の責務とする。
 
 **本セッション（2026-06-16）の実装**（詳細は §9 / memory）:
@@ -361,7 +361,7 @@ pre-buff・散開・ChangeMode 逃亡/護衛）。**残るのは外部依存・�
   同じ pilot.txt/unit.txt を同順でロードし、同一の `Info(ユニットデータ/パイロットデータ,…)` probe を両エンジンで評価して diff
   （コーパス `unit_data.txt`、対象 `fixtures/スパロボ戦記/data/スパロボ戦記`）。**結果 58/61 一致**。
   - **✅ 実バグ是正（`803e13d`）**: pilot.txt 能力値行の 5/6 番目（技量/反応）を取り違えていた（`Info(…,技量)` C#=135/旧 Rust=80）。
-    VB6 `PilotDataList.cls:677-692` 準拠（技量→反応の順）に是正。combat 式は意味的に正しく参照していたため**パーサ是正で実効値が正される**。
+    VB5 `PilotDataList.cls:677-692` 準拠（技量→反応の順）に是正。combat 式は意味的に正しく参照していたため**パーサ是正で実効値が正される**。
   - **残 3 件は既知乖離として記録**（`docs/SRC_SHARP_DIVERGENCE.md`）: ① unit `特殊能力数`/`特殊能力名称,1`（Rust が bare marker 行
     `全ユニット共通` を捨てる差・継承未実装で機能影響無）② パイロット `性別`（`Sex` enum で `-`→空に正規化）。C# はリスト初期化で
     組込みダミー（パイロット不在/ユニット無し）を 1 件足すため件数が +1。
@@ -378,10 +378,10 @@ pre-buff・散開・ChangeMode 逃亡/護衛）。**残るのは外部依存・�
     `unit_pilot.txt`。**✅ 実バグ是正（Create の level 配線）**: `Create` が level 引数（主パイロット初期レベル）を捨ててレベル 1 固定だった→
     `exp_for_level` で初期 total_exp へ配線。**レベル/累積経験値は cross-engine 完全一致**（lv10/20/30）。
   - **★★ ✅ pervasive バグを発掘・是正: パイロットのレベル成長式**。旧 Rust `grown_pilot`/`apply_stat_growth` は class ベース
-    `base+(level-1)*rate`（過大成長）。VB6 `Pilot.cls:582-593` 準拠の **`lv=Level`（レベル 1 でも成長）・格闘/射撃/技量/反応 +=lv・
+    `base+(level-1)*rate`（過大成長）。VB5 `Pilot.cls:582-593` 準拠の **`lv=Level`（レベル 1 でも成長）・格闘/射撃/技量/反応 +=lv・
     命中/回避 +=2*lv** へ是正。**全レベルアップ済みパイロットの戦闘実効値に波及する pervasive bug**だった（人工知能 lv10 格闘 旧190→110、
     超人工知能 lv30 415→155）。併せて `Info(パイロットデータ,…)` が配置済みパイロットで成長後を返す conflation も是正（静的データを返す）。
-    `unit_pilot.txt` **13/13 一致**で cross-engine 検証。「level 1 でも成長」へ伴い成長系テスト 5 件の期待値を VB6 値へ更新
+    `unit_pilot.txt` **13/13 一致**で cross-engine 検証。「level 1 でも成長」へ伴い成長系テスト 5 件の期待値を VB5 値へ更新
     （`from_data` は level 1 = base+成長、成長は class 非依存に）。
   - **✅ パーサ層の追加 sweep**: 武器フィールド（`unit_weapon.txt`、マジンガーＺ 7 武器×全フィールド）**38/38 一致＝武器パーサ堅牢**。
     パイロット SP/特殊能力（`pilot_feature.txt`）**11/13 一致**。残 2 件は `特殊能力名称` 列挙の既知乖離（C#=別名 RHS / Rust=key LHS。
@@ -390,11 +390,11 @@ pre-buff・散開・ChangeMode 逃亡/護衛）。**残るのは外部依存・�
     を新設（C#=map 初期化＋攻撃側/守備側を `StandBy` 配置し `UnitWeapon.HitProbability/Damage/CriticalProbability` を直接呼ぶ・
     Rust=`effective_combat_data`→`combat::predict_with_status_terrain` を中立条件で呼ぶ）。コーパス `combat_prediction.txt`（命中/クリティカル、
     地形非依存）＋ `combat_damage.txt`（ダメージ、両者を地上に置き env=陸 で地形適応を整合）。**命中 18/18 ＋ ダメージ 14/14 = cross-engine 全一致**。
-    **★★ 実バグ 4 件を発掘・是正（全て VB6 裏取り）**: ① **命中率クランプ**＝旧 `clamp(5,95)`（他 SRPG 慣習）を VB6 `Unit.cls:6694-6696` 準拠の
-    **上限なし・最低 0**（>100=必中、表示のみ `min(100)`）。② **最低ダメージ**＝旧 `max(1)` を VB6 `Unit.cls:7460` 準拠の**既定 10**。①②は全戦闘の命中/ダメージに波及。
-    ③ **地形の命中修正の符号**＝旧 combat `(100+hit_mod)`＋ビルトイン地形が負値の独自規約を、VB6 `Unit.cls:6295`/`マップデータ.md` 準拠の
+    **★★ 実バグ 4 件を発掘・是正（全て VB5 裏取り）**: ① **命中率クランプ**＝旧 `clamp(5,95)`（他 SRPG 慣習）を VB5 `Unit.cls:6694-6696` 準拠の
+    **上限なし・最低 0**（>100=必中、表示のみ `min(100)`）。② **最低ダメージ**＝旧 `max(1)` を VB5 `Unit.cls:7460` 準拠の**既定 10**。①②は全戦闘の命中/ダメージに波及。
+    ③ **地形の命中修正の符号**＝旧 combat `(100+hit_mod)`＋ビルトイン地形が負値の独自規約を、VB5 `Unit.cls:6295`/`マップデータ.md` 準拠の
     **正=防御地形・`(100-hit_mod)`** へ統一（terrain.txt は正格納。terrain.txt をロードする実シナリオで防御地形の被命中が逆転＝pervasive。AI の防御地形選好も是正）。
-    ④ **防御側パイロット Defense（耐久 技能）**＝旧 `def_power` に Defense 係数が無く耐久持ちが過大被ダメージ。VB6 `Pilot.cls:402` `Defense=100+5*耐久Lv` を
+    ④ **防御側パイロット Defense（耐久 技能）**＝旧 `def_power` に Defense 係数が無く耐久持ちが過大被ダメージ。VB5 `Pilot.cls:402` `Defense=100+5*耐久Lv` を
     `防御力×Defense/100` へ反映（基底 Defense=100 の人工知能では露見せず、cut2 representative の `Info(防御)=100` から発掘）。
     SRC ダメージ式 `(攻撃力−防御力)×地形ダメージ修正` は**構造が Rust と同一**（攻撃力にも地形適応が乗ることも実数確認＝`戦闘システム詳細.md`）。
     回帰テスト 4 件（`hit_chance_has_no_upper_cap`/`minimum_damage_is_ten`/`positive_terrain_hit_mod_reduces_hit`/`endurance_skill_raises_defense_and_reduces_damage`。③④は synthetic＝fixture に該当データ無し）。
@@ -427,13 +427,13 @@ pre-buff・散開・ChangeMode 逃亡/護衛）。**残るのは外部依存・�
     harness は C# `StandBy(1+2*created,5)`（2 マス間隔）に合わせ Create x を 1,3,5,… にし距離依存補正を cross-engine 化→ **7/7 一致**（既存 corpus 不変）。
     **教訓**: 全 M サイズ・技能無の fixture では到達不能な属性（散）が、別 fixture を当てて初めて露見。**fixture の多様性が新種バグの鉱脈**（経営シム・データ層・別シナリオと同じパターン）。
   - **✅ stage h = 防御特性「弱点」是正済（2026-06-18、11 件目）＋ oracle はこの領域を検証不能と判明**:
-    別 fixture（テイルズ モンスター、`弱点=火` 等）で防御特性を突合する過程で Rust の 2 バグを是正（commit `cb4ce83`）。**VB6 が ground truth**:
-    - ① **弱点=装甲半減 未実装**→ `weapon_hits_weakness` ＋ `attack_resolve_and_run` で予測前に `def_unit.armor /= 2`（VB6 `Unit.cls:6949` `arm \ 2`、静的特殊能力＋一時付加 condition `弱点:<属性>`）。
-    - ② **属性照合が完全トークン一致**（無空白複合 class "格実火" が弱点 "火" に不一致＝耐性/吸収/無効化も事実上死んでいた）→ `defense_attr_matches` で **VB6 `InStrNotNest`＝字単位部分一致**へ（全=常に / 物=魔・精以外）。優先順も spec「弱点>有効>吸収>無効化>耐性」へ。synthetic 回帰 `defense_attr_substring_matching_and_weakness_detection`（既存 defensive test も後方互換）。
-    - **★ 検証手段の重大知見**: 差分オラクル（SRCCore）は**防御特性を検証できない**。実機 SRCCore は `strWeakness`/`strResist`/`strAbsorb` の populate が**コメントアウトされた未完成ポート**（`Unit.status.cs:1082` 全コメント・`Unit.ref.cs` は `SRCCore.csproj` で `<Compile Remove>`）で `Weakness()` が常に false＝防御特性が無効。harness が `UList.Add`＋`Update()` を経ても strWeakness は空（debug 実測）。**oracle も移植であり ground truth ではない**（[[reference_csharp_oracle]] の教訓）の顕著例。**今後この領域は VB6＋synthetic で検証する**（harness 先行案は SRCCore 未完成のため無効と判明し撤回）。
+    別 fixture（テイルズ モンスター、`弱点=火` 等）で防御特性を突合する過程で Rust の 2 バグを是正（commit `cb4ce83`）。**VB5 が ground truth**:
+    - ① **弱点=装甲半減 未実装**→ `weapon_hits_weakness` ＋ `attack_resolve_and_run` で予測前に `def_unit.armor /= 2`（VB5 `Unit.cls:6949` `arm \ 2`、静的特殊能力＋一時付加 condition `弱点:<属性>`）。
+    - ② **属性照合が完全トークン一致**（無空白複合 class "格実火" が弱点 "火" に不一致＝耐性/吸収/無効化も事実上死んでいた）→ `defense_attr_matches` で **VB5 `InStrNotNest`＝字単位部分一致**へ（全=常に / 物=魔・精以外）。優先順も spec「弱点>有効>吸収>無効化>耐性」へ。synthetic 回帰 `defense_attr_substring_matching_and_weakness_detection`（既存 defensive test も後方互換）。
+    - **★ 検証手段の重大知見**: 差分オラクル（SRCCore）は**防御特性を検証できない**。実機 SRCCore は `strWeakness`/`strResist`/`strAbsorb` の populate が**コメントアウトされた未完成ポート**（`Unit.status.cs:1082` 全コメント・`Unit.ref.cs` は `SRCCore.csproj` で `<Compile Remove>`）で `Weakness()` が常に false＝防御特性が無効。harness が `UList.Add`＋`Update()` を経ても strWeakness は空（debug 実測）。**oracle も移植であり ground truth ではない**（[[reference_csharp_oracle]] の教訓）の顕著例。**今後この領域は VB5＋synthetic で検証する**（harness 先行案は SRCCore 未完成のため無効と判明し撤回）。
     - **✅ 追加是正（commit `960e35e`）**: 吸収を**装甲無視基準**へ（`weapon_hits_absorb`＋予測前 `armor=0`、弱点>吸収 優先・有効で打ち消し）＋**魔属性例外**（魔武/魔突/魔接/魔銃/魔実 武器に「魔」防御特性が効かない）を `defense_attr_matches` に実装。synthetic 拡張。
     - **✅ 援護/反撃にも防御特性を適用（commit `d13bfe9`）**: 装甲調整を `apply_defense_armor_mod` へ共有化し通常攻撃/援護/反撃の予測前に一貫適用＋援護/反撃のダメージを `defense_attribute_damage` でラップ（プレイヤーが弱点持ちの敵を反撃/援護する頻出ケースの過少ダメージを是正）。**防御特性は全 3 経路で完成**。
-    - **残（要精緻化・任意・極低優先）**: 吸収×クリティカルの適用順のみ（VB6 は Damage 内で反転→外で ×2＝稀）。
+    - **残（要精緻化・任意・極低優先）**: 吸収×クリティカルの適用順のみ（VB5 は Damage 内で反転→外で ×2＝稀）。
   - **（参考・解決済の経緯）当初の調査記録**:
     別 fixture（テイルズ モンスター、`弱点=火`/`吸収=水`/`耐性=闇` 多数）で防御特性を突合する過程で、**Rust の防御特性ダメージ計算に複数の確定バグ**を発見。
     **重要な訂正**: 当初 `SRC.Sharp/SRC.NET/` を読んでいたが、**oracle harness が実際にビルドするのは `SRC.Sharp/SRC.Sharp/SRCCore/`**（`oracle-diff.csproj` の ProjectReference）。
@@ -920,7 +920,7 @@ target/debug/scan_eve /tmp/out
 - **式言語層の網羅監査（mining）**: 算術/演算子/Math/String/Format/時刻/正規表現の input→expected を C# テストから抽出し
   Rust に移植。**堅牢を確認**し、オラクルテスト計 51 件追加（`expression_oracle`/`math_function_oracle`/`string_function_oracle`/
   `function_oracle`/`combat_stat_oracle`）。**実バグ 1 件修正**: 式のゼロ除算が分子を残していた（`5/0==5`）→ SRC 準拠で 0（`b994e08`）。
-- **ゲームロジック層の VB6 裏取り是正（実バグ 3 件）**: ① 機体改造 HP +100→**+200** / 装甲 +30→**+100**（`Unit.cls:1719-21`、`0458a0e`）。
+- **ゲームロジック層の VB5 裏取り是正（実バグ 3 件）**: ① 機体改造 HP +100→**+200** / 装甲 +30→**+100**（`Unit.cls:1719-21`、`0458a0e`）。
   ② **exp→level 100→500/level**（`Pilot.cls:1183`、`06366f3`）。後者は実装中に **16 箇所重複**していた `total_exp/100` を正典関数
   `pilot_instance::level_from_exp` に集約（1 箇所漏れでレベル不整合になる罠を除去）、LevelUp コマンド n*500・修理/補給 exp 基準 100/150 も連動是正。
 - **死にコード除去**: 未使用かつ壊れた `crates/src-core/src/expression/` モジュールを削除（`f83e237`）。
@@ -928,7 +928,7 @@ target/debug/scan_eve /tmp/out
   C# SRCCore と Rust 両エンジンに通して自動 diff。**式層 75/76 一致**（Round 乖離を自動検出）・**Commands 層 9/9 一致**（`4427366`/`011e81e`）。
 - **差分 harness をデータ層へ拡張（静的ユニット/パイロットデータ diff）**: 新設 `oracle_loaddata` bin（Rust）＋ C# `loaddata` モードが
   同一データディレクトリをロードし、`Info(ユニットデータ/パイロットデータ,…)` probe を両エンジンで diff（コーパス `unit_data.txt`、**58/61 一致**）。
-  **実バグ 1 件を検出・是正（`803e13d`）**: pilot.txt 能力値行 5/6 番目の技量/反応 取り違え（VB6 `PilotDataList.cls:677-692` 準拠に是正、
+  **実バグ 1 件を検出・是正（`803e13d`）**: pilot.txt 能力値行 5/6 番目の技量/反応 取り違え（VB5 `PilotDataList.cls:677-692` 準拠に是正、
   combat に波及していた）。残 3 件は既知乖離として記録（unit bare marker `全ユニット共通`・`性別` の `-`→空正規化・C# 組込みダミー件数 +1）。
 - **差分 harness をユニット実体層へ拡張（stage a-2、`placeunit` モード）**: `@unit <name> <rank> <party>` で両エンジンが同一ユニットを生成
   （C#=`UList.Add`+`FullRecover`／Rust=`Create`）し `Info(ユニット,…)` を diff（コーパス `unit_instance.txt`、**24/25 一致**）。**実バグ 1 件を
@@ -936,14 +936,14 @@ target/debug/scan_eve /tmp/out
   残 1 件は既知乖離（`気力`: 無人ユニットで C# 空・Rust 既定 100）。
 - **差分 harness を有人ユニット（パイロット実体）へ拡張（stage b、`@unit` 5 フィールド有人形式）**: コーパス `unit_pilot.txt`。**実バグ 1 件を
   検出・是正**: `Create` の level（主パイロット初期レベル）を無視していた→`exp_for_level` で初期 total_exp へ配線（レベル/累積経験値が cross-engine 一致）。
-  **★★ pervasive バグを発掘・是正**: パイロットのレベル成長式が SRC と大きく乖離（旧 Rust=class ベース過大成長 / SRC=VB6 `Pilot.cls:582-593`
-  `lv=Level`・格闘/射撃/技量/反応 +=lv・命中/回避 +=2*lv）。`grown_pilot`/`apply_stat_growth` を VB6 式へ是正（人工知能 lv10 格闘 旧190→110、
+  **★★ pervasive バグを発掘・是正**: パイロットのレベル成長式が SRC と大きく乖離（旧 Rust=class ベース過大成長 / SRC=VB5 `Pilot.cls:582-593`
+  `lv=Level`・格闘/射撃/技量/反応 +=lv・命中/回避 +=2*lv）。`grown_pilot`/`apply_stat_growth` を VB5 式へ是正（人工知能 lv10 格闘 旧190→110、
   超人工知能 lv30 415→155）＝全レベルアップ済みパイロットに波及していた。併せて `Info(パイロットデータ,…)` の成長 conflation も是正（静的データを返す）。
-  `unit_pilot.txt` 13/13 一致。「level 1 でも成長」化に伴い成長系テスト 5 件を VB6 値へ更新。
+  `unit_pilot.txt` 13/13 一致。「level 1 でも成長」化に伴い成長系テスト 5 件を VB5 値へ更新。
 - **乖離記録**: `docs/SRC_SHARP_DIVERGENCE.md` §4（是正済）に 技量/反応 取り違え・Create rank/level・**パイロット成長式**・パイロットデータ成長 conflation を、
   乖離候補に Round・Not 優先順位・Set-& 寛容差・Pilot/Unit inline 形式・性別/クラス別名/全ユニット共通/気力 を記録。
 - **テスト**: `cargo test -p src-core` **1937 件**全緑 / clippy `-D warnings` / wasm check OK。
-- **教訓**: 式層は mining で堅牢確認（収穫逓減）／ゲームロジックに pitfall 集中だが**オラクル自身も移植で VB6 裏取りが決定的**／
+- **教訓**: 式層は mining で堅牢確認（収穫逓減）／ゲームロジックに pitfall 集中だが**オラクル自身も移植で VB5 裏取りが決定的**／
   Commands 層は mining 不可だが差分 harness で検証可能。詳細は memory `reference_csharp_oracle`。
 
 ### 2026-06-16 セッション（`feat/necessary-skill-gate`）
@@ -1055,7 +1055,7 @@ target/debug/scan_eve /tmp/out
 
 ## 10. 参照
 
-- 元実装: `SRC_20121125/`（VB6）／ C# 移植: `SRC.Sharp/SRC.NET/`（仕様確定の一次情報。`Unit.cs` が戦闘の中核）
+- 元実装: `SRC_20121125/`（VB5）／ C# 移植: `SRC.Sharp/SRC.NET/`（仕様確定の一次情報。`Unit.cs` が戦闘の中核）
 - SRC コマンド仕様: `SRC.Sharp/SRC.Sharp.Help/src/menu.md` をインデックスに使う
 - アーカイブスキャン詳細: [`docs/ARCHIVE_SCAN_REPORT.md`](ARCHIVE_SCAN_REPORT.md)
 - SRC.Sharp との乖離記録: [`docs/SRC_SHARP_DIVERGENCE.md`](SRC_SHARP_DIVERGENCE.md)

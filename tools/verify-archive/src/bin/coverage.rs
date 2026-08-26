@@ -1,4 +1,4 @@
-//! VB6 / SRC.Sharp 原典との対応カバレッジレポート / Command coverage report.
+//! VB5 / SRC.Sharp 原典との対応カバレッジレポート / Command coverage report.
 //!
 //! `src_core::command_catalog::COMMAND_CATALOG` を、SRC.Sharp の
 //! `SRCCore/CmdDatas/Commands/**/*Cmd.cs` ファイル名から抽出した
@@ -24,8 +24,8 @@
 //!   Damage, Heal, Restore, ...
 //! ```
 //!
-//! VB6 ソース (`SRC.Sharp/SRC/SRC_20121125/`) の `CmdType` enum も併せて
-//! スキャンするので、SRC.Sharp 未実装でも VB6 にだけある命令も把握できる。
+//! VB5 ソース (`SRC.Sharp/SRC/SRC_20121125/`) の `CmdType` enum も併せて
+//! スキャンするので、SRC.Sharp 未実装でも VB5 にだけある命令も把握できる。
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -35,7 +35,7 @@ use std::process::ExitCode;
 use src_core::command_catalog::{CommandKind, COMMAND_CATALOG};
 
 const SRC_SHARP_CMD_DIR: &str = "SRC.Sharp/SRC.Sharp/SRCCore/CmdDatas/Commands";
-const VB6_CMDTYPE_FILES: &[&str] = &[
+const VB5_CMDTYPE_FILES: &[&str] = &[
     "SRC_20121125/Event.bas",
     "SRC.Sharp/SRC/SRC_20121125/Event.bas",
 ];
@@ -84,12 +84,12 @@ fn walk(dir: &Path, out: &mut BTreeSet<String>) {
 fn scan_vb6_cmdtype(root: &Path) -> BTreeSet<String> {
     // CmdType enum の各 ident を抽出 (best-effort).
     let mut out = BTreeSet::new();
-    for rel in VB6_CMDTYPE_FILES {
+    for rel in VB5_CMDTYPE_FILES {
         let path = root.join(rel);
         let Ok(text) = fs::read_to_string(&path) else {
             continue;
         };
-        // 形式: `cmd_xxx = ...` (VB6) 又は CmdType_Xxx
+        // 形式: `cmd_xxx = ...` (VB5) 又は CmdType_Xxx
         // Event.bas には `Select Case cmd.CmdName` の case 列がある可能性も。
         // ここでは "Case cmd_<Name>" の <Name> を拾うだけの簡易抽出。
         for line in text.lines() {
@@ -144,9 +144,9 @@ fn main() -> ExitCode {
     );
     println!("- SRC.Sharp ({}): {}", src_sharp.len(), SRC_SHARP_CMD_DIR);
     println!(
-        "- VB6 CmdType ({} entries; best-effort): {:?}",
+        "- VB5 CmdType ({} entries; best-effort): {:?}",
         vb6.len(),
-        VB6_CMDTYPE_FILES
+        VB5_CMDTYPE_FILES
     );
     println!();
 
@@ -215,7 +215,7 @@ fn main() -> ExitCode {
     }
     println!();
 
-    // ---- VB6 のみ (差分) ----------------------------------------------
+    // ---- VB5 のみ (差分) ----------------------------------------------
     if !vb6.is_empty() {
         let vb6_lc: BTreeSet<String> = vb6.iter().map(|s| lc(s)).collect();
         let in_vb6_not_us: Vec<String> = vb6
@@ -229,7 +229,7 @@ fn main() -> ExitCode {
             .cloned()
             .collect();
         println!(
-            "## VB6 CmdType にあって自カタログに無い ({}件)\n",
+            "## VB5 CmdType にあって自カタログに無い ({}件)\n",
             in_vb6_not_us.len()
         );
         for chunk in in_vb6_not_us.chunks(8) {
@@ -237,7 +237,7 @@ fn main() -> ExitCode {
         }
         println!();
         println!(
-            "## VB6 CmdType にあって SRC.Sharp にも無い ({}件)\n",
+            "## VB5 CmdType にあって SRC.Sharp にも無い ({}件)\n",
             in_vb6_not_sharp.len()
         );
         for chunk in in_vb6_not_sharp.chunks(8) {
@@ -253,7 +253,7 @@ fn main() -> ExitCode {
     println!("- SRC.Sharp にあって自カタログに無いコマンドは、シナリオ実行時に");
     println!("  `[command-catalog] … 未登録コマンド` 警告として現れる可能性があるため、");
     println!("  Stub として追記するか、実装する。");
-    println!("- 自カタログにあって SRC.Sharp に無いコマンドは、VB6 由来 or 我々独自。");
+    println!("- 自カタログにあって SRC.Sharp に無いコマンドは、VB5 由来 or 我々独自。");
     println!("  実装側 (event_runtime) との整合を確認する。");
 
     ExitCode::SUCCESS

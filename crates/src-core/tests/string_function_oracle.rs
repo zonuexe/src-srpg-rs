@@ -5,12 +5,12 @@
 //! 突合の結果、本実装の String/Format サブシステムは全面的に忠実 (バグなし) で
 //! あることを確認済。本ファイルはその忠実性を将来の回帰から守る pin。
 //!
-//! 重要な仕様 (VB6 由来):
+//! 重要な仕様 (VB5 由来):
 //! - 索引は **1-based** (Mid/Left/Right/InStr)。
 //! - `Len` = 文字数 / `LenB` = Shift-JIS バイト数 (全角=2)。
 //! - InStr: 見つからない→0、空needle→1、3引数目は開始位置。
 //! - Format = .NET `ToString(fmt)` 相当。`0` は trailing-zero 維持・`#` は除去・
-//!   丸めは banker's (VB6 Format と一致)。
+//!   丸めは banker's (VB5 Format と一致)。
 //!
 //! 著作権配慮: SRC オリジナルコードは含まない。input→expected のみ移植。
 

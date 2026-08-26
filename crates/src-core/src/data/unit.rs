@@ -183,7 +183,7 @@ impl AbilityData {
 
 /// SRC `Unit.Transportation` (移動形態 = ステータス画面の「タイプ」)。`base` は
 /// unit.txt の移動形態 (例 `"空陸"` / `"陸宇"`)。移動系特殊能力 (空中/陸上/水中/
-/// 地中/宇宙移動) で侵入可能地形を追加する (VB6 `Unit.cls` / C# `Unit.Transportation`
+/// 地中/宇宙移動) で侵入可能地形を追加する (VB5 `Unit.cls` / C# `Unit.Transportation`
 /// と同順)。`has_feature` はユニット/パイロットの特殊能力保有を返すクロージャ。
 pub fn move_type_label(base: &str, has_feature: impl Fn(&str) -> bool) -> String {
     let mut t = base.to_string();
@@ -216,7 +216,7 @@ pub struct UnitData {
     pub nickname: String,
     /// 元: `.Class`
     pub class: String,
-    /// 元: `.PilotNum`（負値は VB6 で「括弧付き指定」を意味する; ここでは絶対値で保持）
+    /// 元: `.PilotNum`（負値は VB5 で「括弧付き指定」を意味する; ここでは絶対値で保持）
     pub pilot_num: i32,
     /// 元: `.ItemNum`
     pub item_num: i32,
@@ -244,7 +244,7 @@ pub struct UnitData {
     pub bitmap: String,
     /// 元: `.colWeaponData` (順序保持)
     pub weapons: Vec<WeaponData>,
-    /// 「特殊能力」セクションの `名前=値` 行（順序保持）。VB6 では
+    /// 「特殊能力」セクションの `名前=値` 行（順序保持）。VB5 では
     /// `UnitData.Feature(idx) / FeatureData(idx)` に対応。`値` は `=` 以降を
     /// trim しただけの生文字列（"非表示 ..." の prefix も保持）。
     #[serde(default)]
@@ -300,7 +300,7 @@ fn parse_record(record: &[SourceLine]) -> Result<UnitData, ParseError> {
     // (`comma_num < 3` → 設定に抜け / `> 4` → 余分な「,」)。`Split` の
     // 末尾空要素を捨ててはならない: 実シナリオ (mva / mva06) の
     // `対人級, ＢＥＴＡ, 1 ,` は comma_num=3 で **原典では合格** し、
-    // アイテム数が空欄なだけ (VB6 は既定値で継続する) だが、末尾の空要素を
+    // アイテム数が空欄なだけ (VB5 は既定値で継続する) だが、末尾の空要素を
     // 除去すると 3 フィールドになり「設定に抜けがあります」で
     // レコードごと落ちてしまう。
     let fields: Vec<&str> = detail.text.split(',').map(str::trim).collect();
@@ -369,7 +369,7 @@ fn parse_record(record: &[SourceLine]) -> Result<UnitData, ParseError> {
         .map_err(|_| err(mv.line_num, "経験値が数値ではありません。"))?;
 
     // 残りの行から HP/EN/Armor/Mobility 行と Adaption 行を heuristics で拾う。
-    // Adaption 行以降は武器データとして解釈する（VB6: ",===" or 空行で終端）。
+    // Adaption 行以降は武器データとして解釈する（VB5: ",===" or 空行で終端）。
     let mut hp = 0i64;
     let mut en = 0i32;
     let mut armor = 0i64;

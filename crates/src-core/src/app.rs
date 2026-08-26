@@ -1,11 +1,11 @@
 //! アプリケーション状態 / Application state.
 //!
-//! VB6 原典は `frmTitle` → `frmMain` の Form 切替でアプリ全体の状態遷移を
+//! VB5 原典は `frmTitle` → `frmMain` の Form 切替でアプリ全体の状態遷移を
 //! 表現していた。Rust 移植では `App` 構造体に集約し、フロントエンドからは
 //! 入力イベントを `handle_input` に流し、結果を `scene()` / `settings()` で
 //! 参照する。
 //!
-//! In the original VB6 app, global state transitions happen via `Form` swaps
+//! In the original VB5 app, global state transitions happen via `Form` swaps
 //! (`frmTitle` → `frmMain`). Here we collapse that into a single `App` value
 //! that the frontend drives via `handle_input`.
 
@@ -1529,7 +1529,7 @@ impl App {
         self.script_depth
     }
 
-    /// 継続 1 件の実行。VB6 原典の「`HandleEvent` から戻った直後のコード」に相当。
+    /// 継続 1 件の実行。VB5 原典の「`HandleEvent` から戻った直後のコード」に相当。
     fn run_flow_cont(&mut self, cont: crate::flow::FlowCont) {
         use crate::flow::FlowCont;
         match cont {
@@ -2205,10 +2205,10 @@ impl App {
                 }
             }
         }
-        // 基礎 EN 自然回復 (VB6 `Unit.cls:28182`「ＥＮは毎ターン5回復」): 当該陣営の
+        // 基礎 EN 自然回復 (VB5 `Unit.cls:28182`「ＥＮは毎ターン5回復」): 当該陣営の
         // 全ユニットは、特殊能力 ＥＮ回復 の有無に関わらずフェイズ開始時に EN +5 される
         // (MaxEN 超過分は en_consumed の `.max(0)` クランプで自動的に切り捨てられる)。
-        // `回復不能` (特殊効果攻撃属性 害) のユニットは対象外。VB6 の
+        // `回復不能` (特殊効果攻撃属性 害) のユニットは対象外。VB5 の
         // `ＥＮ自然回復無効` オプションや `IsSpecialPowerInEffect("回復不能")` 判定、
         // 味方最初のターンのスキップは本実装では対象外 (下の特殊能力回復と同様に
         // `回復不能` condition のみを見る)。霊力回復は本実装では別途 (未対応)。
@@ -2267,11 +2267,11 @@ impl App {
                 u.en_consumed = (u.en_consumed + drn).min(eff_max_en);
             }
         }
-        // 霊力 (プラーナ) 自然回復 (VB6 `Unit.cls:27374`): 主パイロットが霊力を持つ
+        // 霊力 (プラーナ) 自然回復 (VB5 `Unit.cls:27374`): 主パイロットが霊力を持つ
         // (MaxPlana>0) ユニットは、フェイズ開始時に
         // `plana += MaxPlana/16 + MaxPlana*霊力回復Lv/10 - MaxPlana*霊力消費Lv/10`
         // し、[0, MaxPlana] にクランプする。HP/EN と異なり `回復不能` でも回復する
-        // (VB6 では回復不能ガードの外に置かれている)。
+        // (VB5 では回復不能ガードの外に置かれている)。
         for i in 0..self.database.unit_instances.len() {
             if self.database.unit_instances[i].party != party {
                 continue;
@@ -2668,7 +2668,7 @@ impl App {
     /// SRC `Continue <filename>` で予約された「次ステージ」をクリアし、
     /// 対応するエントリへ遷移する。
     ///
-    /// VB6 原典では `SRC.StartScenario(次ステージ)` がエピローグ後に
+    /// VB5 原典では `SRC.StartScenario(次ステージ)` がエピローグ後に
     /// 呼ばれて新しいシナリオファイルをロードする。本実装は次の優先順位で
     /// 解決する:
     ///
@@ -3297,7 +3297,7 @@ impl App {
         post_move: bool,
         def_mode: &str,
     ) -> bool {
-        // 再攻撃 (VB6 begin ループ) の再帰呼び出しか。`reattack_in_progress` で受け渡し、
+        // 再攻撃 (VB5 begin ループ) の再帰呼び出しか。`reattack_in_progress` で受け渡し、
         // この呼び出し内では使用イベント再発火と 3回目の再攻撃を抑止する。
         let is_reattack = self.reattack_in_progress;
         if self.scene != Scene::MapView {
@@ -3430,7 +3430,7 @@ impl App {
         else {
             return false;
         };
-        // 防御特性による装甲調整 (弱点→半減 / 吸収→無視)。VB6 `Unit.cls:6949-6951`。
+        // 防御特性による装甲調整 (弱点→半減 / 吸収→無視)。VB5 `Unit.cls:6949-6951`。
         self.apply_defense_armor_mod(def_idx, &weapon.class, &mut def_unit);
         let def_hit_mod = self.database.terrain_hit_mod(terrain_id);
         let def_damage_mod = self.database.terrain_damage_mod(terrain_id);
@@ -3439,7 +3439,7 @@ impl App {
             self.database.unit_instances[atk_idx].charged = false;
         }
         // SRC `使用 <unit> <device>:` (`使用イベント.md`) ─ `攻撃イベント` の前に発火。
-        // 再攻撃 (VB6 `begin` ラベルは使用イベントより後ろ) では再発火しない。
+        // 再攻撃 (VB5 `begin` ラベルは使用イベントより後ろ) では再発火しない。
         if !is_reattack {
             crate::event_runtime::fire_use_event_labels(self, atk_idx, &weapon.name);
         }
@@ -3996,7 +3996,7 @@ impl App {
         // ラベル発火後、双方が生存している場合に限り発火。
         crate::event_runtime::fire_after_attack_event_labels(self, &after_atk, &after_def);
 
-        // 再攻撃 (VB6 `Unit.cls:10239-10270`): 主攻撃側が 再攻撃 技能 / 再属性 を持ち、
+        // 再攻撃 (VB5 `Unit.cls:10239-10270`): 主攻撃側が 再攻撃 技能 / 再属性 を持ち、
         // 防御側が生存していれば確率で同じ攻撃をもう一度実行する (1回限り)。武器の EN/弾が
         // 尽きていれば 2回目の武器選択で自然に不発になる。`reattack_in_progress` で使用
         // イベント再発火と 3回目の再攻撃を抑止する。
@@ -4026,7 +4026,7 @@ impl App {
         true
     }
 
-    /// 再攻撃 (VB6 `Unit.cls:10251-10270`) の発動判定。攻撃側が 再攻撃 技能を持てば
+    /// 再攻撃 (VB5 `Unit.cls:10251-10270`) の発動判定。攻撃側が 再攻撃 技能を持てば
     /// `slevel = (直感 >= 相手直感 ? 2*Lv : Lv)` が `Dice(32)` 以上で発動。武器 `再Ln`
     /// 属性は `n` (レベル無しは 1) が `Dice(16)` 以上で発動。SP効果「再攻撃」condition は
     /// 無条件発動。能力を持たない攻撃側では乱数を消費しない (既存 RNG 列を保つ)。
@@ -7241,11 +7241,11 @@ impl App {
     }
 
     /// 武器 class が防御特性の属性リスト `attr_list` に該当するか
-    /// (VB6 `Unit.cls::Weakness/Resist/Absorb` 準拠の字単位部分文字列照合)。
+    /// (VB5 `Unit.cls::Weakness/Resist/Absorb` 準拠の字単位部分文字列照合)。
     /// `attr_list` の各属性 (空白は無視) が weapon_class に**部分文字列**として含まれれば該当する
     /// (例: 弱点 "火" は複合 class "格実火" に該当)。`全`=常に該当 / `物`=武器に 魔・精 が無ければ該当。
     /// 旧実装は `split_whitespace` の完全トークン一致で、無空白複合 class ("格実火" 等) が
-    /// 弱点 "火" に一致せず防御特性が事実上機能していなかった (VB6 は `InStrNotNest`=部分一致)。
+    /// 弱点 "火" に一致せず防御特性が事実上機能していなかった (VB5 は `InStrNotNest`=部分一致)。
     fn defense_attr_matches(weapon_class: &str, attr_list: &str) -> bool {
         for c in attr_list.chars() {
             if c.is_whitespace() {
@@ -7280,7 +7280,7 @@ impl App {
     }
 
     /// 武器属性が防御側の `弱点` (静的特殊能力 + 一時付加 condition `弱点:<属性>`) に一致するか。
-    /// 一致時は VB6 `Unit.cls:6949` 準拠で被ダメージ計算の装甲を半減させる
+    /// 一致時は VB5 `Unit.cls:6949` 準拠で被ダメージ計算の装甲を半減させる
     /// (`attack_resolve_and_run` が予測前に `def_unit.armor` を ÷2 する)。
     fn weapon_hits_weakness(&self, def_idx: usize, weapon_class: &str) -> bool {
         let inst = &self.database.unit_instances[def_idx];
@@ -7295,7 +7295,7 @@ impl App {
     }
 
     /// 武器属性が防御側の `吸収` に一致し、かつ `有効` で打ち消されていないか。
-    /// 一致時は VB6 `Unit.cls:6951` 準拠で被ダメージ計算の装甲を無視 (arm=0) する
+    /// 一致時は VB5 `Unit.cls:6951` 準拠で被ダメージ計算の装甲を無視 (arm=0) する
     /// (`attack_resolve_and_run` が予測前に `def_unit.armor=0` にする)。これにより吸収量が
     /// spec「装甲値を無視して計算されたダメージを半減させた値」基準になり、
     /// `defense_attribute_damage` の吸収分岐 `-(damage/2)` が正しい回復量へ反転する。
@@ -7307,7 +7307,7 @@ impl App {
             && !Self::defense_attr_matches(weapon_class, effective)
     }
 
-    /// 防御特性による装甲調整を予測前に `def_unit.armor` へ適用する (VB6 `Unit.cls:6949-6951`)。
+    /// 防御特性による装甲調整を予測前に `def_unit.armor` へ適用する (VB5 `Unit.cls:6949-6951`)。
     /// 弱点 → 装甲半減 (被ダメージ増) / 吸収 (かつ非有効) → 装甲無視 (arm=0)。弱点 > 吸収 の優先。
     /// 通常攻撃 / 援護 / 反撃の全経路で一貫適用するための共有ヘルパ。
     pub(crate) fn apply_defense_armor_mod(
@@ -7324,7 +7324,7 @@ impl App {
     }
 
     /// 特殊効果の発動確率を、対象の `耐性` / `弱点` 特殊能力で調整する
-    /// (VB6 `Unit.cls::CriticalProbability`: 弱点属性に対しては発動確率 +10、耐性属性には半減)。
+    /// (VB5 `Unit.cls::CriticalProbability`: 弱点属性に対しては発動確率 +10、耐性属性には半減)。
     fn adjust_proc_for_resistance(&self, def_idx: usize, weapon_class: &str, prob: i32) -> i32 {
         let inst = &self.database.unit_instances[def_idx];
         let weak = crate::feature::feature_value(&inst.active_features, "弱点").unwrap_or("");
@@ -7347,7 +7347,7 @@ impl App {
         p.clamp(1, 100)
     }
 
-    /// 防御特性 (`吸収` / `無効化` / `耐性`) を与ダメージへ適用する (VB6 `Unit.cls::Damage`)。
+    /// 防御特性 (`吸収` / `無効化` / `耐性`) を与ダメージへ適用する (VB5 `Unit.cls::Damage`)。
     /// 武器属性が一致するとき: 吸収→`-damage/2`(回復)、無効化→0、耐性→÷2。優先順は
     /// spec `防御特性に関する特殊能力.md`「弱点 > 有効 > 吸収 > 無効化 > 耐性」。
     /// `弱点` の装甲半減は `weapon_hits_weakness` で予測前に適用済みのためここでは無処理
@@ -13157,7 +13157,7 @@ mod tests {
         );
     }
 
-    /// 基礎 EN 自然回復 (VB6 `Unit.cls:28182`「ＥＮは毎ターン5回復」): 回復系特殊能力を
+    /// 基礎 EN 自然回復 (VB5 `Unit.cls:28182`「ＥＮは毎ターン5回復」): 回復系特殊能力を
     /// 持たないユニットでもフェイズ開始時に EN +5 される。
     #[test]
     fn base_en_regen_applies_without_any_recovery_feature() {
@@ -13255,7 +13255,7 @@ mod tests {
     }
 
     /// `effective_max_plana`: 霊力Lv20・パイロットLv10・霊力成長なし →
-    /// `20 + round_ties_even(1.5*10) = 20 + 15 = 35`。VB6 `Pilot.cls:1423`。
+    /// `20 + round_ties_even(1.5*10) = 20 + 15 = 35`。VB5 `Pilot.cls:1423`。
     #[test]
     fn effective_max_plana_basic_formula() {
         let mut app = App::new();
@@ -13301,7 +13301,7 @@ mod tests {
 
     /// `効果Lv23` 実際の `霊力成長` 込み: `霊力Lv20` / `霊力成長Lv5` / パイロットLv10 →
     /// `20 + round_ties_even(1.5*10*(10+5)/10) = 20 + round_ties_even(22.5) = 20 + 22 = 42`
-    /// (`round_ties_even(22.5)` は最近接偶数の 22)。VB6 `Pilot.cls:1451-1454`。
+    /// (`round_ties_even(22.5)` は最近接偶数の 22)。VB5 `Pilot.cls:1451-1454`。
     #[test]
     fn effective_max_plana_growth_skill_formula() {
         let mut app = App::new();
@@ -13328,7 +13328,7 @@ mod tests {
 
     /// 霊力 (プラーナ) 自然回復: MaxPlana=35 (霊力Lv20・パイロットLv10) のユニットは
     /// 味方フェイズ開始時に `plana += 35/16 = 2` (霊力回復/霊力消費 特殊能力なし)。
-    /// VB6 `Unit.cls:27374`。
+    /// VB5 `Unit.cls:27374`。
     #[test]
     fn plana_regen_applies_at_player_phase_start() {
         let mut app = App::new();
@@ -13363,7 +13363,7 @@ mod tests {
     }
 
     /// 霊力 (プラーナ) 自然回復は HP/EN と異なり `回復不能` (特殊効果攻撃属性 害) でも
-    /// 阻害されない (VB6 では回復不能ガードの外)。同一ユニットで HP/EN 自然回復は
+    /// 阻害されない (VB5 では回復不能ガードの外)。同一ユニットで HP/EN 自然回復は
     /// 阻害されることも併せて確認する。
     #[test]
     fn plana_regen_not_gated_by_no_regen_condition() {
@@ -14683,7 +14683,7 @@ mod tests {
             let uid = first_player_uid(&app);
             app.database().idx_by_uid(&uid).unwrap()
         };
-        // 基準 (level 1 / 装備なし / 状態異常なし)。VB6 `Pilot.cls:582-593` 準拠で
+        // 基準 (level 1 / 装備なし / 状態異常なし)。VB5 `Pilot.cls:582-593` 準拠で
         // レベル 1 でも成長が乗る (格闘 = base 100 + lv 1 = 101)。装甲は unit 由来で不変。
         let (p0, u0) = app.database().effective_combat_data(idx).unwrap();
         assert_eq!(p0.infight, 101);
@@ -15318,7 +15318,7 @@ mod tests {
         // パイロット: SP/精神コマンド。
         assert!(d.has_pilot);
         assert_eq!(d.sp_max, 80);
-        // 実効値: レベル成長込み (VB6: 格闘 += level、level 1 でも +1)。
+        // 実効値: レベル成長込み (VB5: 格闘 += level、level 1 でも +1)。
         assert_eq!(d.infight, 121);
         assert_eq!(
             d.spirit_commands,
@@ -18535,7 +18535,7 @@ mod tests {
         );
     }
 
-    /// カウンター (VB6 `COM.bas:1040-1058`): カウンター 技能を持つ防御側は主攻撃の前に
+    /// カウンター (VB5 `COM.bas:1040-1058`): カウンター 技能を持つ防御側は主攻撃の前に
     /// 先制反撃する。先制反撃で攻撃側を撃破すれば攻撃側の主攻撃は不発 (防御側は無傷)。
     #[test]
     fn counter_skill_strikes_pre_emptively() {
@@ -18592,7 +18592,7 @@ mod tests {
         );
     }
 
-    /// 再攻撃 (VB6 `Unit.cls:10239`): 再攻撃 技能を持つ攻撃側は確率で2回攻撃する。高Lv＋
+    /// 再攻撃 (VB5 `Unit.cls:10239`): 再攻撃 技能を持つ攻撃側は確率で2回攻撃する。高Lv＋
     /// 直感同値で `slevel=2*Lv` が `Dice(32)` を必ず上回り、防御側は 2 ヒット分被弾する。
     #[test]
     fn reattack_skill_strikes_twice() {
@@ -20947,7 +20947,7 @@ End
         assert!(plain_hit, "特性なしの敵はマップ攻撃で被弾する (対照)");
     }
 
-    /// 防御特性の属性照合は字単位の**部分一致** (VB6 `InStrNotNest`)。無空白複合 class
+    /// 防御特性の属性照合は字単位の**部分一致** (VB5 `InStrNotNest`)。無空白複合 class
     /// ("格実火") も弱点/耐性 "火" に一致する (旧 `split_whitespace` 完全一致では非一致で
     /// 防御特性が事実上機能していなかった)。併せて弱点検出 (装甲半減トリガ) を確認。
     #[test]

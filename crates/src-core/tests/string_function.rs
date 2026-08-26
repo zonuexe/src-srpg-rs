@@ -22,7 +22,7 @@ fn eval(expr: &str) -> String {
 
 #[test]
 fn string_repeats_token() {
-    // VB6 `String(3, "0 ")` → "0 0 0 " (スパロボ戦記 で頻出パターン)
+    // VB5 `String(3, "0 ")` → "0 0 0 " (スパロボ戦記 で頻出パターン)
     assert_eq!(eval(r#"String(3, "0 ")"#), "0 0 0 ");
 }
 
@@ -191,20 +191,20 @@ fn chr_space() {
 
 #[test]
 fn asc_japanese_returns_sjis_code() {
-    // VB6 互換: "あ" は SJIS で 0x82A0 = 33440。
+    // VB5 互換: "あ" は SJIS で 0x82A0 = 33440。
     // (Unicode codepoint U+3042 = 12354 ではない)
     assert_eq!(eval(r#"Asc("あ")"#), "33440");
 }
 
 #[test]
 fn chr_sjis_double_byte_decodes_japanese() {
-    // VB6 互換: Chr(0x82A0) (= 33440) は SJIS 2 バイト ("あ") として decode。
+    // VB5 互換: Chr(0x82A0) (= 33440) は SJIS 2 バイト ("あ") として decode。
     assert_eq!(eval("Chr(33440)"), "あ");
 }
 
 #[test]
 fn asc_chr_round_trip_japanese() {
-    // Chr(Asc("あ")) は "あ" に戻る (VB6 SRC 互換性)。
+    // Chr(Asc("あ")) は "あ" に戻る (VB5 SRC 互換性)。
     // SRC.Sharp は Chr が Unicode キャストなので round-trip しないが、
     // 本実装は SJIS 一貫性を維持。
     assert_eq!(eval(r#"Chr(Asc("あ"))"#), "あ");
