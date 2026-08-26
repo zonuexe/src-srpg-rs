@@ -325,7 +325,9 @@ fn parse_record(record: &[SourceLine]) -> Result<UnitData, ParseError> {
     let kana_name = kana_from_detail
         .or(kana_from_name)
         .unwrap_or_else(|| nickname.clone());
-    let pilot_num = parse_pilot_num(pilot_num_s, detail.line_num)?;
+    // 原典 `UnitDataList.cls` は不正なパイロット数を `DataErrorMessage` で
+    // 警告し `.PilotNum = 1` を入れてレコードを維持する。
+    let pilot_num = parse_pilot_num(pilot_num_s, detail.line_num).unwrap_or(1);
     // アイテム数が空欄・非数値でもレコードは捨てない。原典は個別フィールドの
     // 不正を `DataErrorMessage` (警告して既定値で継続) で扱い、`Error 0` による
     // レコード中断はコンマ数の書式エラーだけに限っている。

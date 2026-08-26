@@ -234,8 +234,9 @@ fn parse_record(record: &[SourceLine]) -> Result<PilotData, ParseError> {
         n if n < 4 => return Err(err(detail.line_num, "設定に抜けがあります。")),
         _ => return Err(err(detail.line_num, "余分な「,」があります。")),
     };
-    let adaption = Adaption::parse(adaption_str)
-        .ok_or_else(|| err(detail.line_num, "地形適応は 4 文字で指定してください。"))?;
+    // 原典 `PilotDataList.cls:273` は不正な地形適応を `DataErrorMessage` で
+    // 警告し、既定 `AAAA` を入れてレコードを維持する。
+    let adaption = Adaption::parse(adaption_str).unwrap_or(Adaption(*b"AAAA"));
     // 原典 `PilotDataList.cls:283` は不正な経験値も `DataErrorMessage` で
     // 警告するだけでレコードは維持する (実データに `…, ----, -` がある)。
     let exp_value: i32 = super::loader::normalize_fullwidth(exp_str)
@@ -475,6 +476,20 @@ pub fn parse_with(src: &str, _settings: &Settings) -> Result<Vec<PilotData>, Par
 
 #[cfg(test)]
 mod tests {
+    /// 原典 `PilotDataList.cls:273` は不正な地形適応を警告して既定 `AAAA` に
+    /// フォールバックし、レコードは維持する。
+    #[test]
+    fn invalid_adaption_falls_back_to_aaaa() {
+        let src = "テスト\n\
+テスト, 男性, 汎用, XX, 100\n\
+特殊能力なし\n\
+1, 1, 1, 1, 100, 1, 普通\n";
+        let (pilots, errors) = parse_lenient(src);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(pilots.len(), 1);
+        assert_eq!(pilots[0].adaption.as_str(), "AAAA");
+    }
+
     /// 原典 `PilotDataList.cls:248,283` は性別・経験値の値エラーを
     /// `DataErrorMessage` で警告するだけでレコードを維持する
     /// (実データ battleroyal の `ダイアナ, 女性, …, ----, -`)。
