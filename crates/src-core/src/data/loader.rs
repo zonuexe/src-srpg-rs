@@ -162,6 +162,31 @@ pub fn split_records(lines: &[SourceLine]) -> Vec<Vec<SourceLine>> {
     records
 }
 
+/// データフィールド中の全角英数記号を半角へ正規化する。
+///
+/// 原典 VB6 の `IsNumeric` / `CInt` は日本語ロケールで全角数字 (`１`) を
+/// 数値として受け付けるため、実データには全角混じりのフィールドが存在する
+/// (例: `ザク, MS, １, 3` のパイロット数、`一弥, 男性, ＯＦ, －-－－, 0` の
+/// 地形適応)。C# 移植 (`VB/Information.cs`) は `decimal.TryParse` を使って
+/// おりここが再現できていないため、VB6 側を正とする。
+///
+/// 名称や説明文まで正規化すると `０号機` のような固有名を壊すので、
+/// **数値・地形適応など書式が決まったフィールドの解釈時のみ** 使うこと。
+pub fn normalize_fullwidth(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            // 全角英数 (Ａ-Ｚ / ａ-ｚ / ０-９) → 半角
+            '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFF00 + 0x20).unwrap_or(c),
+            // 全角スペース
+            '\u{3000}' => ' ',
+            // 全角ハイフン `－`(U+FF0D) は上の全角範囲で `-` になる。
+            // 範囲外のマイナス記号 U+2212 だけここで拾う。
+            '\u{2212}' => '-',
+            _ => c,
+        })
+        .collect()
+}
+
 /// SRC がシナリオデータとして読み込むファイルの basename 一覧。
 ///
 /// 原典 VB6 `SRC.bas::IncludeData` / `LoadData` が `Data\` 配下で
@@ -315,6 +340,16 @@ mod tests {
         let lines = read_lines("# c\nbody\n# c2\nbody2");
         assert_eq!(lines[1].line_num, 2);
         assert_eq!(lines[3].line_num, 4);
+    }
+
+    #[test]
+    fn normalize_fullwidth_digits_and_signs() {
+        assert_eq!(normalize_fullwidth("１"), "1");
+        assert_eq!(normalize_fullwidth("＋25"), "+25");
+        assert_eq!(normalize_fullwidth("－-－－"), "----");
+        assert_eq!(normalize_fullwidth("ＡＡＢＡ"), "AABA");
+        // 半角はそのまま。
+        assert_eq!(normalize_fullwidth("AABA"), "AABA");
     }
 
     /// 原典 `GeneralLib.GetLine` / `データ形式.md`: 行頭 `#` のコメント行は

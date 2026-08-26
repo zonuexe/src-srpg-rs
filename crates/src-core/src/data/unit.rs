@@ -296,14 +296,14 @@ fn parse_record(record: &[SourceLine]) -> Result<UnitData, ParseError> {
     let detail = it
         .next()
         .ok_or_else(|| err(name_line.line_num, "基本属性行が見つかりません。"))?;
-    // 行末コンマ (`1 ,` 等) が生む末尾の空フィールドを除去してから解析。
-    // 実シナリオ (mva06 等) で `愛称, タイプ, 1 ,` のように trailing comma が
-    // 入ることがある。SRC.NET は VB6 の `Split` が trailing empty を返さない
-    // 挙動に依存しており、こちらも同様に末尾の空要素を除去する。
-    let mut fields: Vec<&str> = detail.text.split(',').map(str::trim).collect();
-    while fields.last() == Some(&"") {
-        fields.pop();
-    }
+    // 原典 `UnitDataList.cls:176-190` は **コンマの個数** で書式を判定する
+    // (`comma_num < 3` → 設定に抜け / `> 4` → 余分な「,」)。`Split` の
+    // 末尾空要素を捨ててはならない: 実シナリオ (mva / mva06) の
+    // `対人級, ＢＥＴＡ, 1 ,` は comma_num=3 で **原典では合格** し、
+    // アイテム数が空欄なだけ (VB6 は既定値で継続する) だが、末尾の空要素を
+    // 除去すると 3 フィールドになり「設定に抜けがあります」で
+    // レコードごと落ちてしまう。
+    let fields: Vec<&str> = detail.text.split(',').map(str::trim).collect();
     let (nickname, kana_from_detail, class, pilot_num_s, item_num_s) = match fields.len() {
         4 => (
             fields[0].to_string(),
@@ -326,9 +326,12 @@ fn parse_record(record: &[SourceLine]) -> Result<UnitData, ParseError> {
         .or(kana_from_name)
         .unwrap_or_else(|| nickname.clone());
     let pilot_num = parse_pilot_num(pilot_num_s, detail.line_num)?;
-    let item_num: i32 = item_num_s
+    // アイテム数が空欄・非数値でもレコードは捨てない。原典は個別フィールドの
+    // 不正を `DataErrorMessage` (警告して既定値で継続) で扱い、`Error 0` による
+    // レコード中断はコンマ数の書式エラーだけに限っている。
+    let item_num: i32 = super::loader::normalize_fullwidth(item_num_s)
         .parse()
-        .map_err(|_| err(detail.line_num, "アイテム数が数値ではありません。"))?;
+        .unwrap_or(0);
 
     // L3: Transportation,Speed,Size,Value,ExpValue
     let mv = it
@@ -631,7 +634,10 @@ fn parse_pilot_num(s: &str, line_num: usize) -> Result<i32, ParseError> {
         .trim_start_matches('(')
         .trim_end_matches(')')
         .trim();
-    core.parse::<i32>()
+    // 実データには全角数字指定 (`ザク, MS, １, 3`) がある。原典 VB6 の
+    // `IsNumeric` / `CInt` は日本語ロケールでこれを受け付ける。
+    super::loader::normalize_fullwidth(core)
+        .parse::<i32>()
         .map_err(|_| err(line_num, "パイロット数が数値ではありません。"))
 }
 
@@ -669,6 +675,42 @@ fn err(line_num: usize, message: &str) -> ParseError {
 
 #[cfg(test)]
 mod tests {
+    /// 原典 `UnitDataList.cls` はコンマ数で書式を判定する。行末コンマで
+    /// アイテム数が空欄でも comma_num=3 なら合格し、レコードは捨てない
+    /// (実シナリオ mva / mva06 の `対人級, ＢＥＴＡ, 1 ,`)。
+    #[test]
+    fn trailing_comma_keeps_record_with_default_item_num() {
+        let src = "対人級\n\
+対人級, ＢＥＴＡ, 1 ,\n\
+陸, 4, S, 3500, 100\n";
+        let (units, errors) = parse_lenient(src);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(units.len(), 1);
+        assert_eq!(units[0].nickname, "対人級");
+        assert_eq!(units[0].class, "ＢＥＴＡ");
+        assert_eq!(units[0].pilot_num, 1);
+        assert_eq!(units[0].item_num, 0, "空欄のアイテム数は既定 0");
+    }
+
+    /// 全角数字のパイロット数を受ける (VB6 `IsNumeric` は全角を受け付ける)。
+    #[test]
+    fn fullwidth_pilot_num_is_accepted() {
+        let src = "ザクⅡF2\n\
+ザク, MS, １, 3\n\
+陸, 3, M, 1000, 30\n";
+        let (units, errors) = parse_lenient(src);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(units[0].pilot_num, 1);
+    }
+
+    /// コンマが 3 個未満なら原典どおりレコードを落とす (回帰防止)。
+    #[test]
+    fn too_few_commas_still_rejected() {
+        let src = "エルセナ\nエルセナ, AABA\n陸, 3, M, 1000, 30\n";
+        let (_units, errors) = parse_lenient(src);
+        assert!(!errors.is_empty());
+    }
+
     use super::*;
 
     #[test]

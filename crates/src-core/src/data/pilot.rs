@@ -46,12 +46,17 @@ impl Sex {
 pub struct Adaption(pub [u8; 4]);
 
 impl Adaption {
-    /// 4 文字 ASCII を期待。失敗時は `None`。
+    /// 4 文字を期待。失敗時は `None`。
+    ///
+    /// 実データには全角混じりの指定 (`－-－－` / `ＡＡＢＡ`) があるため、
+    /// 全角英数記号を半角へ正規化してから判定する
+    /// ([`crate::data::loader::normalize_fullwidth`])。
     pub fn parse(s: &str) -> Option<Self> {
-        if s.len() != 4 || !s.is_ascii() {
+        let n = super::loader::normalize_fullwidth(s);
+        if n.len() != 4 || !n.is_ascii() {
             return None;
         }
-        let bytes = s.as_bytes();
+        let bytes = n.as_bytes();
         Some(Adaption([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
 
