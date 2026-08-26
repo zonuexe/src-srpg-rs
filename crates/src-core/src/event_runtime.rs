@@ -160,6 +160,11 @@ impl From<ForFrame> for LoopFrame {
 pub struct ScriptLibrary {
     pub statements: Vec<EventStatement>,
     pub labels: HashMap<String, usize>,
+    /// `labels` の ASCII 小文字化インデックス。SRC のラベルは大小を区別しない
+    /// ため大小無視の検索が要るが、`labels` の線形走査で行うとユーザ定義関数の
+    /// 判定 (式中の各位置で照会する) が破綻する。O(1) で引けるよう別に持つ。
+    #[serde(default)]
+    labels_lower: HashMap<String, usize>,
     /// 各 .eve ファイルの登録範囲 (PC 区間)。`Continue eve\onsen.eve` の
     /// ようなファイル名指定の next-stage 起動で、basename → start_pc を
     /// 引くのに使う。
@@ -291,6 +296,9 @@ impl ScriptLibrary {
                     continue;
                 }
                 if let Some(canon) = canonical_label_full(name, args) {
+                    self.labels_lower
+                        .entry(canon.to_ascii_lowercase())
+                        .or_insert(base + i);
                     self.labels.entry(canon).or_insert(base + i);
                 }
             }
@@ -327,11 +335,22 @@ impl ScriptLibrary {
                 return Some(*pc);
             }
         }
-        self.labels
-            .iter()
-            .filter(|(_, v)| !self.disabled_pcs.contains(v))
-            .find(|(k, _)| k.eq_ignore_ascii_case(name))
-            .map(|(_, v)| *v)
+        if let Some(pc) = self.labels_lower.get(&name.to_ascii_lowercase()) {
+            if !self.disabled_pcs.contains(pc) {
+                return Some(*pc);
+            }
+        }
+        // `labels_lower` を持たない旧セーブデータ由来のライブラリのみ、
+        // 従来どおり線形走査でフォールバックする。
+        if self.labels_lower.is_empty() && !self.labels.is_empty() {
+            return self
+                .labels
+                .iter()
+                .filter(|(_, v)| !self.disabled_pcs.contains(v))
+                .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                .map(|(_, v)| *v);
+        }
+        None
     }
 
     /// `ClearEvent` 用: 指定 pc のラベル行を無効化する (再発火・解決をスキップ)。
@@ -680,9 +699,61 @@ fn preprocess_call_expressions_in_condition(app: &mut App, src: &str) -> String 
 /// ユーザ定義関数の再帰段数上限。相互再帰の暴走を防ぐ番人。
 const MAX_USER_FUNC_DEPTH: u32 = 32;
 
+/// ユーザ定義関数の呼び出し 1 系列で消費できる総ステップ数。
+///
+/// 段ごとに上限を設けると、ネストの度に上限が掛け算になって事実上無制限に
+/// なる (実測: 100,000 ステップ × 32 段でハングした)。系列全体で共有する。
+const MAX_USER_FUNC_TOTAL_STEPS: usize = 200_000;
+
 thread_local! {
     /// 実行中のユーザ定義関数のネスト段数。
     static USER_FUNC_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// ネスト全体で共有するステップ予算の消費量。最外段の開始時に 0 へ戻す。
+    static USER_FUNC_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// スクリプト本体 / ラベル表のスナップショット。
+    ///
+    /// `exec_command_pc` は `&mut App` と `&[EventStatement]` を同時に要求する
+    /// ため、実行には本体のコピーが要る。ユーザ定義関数は式のたびに呼ばれるので
+    /// 呼び出しごとに clone すると破綻する (実測で約 110 倍の減速)。
+    /// `Rc` で共有し、登録内容が変わったときだけ作り直す。
+    static USER_FUNC_SNAPSHOT: std::cell::RefCell<Option<ScriptSnapshot>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// [`USER_FUNC_SNAPSHOT`] の中身。`len` の組を版数代わりの妥当性判定に使う。
+type ScriptSnapshot = (
+    usize,
+    usize,
+    std::rc::Rc<Vec<EventStatement>>,
+    std::rc::Rc<HashMap<String, usize>>,
+);
+
+/// スクリプト本体 / ラベル表の共有スナップショットを得る。
+fn user_func_snapshot(
+    app: &App,
+) -> (
+    std::rc::Rc<Vec<EventStatement>>,
+    std::rc::Rc<HashMap<String, usize>>,
+) {
+    let lib = app.script_library();
+    let (n_stmts, n_labels) = (lib.statements.len(), lib.labels.len());
+    USER_FUNC_SNAPSHOT.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        if let Some((cs, cl, stmts, labels)) = slot.as_ref() {
+            if *cs == n_stmts && *cl == n_labels {
+                return (std::rc::Rc::clone(stmts), std::rc::Rc::clone(labels));
+            }
+        }
+        let stmts = std::rc::Rc::new(lib.statements.clone());
+        let labels = std::rc::Rc::new(lib.labels.clone());
+        *slot = Some((
+            n_stmts,
+            n_labels,
+            std::rc::Rc::clone(&stmts),
+            std::rc::Rc::clone(&labels),
+        ));
+        (stmts, labels)
+    })
 }
 
 /// ラベルがユーザ定義関数として呼び出せるか (script_library に定義済みか)。
@@ -710,6 +781,10 @@ fn call_label_sync(app: &mut App, label_name: &str, args: &[String]) -> Option<S
     if depth >= MAX_USER_FUNC_DEPTH {
         return Some(String::new());
     }
+    if depth == 0 {
+        // 最外段でのみ予算をリセットする。
+        USER_FUNC_STEPS.with(|c| c.set(0));
+    }
     USER_FUNC_DEPTH.with(|d| d.set(depth + 1));
     let result = call_label_sync_inner(app, pc, args);
     USER_FUNC_DEPTH.with(|d| d.set(depth));
@@ -717,9 +792,9 @@ fn call_label_sync(app: &mut App, label_name: &str, args: &[String]) -> Option<S
 }
 
 fn call_label_sync_inner(app: &mut App, pc: usize, args: &[String]) -> String {
-    let lib = app.script_library();
-    let stmts = lib.statements.clone();
-    let labels = lib.labels.clone();
+    let (stmts_rc, labels_rc) = user_func_snapshot(app);
+    let stmts: &[EventStatement] = &stmts_rc;
+    let labels: &HashMap<String, usize> = &labels_rc;
 
     // 戻り値フィールドをクリアしてフレームをセットアップ
     app.set_last_return_value(String::new());
@@ -730,8 +805,13 @@ fn call_label_sync_inner(app: &mut App, pc: usize, args: &[String]) -> String {
     let for_depth_before = app.for_stack_len();
 
     let mut curr_pc = pc + 1; // ラベル行の次から実行
-    const MAX_COND_STEPS: usize = 100_000;
-    for _ in 0..MAX_COND_STEPS {
+    loop {
+        // ネスト全体で共有する予算。使い切ったら打ち切る。
+        let used = USER_FUNC_STEPS.with(|c| c.get());
+        if used >= MAX_USER_FUNC_TOTAL_STEPS {
+            break;
+        }
+        USER_FUNC_STEPS.with(|c| c.set(used + 1));
         if curr_pc >= stmts.len() {
             break;
         }
@@ -757,7 +837,7 @@ fn call_label_sync_inner(app: &mut App, pc: usize, args: &[String]) -> String {
                     curr_pc += 1;
                     continue;
                 }
-                match exec_command_pc(app, &name, &args, line_num, curr_pc, &stmts, &labels) {
+                match exec_command_pc(app, &name, &args, line_num, curr_pc, stmts, labels) {
                     Ok(next_pc) => {
                         curr_pc = next_pc;
                     }
@@ -1290,6 +1370,8 @@ fn exec_command_pc(
                 for name in args.iter() {
                     let key = resolve_lhs_name(app, name);
                     if !key.is_empty() {
+                        // サブルーチンを抜けたら宣言前の値へ戻すため退避する。
+                        app.record_sublocal(&key);
                         app.set_script_var(key, String::new());
                     }
                 }
@@ -1297,6 +1379,13 @@ fn exec_command_pc(
             }
             // 書式2 では値は `=` の次から始まる。
             let val_start = if local_assign { 2 } else { 1 };
+            // 書式2 `Local var = expr` もサブルーチンローカル宣言なので退避する。
+            if local_assign {
+                let key = resolve_lhs_name(app, &args[0]);
+                if !key.is_empty() {
+                    app.record_sublocal(&key);
+                }
+            }
             // LHS は `name[expr]` の `expr` を eval して実際のキーに解決する。
             // expand_vars 後の xargs[0] は「変数値」展開済みで Set には使えないので
             // 元の args[0] から名前を組み立てる。
@@ -1440,7 +1529,12 @@ fn exec_command_pc(
             // 戻り値 (`Return <value>`) を保存する。
             // `Call(<label>)` 形式の条件式評価 (`evaluate_command_condition`) が
             // `call_label_sync_for_condition` 経由で読み取る。
+            // 返り値は **呼び出された側のスコープで** 評価する。
+            // `Returnコマンド.md`: 「*value* の値がサブルーチンコールの返り値」。
+            // ここで畳み込まないと `Return (n + 2)` の `n` (サブルーチン
+            // ローカル変数) が呼び出し元では解決できず、式のまま漏れる。
             let retval = xargs.first().cloned().unwrap_or_default();
+            let retval = eval_arith_value(app, &retval).unwrap_or(retval);
             app.set_last_return_value(retval);
             if let Some((ret, saved)) = app.pop_call_return() {
                 restore_call_args(app, saved);
@@ -2392,6 +2486,7 @@ fn exec_command_pc(
                     if let EventStatement::Command { name, .. } = s {
                         if let Some(canon) = canonical_label(name) {
                             if canon == key {
+                                lib.labels_lower.insert(key.to_ascii_lowercase(), i);
                                 lib.labels.insert(key.clone(), i);
                                 // ClearEvent で無効化されていた場合は再度有効化する。
                                 lib.enable_pc(i);
@@ -13987,6 +14082,50 @@ Return ""
         let stmts = event::parse(src).unwrap();
         execute(&mut app, &stmts).unwrap();
         assert_eq!(app.script_var("u"), "キャリバーン(不完全)");
+    }
+
+    /// `Local` で宣言した変数はサブルーチンを抜けると宣言前の値へ戻る。
+    /// 原典は `VarStack` + `VarIndex` の復帰で自動的に破棄する。
+    #[test]
+    fn sublocal_variables_are_restored_after_return() {
+        let src = r#"Set n 外側
+Local i = 99
+Set r 足す2(7)
+Stage done
+Exit
+
+足す2:
+Local n = Args(1)
+Local i = 1
+Return (n + 2)
+"#;
+        let mut app = App::new();
+        let stmts = event::parse(src).unwrap();
+        execute(&mut app, &stmts).unwrap();
+        assert_eq!(app.script_var("r"), "9", "返り値は callee のスコープで評価");
+        assert_eq!(app.script_var("n"), "外側", "呼び出し元の n が復元される");
+        assert_eq!(app.script_var("i"), "99", "呼び出し元の i が復元される");
+    }
+
+    /// 宣言前に未定義だった変数はサブルーチン離脱時に削除される。
+    #[test]
+    fn sublocal_undefined_before_call_is_removed() {
+        let src = r#"Set r 作る()
+Stage done
+Exit
+
+作る:
+Local 一時 = 5
+Return 1
+"#;
+        let mut app = App::new();
+        let stmts = event::parse(src).unwrap();
+        execute(&mut app, &stmts).unwrap();
+        assert_eq!(app.script_var("r"), "1");
+        assert!(
+            !app.is_script_var_defined("一時"),
+            "サブルーチンローカル変数が漏れている"
+        );
     }
 
     /// ラベルが無い名前は関数として実行せずリテラルのまま残す。

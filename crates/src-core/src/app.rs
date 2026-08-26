@@ -249,6 +249,19 @@ pub struct App {
     /// saved_args の layout: [Args(1)..Args(9), ArgNum, upvar_level, upvar_base_argnum]  (長さ 12)
     #[serde(default)]
     script_call_stack: Vec<(usize, Vec<String>)>,
+    /// 各コールフレームで `Local` により宣言されたサブルーチンローカル変数の
+    /// 復元情報。`script_call_stack` と必ず同じ深さで push/pop される。
+    ///
+    /// 要素は (変数名, 宣言前の値)。`None` は「宣言前は未定義」を表し、
+    /// フレーム離脱時に変数ごと削除する。
+    ///
+    /// 原典は `VarStack` + `VarIndex` でサブルーチンローカル変数を管理し、
+    /// `Return` で `VarIndex` を復帰させることで自動的に破棄する
+    /// (`CmdData.cls::ExecLocalCmd` / `Expression.bas`)。本実装は
+    /// `script_vars` 1 枚に載せる構造なので、宣言時に旧値を退避して
+    /// フレーム離脱時に巻き戻すことで同じ可視性を得る。
+    #[serde(default)]
+    script_sublocal_stack: Vec<Vec<(String, Option<String>)>>,
     /// 現フレームで `UpVar` を呼び出した回数。`Call` 時に 0 へリセット、
     /// `Return` 時に呼び出し元の値へ復元する。
     #[serde(default)]
@@ -671,6 +684,7 @@ impl App {
             pending_dialog: None,
             script_for_stack: Vec::new(),
             script_call_stack: Vec::new(),
+            script_sublocal_stack: Vec::new(),
             upvar_level: 0,
             upvar_base_argnum: 0,
             script_library: crate::event_runtime::ScriptLibrary::default(),
@@ -1113,9 +1127,40 @@ impl App {
     /// 積む。ネストした `Call` が `Args` を破壊しても `Return` で復元するため。
     pub fn push_call_return(&mut self, pc: usize, saved_args: Vec<String>) {
         self.script_call_stack.push((pc, saved_args));
+        // サブルーチンローカル変数のフレームを同時に積む (深さを揃える)。
+        self.script_sublocal_stack.push(Vec::new());
     }
     pub fn pop_call_return(&mut self) -> Option<(usize, Vec<String>)> {
+        // フレーム内で `Local` 宣言された変数を宣言前の状態へ巻き戻す。
+        // 逆順に戻すことで、同名を複数回宣言した場合も最初の値に復帰する。
+        if let Some(frame) = self.script_sublocal_stack.pop() {
+            for (name, prev) in frame.into_iter().rev() {
+                match prev {
+                    Some(v) => {
+                        self.script_vars.insert(name, v);
+                    }
+                    None => {
+                        self.script_vars.remove(&name);
+                    }
+                }
+            }
+        }
         self.script_call_stack.pop()
+    }
+    /// `Local` による宣言を現在のコールフレームに記録する。
+    ///
+    /// フレームが無い (トップレベルの `Local`) 場合は何もしない — 原典でも
+    /// イベント終了まで残るため、従来どおり通常の変数として振る舞う。
+    /// 同一フレームで同名を再宣言しても、退避するのは **最初の 1 回だけ**。
+    pub fn record_sublocal(&mut self, name: &str) {
+        let Some(frame) = self.script_sublocal_stack.last_mut() else {
+            return;
+        };
+        if frame.iter().any(|(n, _)| n == name) {
+            return;
+        }
+        let prev = self.script_vars.get(name).cloned();
+        frame.push((name.to_string(), prev));
     }
     /// `UpVar` コマンドが使う: 現フレームの UpVar 呼び出し回数と、最初の
     /// UpVar 直前の ArgNum を取得・変更する。
