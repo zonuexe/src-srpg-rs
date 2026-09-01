@@ -585,7 +585,14 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
         // 連続出現回数。同一メニューが連続するほど選択肢を順送りしてループを破る。
         let mut last_menu_key = String::new();
         let mut menu_repeat = 0u32;
-        for step in 0..400 {
+        // VERIFY_DRIVE_STEPS でドライブ上限を変更できる (既定 400)。
+        // 会話・演出が長いシナリオは 400 では本編に到達する前に尽きるため、
+        // 深度計測ではここを大きくして測る。
+        let drive_steps: usize = env::var("VERIFY_DRIVE_STEPS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(400);
+        for step in 0..drive_steps {
             let state = app.stage_state();
             dump_vars(&app, step);
             if matches!(state, src_core::stage::StageState::Defeat) {

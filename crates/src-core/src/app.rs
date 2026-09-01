@@ -1679,7 +1679,15 @@ impl App {
     /// idle なら即進行する (プロローグが suspend 中なら完了時に進行)。
     pub fn bootstrap_stage_after_load(&mut self, entry_file: &str) {
         // インターミッション制はメニュー操作 (「次のステージへ」) で進行する。
-        if !self.intermission_commands.is_empty() {
+        //
+        // ただし `IntermissionCommand` は「インターミッションのメニューに項目を
+        // 追加する」だけの命令であり (`IntermissionCommandコマンド.md`)、
+        // シナリオがインターミッション制であることを意味しない。ステージ制の
+        // シナリオもプロローグで辞典・ショップ等を登録するのに使う
+        // (例: 多次元世界エニバース の `IntermissionCommand "エニバース辞典" …`)。
+        // 起動ファイルが `スタート` / `Start` を持つならステージ制と判断して
+        // ブートストラップする。
+        if !self.intermission_commands.is_empty() && !self.file_has_start_label(entry_file) {
             return;
         }
         if self.stage_state != crate::stage::StageState::Briefing {
@@ -1700,6 +1708,16 @@ impl App {
         }
         self.flow.push(crate::flow::FlowCont::AfterStageFileRun);
         self.on_script_completed();
+    }
+
+    /// 指定ファイルが `スタート` / `Start` ラベルを定義しているか。
+    fn file_has_start_label(&self, file_path: &str) -> bool {
+        if file_path.is_empty() {
+            return false;
+        }
+        let lib = self.script_library();
+        lib.label_pc_in_file(file_path, "スタート").is_some()
+            || lib.label_pc_in_file(file_path, "Start").is_some()
     }
 
     /// デバッグ用: App の主要状態を 1 行 JSON 風文字列で返す。
@@ -19138,6 +19156,42 @@ mod tests {
         assert_eq!(app.turn().number, 1);
         assert_eq!(app.turn().phase, crate::Phase::Player);
         assert!(app.command_menu().is_none());
+    }
+
+    /// `IntermissionCommand` は「インターミッションのメニューに項目を追加する」
+    /// だけの命令で (`IntermissionCommandコマンド.md`)、シナリオがインター
+    /// ミッション制であることを意味しない。プロローグで辞典やショップを登録
+    /// するステージ制シナリオ (例: 多次元世界エニバース) が、これを理由に
+    /// ステージ開始をブロックされないこと。
+    #[test]
+    fn intermission_command_does_not_block_stage_bootstrap() {
+        let src = "プロローグ:\n\
+IntermissionCommand \"辞典\" \"lib.eve\"\n\
+Exit\n\
+\n\
+スタート:\n\
+Exit\n";
+        let stmts = crate::data::event::parse(src).unwrap();
+        let mut app = App::new();
+        app.script_library_mut()
+            .append_with_name(&stmts, "stage01.eve");
+        // 素材パック判定を避けるためユニット定義を入れる。
+        let (units, _) =
+            crate::data::unit::parse_lenient("テスト機\nテスト, ＭＳ, 1, 2\n陸, 4, M, 1000, 100\n");
+        app.database_mut().extend_units(units);
+        // プロローグを実行して IntermissionCommand を登録させる。
+        crate::event_runtime::trigger_label(&mut app, "プロローグ");
+        assert!(
+            !app.intermission_commands.is_empty(),
+            "IntermissionCommand が登録されていない"
+        );
+
+        app.bootstrap_stage_after_load("stage01.eve");
+        assert_eq!(
+            app.stage_state(),
+            crate::stage::StageState::Battle,
+            "IntermissionCommand があってもステージ制なら Battle へ進む"
+        );
     }
 
     #[test]
