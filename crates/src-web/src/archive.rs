@@ -512,49 +512,9 @@ fn image_priority_tier(name: &str) -> u8 {
 /// Talk 系イベントから "名前" で検索される時にヒットさせるための仮置きで、
 /// 戦闘ステータスは全て 0 / 空。
 fn parse_non_pilots_into(app: &mut src_core::App, txt: &str) -> usize {
-    use src_core::data::pilot::{Adaption, PilotData, Sex};
-    let mut count = 0;
-    let mut lines = txt.lines().map(str::trim);
-    while let Some(name_line) = lines.next() {
-        if name_line.is_empty() || name_line.starts_with(';') {
-            continue;
-        }
-        // 次の非空行を bitmap 行として消費
-        let Some(meta_line) = lines.find(|l| !l.is_empty()) else {
-            break;
-        };
-        let (nick, bitmap) = match meta_line.split_once(',') {
-            Some((n, b)) => (n.trim(), b.trim()),
-            None => (meta_line, ""),
-        };
-        let pilot = PilotData {
-            spirit_commands: Vec::new(),
-            name: name_line.to_string(),
-            nickname: nick.to_string(),
-            kana_name: nick.to_string(),
-            sex: Sex::Unspecified,
-            class: String::new(),
-            adaption: Adaption::parse("----").unwrap_or(Adaption([b'-'; 4])),
-            exp_value: 0,
-            infight: 0,
-            shooting: 0,
-            hit: 0,
-            dodge: 0,
-            intuition: 0,
-            technique: 0,
-            personality: None,
-            sp: None,
-            bgm: None,
-            bitmap: if bitmap.is_empty() {
-                None
-            } else {
-                Some(bitmap.to_string())
-            },
-            features: Vec::new(),
-        };
-        app.database_mut().pilots.push(pilot);
-        count += 1;
-    }
+    let pilots = src_core::data::non_pilot::parse(txt);
+    let count = pilots.len();
+    app.database_mut().pilots.extend(pilots);
     count
 }
 

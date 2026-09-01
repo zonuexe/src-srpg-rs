@@ -284,6 +284,14 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                     errors.len()
                 );
             }
+        } else if base == "non_pilot.txt" {
+            // 原典 `NonPilotDataList.Load` 相当。実フロントエンド (src-web) も
+            // 読み込むので計測側でも取り込む。これが無いと `non_pilot.txt` だけを
+            // 持つシナリオ (例: 明けない夜を待ちわびて) のパイロットが 0 件になり、
+            // ステージのブートストラップが素材パック扱いで打ち切られる。
+            let non_pilots = src_core::data::non_pilot::parse(&txt);
+            *counts.entry("non_pilot").or_default() += non_pilots.len();
+            app.database_mut().extend_pilots(non_pilots);
         } else if base == "unit.txt" || base == "robot.txt" {
             let (units, errors) = unit::parse_lenient(&txt);
             *counts.entry("unit").or_default() += units.len();
