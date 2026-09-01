@@ -2756,6 +2756,17 @@ impl App {
         // 現ステージファイルとして記録。`begin_battle` の `スタート` 発火を
         // このファイルスコープで行うため (同名ラベル誤発火の防止)。
         self.current_stage_file = next.clone();
+        // 新しいステージは Briefing から始める。原典 `StartScenario` は
+        // ステージを最初から立ち上げ直す。前ステージが Victory / Defeat の
+        // まま残っていると `FlowCont::AfterStageFileRun` のガード
+        // (Briefing / Sortie のみ通す) に弾かれ、次ステージが永久に開始
+        // しなくなる (実コーパス: ＰＴＡにようこそ！ が 1 話クリア後に停止)。
+        if matches!(
+            self.stage_state,
+            crate::stage::StageState::Victory | crate::stage::StageState::Defeat
+        ) {
+            self.stage_state = crate::stage::StageState::Briefing;
+        }
         // ステージファイル実行の完了後処理 (Battle 突入 or ループバック尊重) を
         // 継続として積む。`スタート` 通過の事実は `start_passed_pcs` で観測する。
         self.start_passed_pcs.clear();
@@ -19156,6 +19167,28 @@ mod tests {
         assert_eq!(app.turn().number, 1);
         assert_eq!(app.turn().phase, crate::Phase::Player);
         assert!(app.command_menu().is_none());
+    }
+
+    /// 次ステージへ進むとき、前ステージが Victory / Defeat のままだと
+    /// `FlowCont::AfterStageFileRun` のガード (Briefing / Sortie のみ通す) に
+    /// 弾かれて次ステージが開始しない。原典 `StartScenario` はステージを
+    /// 立ち上げ直すので Briefing に戻す。
+    #[test]
+    fn next_stage_resets_terminal_stage_state() {
+        let src = "スタート:\nExit\n";
+        let stmts = crate::data::event::parse(src).unwrap();
+        let mut app = App::new();
+        app.script_library_mut()
+            .append_with_name(&stmts, "stage02.eve");
+        app.stage_state = crate::stage::StageState::Victory;
+        app.set_script_var("次ステージ".to_string(), "stage02.eve".to_string());
+
+        assert!(app.advance_to_next_stage());
+        assert_ne!(
+            app.stage_state(),
+            crate::stage::StageState::Victory,
+            "Victory のままだと次ステージが開始しない"
+        );
     }
 
     /// `IntermissionCommand` は「インターミッションのメニューに項目を追加する」
