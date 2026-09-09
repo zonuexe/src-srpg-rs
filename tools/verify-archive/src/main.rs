@@ -636,7 +636,12 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                         // 同一メニューの連続出現を検出 (ループ判定)。cmaking は独自に同一
                         // メニューを再提示する (名前入力→決定) ため対象外。
                         if menu_cycle && !is_cmaking {
-                            let key = format!("{prompt}|{}", options.join("|"));
+                            // キーに選択肢の全文を使うと、自分のラベルに現在値を
+                            // 埋め込むトグル項目 (「エフェクト表示の有無を変更する
+                            // [現在の設定: あり]」↔「なし」) で毎回キーが変わり、
+                            // 連続出現と見なされずループ巡回が働かない。
+                            // prompt と選択肢数だけを見て同一メニューと判定する。
+                            let key = format!("{prompt}|{}", options.len());
                             if key == last_menu_key {
                                 menu_repeat += 1;
                             } else {
