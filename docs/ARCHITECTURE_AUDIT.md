@@ -1,7 +1,24 @@
 # モジュール配置・責務分担 監査 (2026-10-27, HEAD `5d27233`)
 
-読み取りのみの監査。行番号は HEAD `5d27233` 時点。
+読み取りのみの監査。行番号は HEAD `5d27233` 時点（以下の実施後はファイル分割で行番号がずれている）。
 「確認済」は実コードで裏取りしたもの、「要検証」はテスト未作成の推定。
+
+## 実施状況（branch `refactor/module-boundaries`）
+
+| ロードマップ | 状態 | 結果 |
+|---|---|---|
+| 1. デッドコード削除 | 済 | unit_instance.rs 3,299 → 614 行。combat.rs の DefenseMode / MapAttackShape、`ui/`、`parse_with` を削除。武器ゲートを `necessary_skill::weapon_usable_by` に切り出し、テストを本番経路に向けた |
+| 2. util 新設・循環解消 | 済 | `util/{text,number}.rs`、`data/necessary.rs`。本番コードの循環は `app ⇄ event_runtime` のみ |
+| 3. テスト外出し | 済 | `app/tests.rs`、`event_runtime/tests.rs`（トピック別の再分割は未） |
+| 4. CLAUDE.md 修正 | 済 | §6 の記述ずれをすべて修正 |
+| 5. `impl App` 分割 | 済 | app/mod.rs 1,564 行 + 子モジュール 14 個 |
+| 6. event_runtime 分割 | 一部 | 周辺関数を 8 個の子モジュールへ。`exec_command_pc`（約 5,700 行）のカテゴリ別分割は未 |
+| 7. ビューモデル・ジオメトリを scene/ へ | 未 | |
+| 8. B1〜B3 修正 | 済 | 回帰テスト 4 件を追加（すべて修正前に失敗することを確認） |
+| 9〜13 | 未 | |
+
+作業中に見つかった追加の課題:
+- **B7**: 援護防御の発動判定 `try_find_support_guard`（app/battle.rs）は、最大 HP に基本値（`unit_by_name(..).hp`）を使っている。戦闘本体は `effective_combat_data` で実効 HP を使うので、改造機や BossRank 機では発動閾値が食い違う（要検証。B3 の App 側版）。
 
 ## 0. 全体像
 

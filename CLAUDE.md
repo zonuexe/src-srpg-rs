@@ -49,8 +49,8 @@ nix --extra-experimental-features 'nix-command flakes' develop --command just <r
 
 | クレート | パス | 役割 |
 |---------|------|------|
-| `src-core` | `crates/src-core` | ゲームロジック（no_std 互換、純粋 Rust） |
-| `src-web` | `crates/src-web` | WASM フロントエンド（Yew + wasm-bindgen） |
+| `src-core` | `crates/src-core` | ゲームロジック（プラットフォーム非依存の純粋 Rust、std 使用） |
+| `src-web` | `crates/src-web` | WASM フロントエンド（wasm-bindgen + web-sys / Canvas 2D） |
 | `verify-archive` | `tools/verify-archive` | アーカイブ検証ツール |
 
 ## ツールチェーン
@@ -67,21 +67,22 @@ nix --extra-experimental-features 'nix-command flakes' develop --command just <r
 
 **`src-core`** — プラットフォーム非依存のゲームロジック
 - `#![forbid(unsafe_code)]`
-- WASM 互換: `std::fs` を使わず VFS、スレッド非使用、時刻は `instant` クレート
+- WASM 互換: `std::fs` を使わず VFS、スレッド非使用、時刻はフロントエンドが注入する
+  (`App::set_wall_clock_ms`。暦計算は `time_util.rs`)
 - 元 VB5 の `.bas` / `.cls` を 1 モジュール（または型）単位で移植
 
 **`src-web`** — WASM フロントエンド（wasm-bindgen + Canvas 2D）
 - Archive（ZIP展開）/ Assets / Audio / Render モジュール
 - Canvas API 呼び出しとイベント処理（キーボード・マウス・ファイル選択）
-- 描画エントリポイント: `src-core::render::draw_scene()`
+- 描画エントリポイント: `src-web/src/render.rs` の `draw_scene()`
 
 ### 主要モジュール（src-core）
 
 | モジュール | 役割 |
 |-----------|------|
-| `app.rs` | 上位状態機械・シーン管理・ゲーム全体制御 (`App`, `Scene`) |
-| `db.rs` | 静的データ集約 (`GameDatabase`) |
-| `data/` | データパーサー（pilot.txt / unit.txt / map.txt 等） |
+| `app/` | 上位状態機械・ゲーム全体制御 (`App`)。`mod.rs` は構造体とアクセサ、`impl App` は責務別ファイル (`stage_flow` / `battle` / `combat_rules` / `ai` / `reaction` / `spirit` / `unit_commands` / `input` / `intermission` / `dialog` / `script_flow` / `vfs` / `status_detail` / `debug`) に分割 |
+| `db.rs` | 静的データ (`units` / `pilots` 等) と実行時の盤面 (`unit_instances` / `map` / 位置索引) を持つ `GameDatabase`。ユニット除去は `remove_unit*` / `remove_units_where` 経由 (位置索引の同期) |
+| `data/` | データパーサー（pilot.txt / unit.txt / map.txt 等、`necessary.rs` は `(必要技能)` 切り離し） |
 | `unit_instance.rs` | マップ上のユニット実体（位置・所属勢力・状態） |
 | `pilot_instance.rs` | パイロット実体（level, exp, sp, morale, plana, skills） |
 | `unit_weapon.rs` | 武器の実行時状態（残弾・EN消費） |
@@ -89,16 +90,21 @@ nix --extra-experimental-features 'nix-command flakes' develop --command just <r
 | `condition.rs` | 状態異常・精神コマンド効果 |
 | `feature.rs` | ユニット特殊能力・スキル有効化判定 |
 | `item_slot.rs` | 装備スロット管理 |
-| `event_runtime.rs` | `.eve` イベントスクリプト実行 (`ScriptContext`, `execute()`) |
-| `expression/` | 式評価器（演算子・関数・変数解決） |
+| `event_runtime/` | `.eve` イベントスクリプト実行 (`ScriptContext`, `execute()`)。コマンド dispatch は `mod.rs`、`library` / `labels` (自動発火) / `vars` / `expression` (式評価) / `functions` / `info` / `blocks` / `unit_effects` に分割 |
+| `util/` | App 非依存の純粋ユーティリティ (SJIS 文字列・全角変換・Like・VB 数値書式) |
+| `necessary_skill.rs` | 必要技能 / 必要条件の評価 (武器ゲート `weapon_usable_by`) |
 | `combat.rs` | 戦闘予測・実行（命中率・ダメージ計算） |
 | `movement.rs` | 移動範囲計算（Dijkstra） |
-| `scene/` | シーン実装（Title / MapView / UnitList 等） |
-| `ui/` | UI 抽象 trait 層（src-web が実装） |
+| `scene/` | シーン状態 (`Scene`)・レイアウト・ヒットテスト・ビューモデル型 |
 | `turn.rs` | ターン / フェーズ管理 |
 | `stage.rs` | ステージ進行状態（Briefing / Sortie / Battle / Victory） |
 | `dialog.rs` | 対話 UI（Talk / Confirm / Input / Menu） |
 | `command_menu.rs` | コマンドメニュー（ユニット・マップ） |
+| `command_catalog.rs` | `.eve` コマンドの単一カタログ (配線不足の検出・verify-archive のカバレッジ計測) |
+| `flow.rs` / `modal.rs` | スクリプト完了後の継続 (`FlowCont`) / スクリプトを止めるモーダル (対話・タイマー) の型付きビュー |
+| `battle_anim.rs` / `script_overlay.rs` | 戦闘・移動アニメ状態 / スクリプト描画 (`Paint*` 等) の命令列 |
+| `entrypoint.rs` | アーカイブ内のシナリオ開始ファイル推定 |
+| `test_harness.rs` | `.eve` E2E テスト用ドライバ (統合テストから使用) |
 
 ### 静的データ → 実行時インスタンスの対応
 
