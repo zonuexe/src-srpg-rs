@@ -6386,3 +6386,60 @@ fn parse_i64_at_accepts_arithmetic_expression() {
     assert_eq!(parse_i64_at("(10 - 4)", 1).unwrap(), 6);
     assert!(parse_i64_at("xyz", 1).is_err());
 }
+
+const ZOLDA_SETUP: &str = "\
+MapSize 4 4
+Pilot \"P\" P 男性 c AAAA 10 100 100 100 100 100 100
+Unit \"ゾルダII\" リアル系 1 0 陸 5 M 100 50 2400 80 900 80 AAAA
+Place \"ゾルダII\" \"P\" Enemy 1 1
+";
+
+#[test]
+fn kill_and_removeunit_keep_pos_index_in_sync() {
+    // 回帰: スクリプトからのユニット除去が位置索引を同期しないと、
+    // 空いたマスが占有中と判定され続ける。
+    for cmd in ["Kill ゾルダII", "RemoveUnit ゾルダII"] {
+        let mut app = App::new();
+        execute(&mut app, &event::parse(ZOLDA_SETUP).unwrap()).unwrap();
+        assert!(app.database().uid_at(1, 1).is_some());
+        execute(&mut app, &event::parse(&format!("{cmd}\n")).unwrap()).unwrap();
+        assert!(app.database().unit_instances.is_empty(), "{cmd}");
+        assert_eq!(app.database().uid_at(1, 1), None, "{cmd} 後もマスが占有中");
+        assert!(app.database().pos_index_is_consistent(), "{cmd}");
+    }
+}
+
+#[test]
+fn damage_uses_effective_max_hp() {
+    // 回帰: BossRank 1 で最大 HP 2400 → 3600。基本 HP 以上のダメージでも
+    // 実効最大 HP 未満なら撃破されない。
+    let mut app = App::new();
+    execute(&mut app, &event::parse(ZOLDA_SETUP).unwrap()).unwrap();
+    app.database_mut().unit_instances[0].boss_rank = 1;
+    execute(&mut app, &event::parse("Damage ゾルダII 3000\n").unwrap()).unwrap();
+    assert_eq!(
+        app.database().unit_instances.len(),
+        1,
+        "実効最大 HP 未満で撃破された"
+    );
+    assert_eq!(app.database().unit_instances[0].damage, 3000);
+}
+
+#[test]
+fn recover_hp_en_rate_uses_effective_max() {
+    // 回帰: 改造 1 段階で最大 HP 2400 → 2600、最大 EN 80 → 90。
+    // 回復率は実効最大値に対する割合。
+    let mut app = App::new();
+    execute(&mut app, &event::parse(ZOLDA_SETUP).unwrap()).unwrap();
+    {
+        let u = &mut app.database_mut().unit_instances[0];
+        u.upgrade_level = 1;
+        u.damage = 2000;
+        u.en_consumed = 80;
+    }
+    let src = "RecoverHP ゾルダII 50\nRecoverEN ゾルダII 50\n";
+    execute(&mut app, &event::parse(src).unwrap()).unwrap();
+    let u = &app.database().unit_instances[0];
+    assert_eq!(u.damage, 2000 - 1300, "HP 回復量が 2600 の 50% でない");
+    assert_eq!(u.en_consumed, 80 - 45, "EN 回復量が 90 の 50% でない");
+}

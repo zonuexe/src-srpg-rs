@@ -2244,9 +2244,7 @@ fn exec_command_pc(
                 // 相方 / 空テンプレを除去 (pos_index も再構築)。
                 if !remove_uids.is_empty() {
                     app.database_mut()
-                        .unit_instances
-                        .retain(|u| !remove_uids.contains(&u.uid));
-                    app.database_mut().rebuild_pos_index();
+                        .remove_units_where(|u| remove_uids.contains(&u.uid));
                 }
                 // 合体イベントラベル発火 (除去で index がずれるため uid で引き直す)。
                 if let Some(u) = app
@@ -3937,8 +3935,7 @@ fn exec_command_pc(
                 // 空 uid は召喚親として無効 (誤一致防止)。
                 if !uid.is_empty() {
                     app.database_mut()
-                        .unit_instances
-                        .retain(|u| u.summoned_by.as_deref() != Some(uid.as_str()));
+                        .remove_units_where(|u| u.summoned_by.as_deref() == Some(uid.as_str()));
                 }
             }
             return Ok(pc + 1);
@@ -4156,8 +4153,7 @@ fn exec_command_pc(
                         .unit_instances
                         .iter()
                         .find(|u| matches_unit_handle(u, &unit_key))
-                        .and_then(|u| app.database().unit_by_name(&u.unit_data_name))
-                        .map(|d| d.hp)
+                        .map(|u| app.database().effective_max_hp(u))
                         .unwrap_or(0);
                     if max_hp > 0 {
                         apply_damage(app, &unit_key, max_hp);
@@ -6227,20 +6223,13 @@ fn exec_command_pc(
                 return Err(err(line, "Kill/Destroyコマンドの引数の数が違います"));
             }
             let target = &xargs[0];
-            // 撃破ラベル発火用に該当ユニットの (pilot, unit_data) を退避。
-            // `Kill name` は名前 1 致するもの全てを除去するので、複数該当
-            // した場合は順に発火する。
-            let mut destroyed: Vec<(String, String, crate::Party)> = Vec::new();
-            for u in &app.database().unit_instances {
-                if matches_unit_handle(u, target) {
-                    destroyed.push((u.pilot_name.clone(), u.unit_data_name.clone(), u.party));
-                }
-            }
-            app.database_mut()
-                .unit_instances
-                .retain(|u| !matches_unit_handle(u, target));
-            for (p, ud, party) in destroyed {
-                fire_destruction_labels(app, &p, &ud, party);
+            // `Kill name` は名前が一致するもの全てを除去するので、複数該当
+            // した場合は順に撃破ラベルを発火する。
+            let destroyed = app
+                .database_mut()
+                .remove_units_where(|u| matches_unit_handle(u, target));
+            for u in destroyed {
+                fire_destruction_labels(app, &u.pilot_name, &u.unit_data_name, u.party);
             }
             return Ok(pc + 1);
         }
@@ -6295,8 +6284,7 @@ fn exec_command_pc(
             }
             let target = &xargs[0];
             app.database_mut()
-                .unit_instances
-                .retain(|u| !matches_unit_handle(u, target));
+                .remove_units_where(|u| matches_unit_handle(u, target));
             return Ok(pc + 1);
         }
         "removepilot" => {
@@ -7091,9 +7079,7 @@ fn recover_hp(app: &mut App, key: &str, spec: Option<&str>) {
     };
     let max_hp = app
         .database()
-        .unit_by_name(&app.database().unit_instances[idx].unit_data_name)
-        .map(|u| u.hp)
-        .unwrap_or(0);
+        .effective_max_hp(&app.database().unit_instances[idx]);
     let cur_dmg = app.database().unit_instances[idx].damage;
     // `rate` は常にパーセント (SRC 準拠: "HP を rate% 回復")。
     // `%` サフィックスは後方互換として受け入れるが、付いていない数値も百分率扱い。
@@ -7124,9 +7110,7 @@ fn recover_en(app: &mut App, key: &str, spec: Option<&str>) {
     };
     let max_en = app
         .database()
-        .unit_by_name(&app.database().unit_instances[idx].unit_data_name)
-        .map(|u| u.en)
-        .unwrap_or(0);
+        .effective_max_en(&app.database().unit_instances[idx]);
     let cur_consumed = app.database().unit_instances[idx].en_consumed;
     // `rate` は常にパーセント (RecoverHP と同じ仕様)。EN の下限は 0。
     let new_consumed = match spec {
@@ -7154,16 +7138,10 @@ fn apply_damage_no_event(app: &mut App, key: &str, amount: i64) {
     else {
         return;
     };
-    let max_hp = app
-        .database()
-        .unit_by_name(&app.database().unit_instances[idx].unit_data_name)
-        .map(|u| u.hp)
-        .unwrap_or(0);
     let u = &mut app.database_mut().unit_instances[idx];
     u.damage = (u.damage + amount).max(0);
     // HP <= 0 でも instance は残す (撃破イベントを発火させないため)。
     // SRC.NET の Attack 命令も "イベント上の戦闘" として label 発火を抑制する。
-    let _ = max_hp;
 }
 
 /// 直接ダメージ / 回復を反映。HP <= 0 ならインスタンスを削除。
@@ -7178,9 +7156,7 @@ fn apply_damage(app: &mut App, key: &str, amount: i64) {
     };
     let max_hp = app
         .database()
-        .unit_by_name(&app.database().unit_instances[idx].unit_data_name)
-        .map(|u| u.hp)
-        .unwrap_or(0);
+        .effective_max_hp(&app.database().unit_instances[idx]);
     let old_dmg = app.database().unit_instances[idx].damage;
     let u = &mut app.database_mut().unit_instances[idx];
     u.damage = (u.damage + amount).max(0);

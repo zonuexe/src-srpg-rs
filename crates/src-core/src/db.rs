@@ -239,6 +239,21 @@ impl GameDatabase {
         Some(self.remove_unit_at(i))
     }
 
+    /// `pred` を満たすユニットを一括除去し `pos_index` を同期する。除去したユニットを
+    /// 元の並び順で返す。スクリプトの `Kill` / `RemoveUnit` 等、名前で複数体を
+    /// 消す経路用 (`unit_instances.retain` を直接呼ぶと索引が古いまま残る)。
+    pub fn remove_units_where(
+        &mut self,
+        mut pred: impl FnMut(&UnitInstance) -> bool,
+    ) -> Vec<UnitInstance> {
+        let (removed, kept) = std::mem::take(&mut self.unit_instances)
+            .into_iter()
+            .partition(|u| pred(u));
+        self.unit_instances = kept;
+        self.rebuild_pos_index();
+        removed
+    }
+
     /// `pos_index` が `unit_instances` と整合しているか検査する (テスト用)。
     /// ミューテータを迂回した座標書き換えがあれば false。
     #[cfg(test)]
