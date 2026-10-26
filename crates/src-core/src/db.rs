@@ -676,11 +676,11 @@ impl GameDatabase {
         let lv = pi.level.min(100);
         let seichou = pilot_static_skill_level(&pd.features, "霊力成長");
         let growth: i64 = if seichou > 0 {
-            crate::event_runtime::round_half_to_even(1.5 * f64::from(lv) * f64::from(10 + seichou))
+            crate::util::number::round_half_to_even(1.5 * f64::from(lv) * f64::from(10 + seichou))
                 as i64
                 / 10
         } else {
-            crate::event_runtime::round_half_to_even(1.5 * f64::from(lv)) as i64
+            crate::util::number::round_half_to_even(1.5 * f64::from(lv)) as i64
         };
         reiryoku + growth as i32
     }

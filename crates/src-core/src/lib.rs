@@ -39,6 +39,7 @@ pub mod turn;
 pub mod unit_ability;
 pub mod unit_instance;
 pub mod unit_weapon;
+pub mod util;
 
 pub use app::{App, Direction, Input, IntermissionCommandEntry};
 pub use audio::AudioRequest;
