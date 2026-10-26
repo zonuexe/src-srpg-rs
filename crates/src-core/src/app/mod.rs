@@ -5235,6 +5235,7 @@ impl App {
                     def_pilot.nickname, atk_pilot.nickname, weapon.name
                 );
                 self.database.remove_unit_at(atk_idx);
+                self.fire_destruction_label(&atk_pilot.name, &atk_unit.name, victim_party);
                 if let Some(killer_idx) = self
                     .database
                     .unit_instances

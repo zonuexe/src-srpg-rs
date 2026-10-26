@@ -10035,3 +10035,57 @@ fn ai_avoids_high_counter_risk() {
         assert!(t.damage >= 50, "AI should attack killable target");
     }
 }
+
+#[test]
+fn counterattack_kill_fires_destruction_event() {
+    // 回帰: 反撃で攻撃側 (Hero) が撃破されたとき `破壊 Hero` が発火する
+    // (本線・援護の撃破と同じく fire_destruction_labels を通す)。
+    use crate::Condition;
+    let mut app = App::new();
+    enter_mapview_with_demo_map(&mut app);
+    let stage = crate::data::event::parse("破壊 Hero:\nSet 反撃撃破 1\nExit\n").unwrap();
+    app.script_library_mut()
+        .append_with_name(&stage, "stage.eve");
+    app.current_stage_file = "stage.eve".to_string();
+    place_player_unit(&mut app, "Hero", 2, 6);
+    add_weapon(&mut app, "Hero", 30, 3); // 敵を撃破しない低威力
+    place_player_unit(&mut app, "FoeData", 9, 9);
+    let foe = spawn_enemy(&mut app, "FoeData", 3, 6);
+    add_weapon(&mut app, "FoeData", 30, 3); // 反撃武器 (射程内に Hero)
+    app.set_stage_state(crate::stage::StageState::Battle);
+    let hero_uid = app
+        .database()
+        .unit_instances
+        .iter()
+        .find(|u| u.unit_data_name == "Hero")
+        .map(|u| u.uid.clone())
+        .unwrap();
+    // Hero は残り HP 1、敵は必中で反撃を確実に当てる。
+    let max_hp = {
+        let u = app.database().unit_by_uid(&hero_uid).unwrap();
+        app.database().effective_max_hp(u)
+    };
+    app.database_mut()
+        .unit_by_uid_mut(&hero_uid)
+        .unwrap()
+        .damage = max_hp - 1;
+    app.database_mut()
+        .unit_by_uid_mut(&foe)
+        .unwrap()
+        .add_condition(Condition::new("必中", 1));
+
+    click_tile(&mut app, 2, 6); // Hero 選択
+    let ai = attack_item_index(&app);
+    click_menu_item(&mut app, ai); // 攻撃
+    click_tile(&mut app, 3, 6); // 敵を攻撃 → 敵の反撃で Hero 撃破
+
+    assert!(
+        app.database().unit_by_uid(&hero_uid).is_none(),
+        "Hero が反撃で撃破されていない"
+    );
+    assert_eq!(
+        app.script_var("反撃撃破"),
+        "1",
+        "反撃での撃破で 破壊 イベントが発火していない"
+    );
+}
