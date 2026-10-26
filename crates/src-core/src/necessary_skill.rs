@@ -138,6 +138,16 @@ fn paren_inner(s: &str, open: char, close: char) -> String {
     }
 }
 
+/// 武器の必要技能 / 必要条件 ((念力Lv3) 形式の括弧条件) を `unit` が満たすか。
+/// 資源 (EN/弾/気力) は判定しない使用「資格」のみのゲート。
+pub fn weapon_usable_by(
+    wd: &crate::data::unit::WeaponData,
+    unit: &UnitInstance,
+    db: &GameDatabase,
+) -> bool {
+    is_satisfied(wd.necessary_skill(), unit, db) && is_satisfied(wd.necessary_condition(), unit, db)
+}
+
 /// 必要技能/必要条件の式 `expr` を `unit` について評価する。空文字は常に成立。
 ///
 /// `IsNecessarySkillSatisfied` 移植。トークン列を AND-of-OR として解釈する。

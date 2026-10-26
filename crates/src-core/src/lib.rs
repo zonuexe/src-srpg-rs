@@ -36,7 +36,6 @@ pub mod stage;
 pub mod test_harness;
 pub mod time_util;
 pub mod turn;
-pub mod ui;
 pub mod unit_ability;
 pub mod unit_instance;
 pub mod unit_weapon;

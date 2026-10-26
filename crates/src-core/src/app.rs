@@ -8005,15 +8005,7 @@ impl App {
     /// 気力) は判定しない使用「資格」のみのゲート。強制武器選択時にも必須。
     fn weapon_skill_ok(&self, unit_idx: usize, wd: &crate::data::unit::WeaponData) -> bool {
         let u = &self.database.unit_instances[unit_idx];
-        let ns = wd.necessary_skill();
-        if !ns.is_empty() && !crate::necessary_skill::is_satisfied(ns, u, &self.database) {
-            return false;
-        }
-        let nc = wd.necessary_condition();
-        if !nc.is_empty() && !crate::necessary_skill::is_satisfied(nc, u, &self.database) {
-            return false;
-        }
-        true
+        crate::necessary_skill::weapon_usable_by(wd, u, &self.database)
     }
 
     fn weapon_firable(&self, unit_idx: usize, wd: &crate::data::unit::WeaponData) -> bool {
