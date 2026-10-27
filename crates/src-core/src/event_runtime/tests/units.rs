@@ -657,6 +657,17 @@ fn unit_short_form_sets_current_unit_for_ride() {
     assert!(cur.off_map, "カレントユニットは未配置 (off_map)");
 }
 
+/// `Unit <名前> <ランク>` のランクは改造段階として効く (原典 `UList.Add(uname, rank, …)`)。
+#[test]
+fn unit_short_form_applies_rank() {
+    let mut app = App::new();
+    setup_two_units(&mut app);
+    execute(&mut app, &event::parse("Unit \"ゾルダII\" 2\n").unwrap()).unwrap();
+    let uid = app.selected_unit_for_event().to_string();
+    let cur = app.database().unit_by_uid(&uid).unwrap();
+    assert_eq!(cur.upgrade_level, 2);
+}
+
 #[test]
 fn setbullet_updates_weapon_ammo() {
     let mut app = App::new();
