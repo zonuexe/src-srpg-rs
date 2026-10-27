@@ -27,6 +27,7 @@ nix --extra-experimental-features 'nix-command flakes' develop --command just <r
 | `just test` | `cargo test -p src-core` | ネイティブ単体テスト（src-core のみ） |
 | `just lint` | `cargo clippy --workspace --target wasm32-unknown-unknown --all-targets -- -D warnings` | |
 | `just fmt` | `cargo fmt --all` | |
+| `just fixtures` | `python3 -m http.server 8090 …` | テスト用フィクスチャを `trunk serve` の `/fixtures/` に配る (Trunk.toml の proxy) |
 
 > **注意**: テストは `src-core` クレートのネイティブビルドでのみ実行可能。WASM ターゲットではテストを実行しない。
 
@@ -207,6 +208,14 @@ C# 実装 (`SRC.Sharp/SRC.NET/`) を読む前に、まず menu.md でドキュ�
 | VB5 コードの直訳 | Rust idiom に合わせて再設計 |
 
 ---
+
+## ブラウザでの動作確認
+
+`just serve` と `just fixtures` を起動し、`http://127.0.0.1:8080/?load=fixtures/<名前>.zip` を
+開くと、起動時にそのシナリオを読み込む (ファイル選択と同じ経路。素材パックの読込後)。
+`?load=` には任意の URL (単独の `.eve` も可) を渡せる。フィクスチャは再配布不可のため
+`dist/` には複製せず、開発サーバの proxy でだけ配る。Claude Preview では `.claude/launch.json`
+の `trunk-serve` と `fixtures` を起動する。
 
 ## デバッグ補助（ブラウザコンソール）
 
