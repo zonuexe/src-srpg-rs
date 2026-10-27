@@ -197,6 +197,17 @@ pub fn library_append(app: &mut App, statements: &[EventStatement]) -> usize {
     lib_start_offset
 }
 
+/// `.eve` の式を文字列として評価する (原典 `GetValueAsString`)。
+/// 差分オラクル (`tools/oracle-diff`) と外部ツール向けの入口。
+pub fn eval_expression(app: &App, expr: &str) -> String {
+    eval::value_as_string(app, expr)
+}
+
+/// `.eve` の `If` 条件式を評価する (原典 `AIfCmd.Evaluate`)。
+pub fn eval_if_condition(app: &App, expr: &str) -> bool {
+    eval::if_condition(app, expr)
+}
+
 /// 既存 script_library 内の `pc` から実行を開始する。
 ///
 /// 既に script_ctx / pending_dialog で中断中の場合は何もせず Ok を返す
@@ -1127,11 +1138,6 @@ fn unit_alive(app: &App, key: &str) -> bool {
         .any(|u| matches_unit_handle(u, key))
 }
 
-/// コマンド引数のユニット指定を解決する。`handle` が実ユニット (uid/unit名/pilot名) に
-/// 一致すればそのまま、一致しなければ同名 script_var の値へフォールバックする。SRC は
-/// コマンド引数のユニット位置にシステム変数 (`相手ユニットＩＤ` 等) を許すため、裸の
-/// 変数名 (生贄ルーチンの `SpecialPower 相手ユニットＩＤ みがわり 対象ユニットＩＤ`) を
-/// uid へ解決できる。実ユニット名を優先するので通常の literal 指定は壊れない。
 /// `UseAbility` の引数から (使用者 uid, アビリティ index, 対象 uid, アビリティ名) を
 /// 解決する。使用者のユニットデータに該当アビリティが無ければ `None`。
 /// 引数の解釈は C# `UseAbilityCmd` に合わせる:
@@ -1168,6 +1174,11 @@ fn resolve_data_ability(app: &App, xargs: &[String]) -> Option<(String, usize, S
     Some((caster, idx, target, name))
 }
 
+/// コマンド引数のユニット指定を解決する。`handle` が実ユニット (uid/unit名/pilot名) に
+/// 一致すればそのまま、一致しなければ同名 script_var の値へフォールバックする。SRC は
+/// コマンド引数のユニット位置にシステム変数 (`相手ユニットＩＤ` 等) を許すため、裸の
+/// 変数名 (生贄ルーチンの `SpecialPower 相手ユニットＩＤ みがわり 対象ユニットＩＤ`) を
+/// uid へ解決できる。実ユニット名を優先するので通常の literal 指定は壊れない。
 fn resolve_handle_var(app: &App, handle: String) -> String {
     if app
         .database()
@@ -1666,6 +1677,7 @@ fn err(line_num: usize, message: &str) -> ScriptError {
 
 mod blocks;
 mod commands;
+mod eval;
 mod expression;
 mod functions;
 mod info;

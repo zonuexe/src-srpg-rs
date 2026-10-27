@@ -61,6 +61,32 @@ sed -n '/^===PROBES===$/,$p' tools/oracle-diff/scenario_vars.txt | grep -vE '^==
 paste -d'~' /tmp/p.txt /tmp/cs.txt /tmp/rs.txt | awk -F'~' '$2!=$3{print}'
 ```
 
+## 評価経路モード (paths) — 式評価器の経路別差分
+
+`scenario` と同じ入力形式で、probe ごとに C# は `GetValueAsString` の値と、実際に
+構文解析した `If <probe> Then` の真偽 (`AIfCmd.Evaluate()`) をタブ区切りで出す。
+Rust 側 [`oracle_paths`](../verify-archive/src/bin/oracle_paths.rs) は本実装の評価経路ごと
+(`Eval()` / `=` 代入 / `If` / メニュー条件 / 統一評価器の値 / 統一評価器の If) に評価して出す。
+コーパスは [`paths.txt`](paths.txt) と [`paths_ext.txt`](paths_ext.txt)。
+
+```sh
+# C#
+$NIX develop .#dotnet --command bash -c \
+  'dotnet run --project tools/oracle-diff/oracle-diff.csproj -c Release paths < tools/oracle-diff/paths.txt > /tmp/cs.txt 2>/dev/null'
+# Rust
+$NIX develop --command bash -c \
+  'cargo run -q -p verify-archive --bin oracle_paths < tools/oracle-diff/paths.txt > /tmp/rs.txt 2>/dev/null'
+# probe ごとに並べる (C# 値, C# If, Rust 6 列)
+sed -n '/^===PROBES===$/,$p' tools/oracle-diff/paths.txt | grep -vE '^===|^#|^$' > /tmp/p.txt
+paste /tmp/p.txt /tmp/cs.txt /tmp/rs.txt
+```
+
+統一評価器 (`event_runtime::eval_expression` / `eval_if_condition`) は両コーパスで C# と
+一致する。残る差は VB6 原典に合わせた意図的なもの: `Mod 0` (C# `NaN`、VB6 は実行時エラー、
+本実装は 0)、`Round(-2.5)` (偶数丸め)、`\` / `Mod` の非整数オペランド (VB6 は整数へ偶数丸め)。
+また C# は `If` の項数を記録し忘れており、パイロット名 1 項 / `Not パイロット名` の判定が
+効かない (本実装は VB6 どおり判定する)。
+
 ## データロードモード (loaddata) — 静的ユニット/パイロットデータの差分
 
 実シナリオの**データディレクトリ** (`pilot.txt` / `unit.txt` / …) を両エンジンにロードし、

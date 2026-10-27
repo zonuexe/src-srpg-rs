@@ -28,7 +28,11 @@ namespace OracleDiff
         {
             if (args.Length > 0 && args[0] == "scenario")
             {
-                return RunScenario();
+                return RunScenario(false);
+            }
+            if (args.Length > 0 && args[0] == "paths")
+            {
+                return RunScenario(true);
             }
             if (args.Length > 1 && args[0] == "loaddata")
             {
@@ -65,7 +69,10 @@ namespace OracleDiff
             return 0;
         }
 
-        private static int RunScenario()
+        // paths モード (withCond=true): probe ごとに `GetValueAsString` の値と、`If <probe> Then`
+        // を実際に構文解析した AIfCmd.Evaluate() の真偽 (1/0) をタブ区切りで出力する。
+        // Rust 側 `oracle_paths` が本実装の各評価経路 (Eval / 代入 / If / メニュー条件) と突合する。
+        private static int RunScenario(bool withCond)
         {
             var src = new SRC { GUI = new MockGUI() };
             src.Event.EventData = new List<EventDataLine>();
@@ -112,9 +119,34 @@ namespace OracleDiff
 
             foreach (var p in probes)
             {
-                Console.WriteLine(Eval(src.Expression, p));
+                if (withCond)
+                {
+                    Console.WriteLine(Eval(src.Expression, p) + "\t" + IfTruth(src, parser, p));
+                }
+                else
+                {
+                    Console.WriteLine(Eval(src.Expression, p));
+                }
             }
             return 0;
+        }
+
+        private static string IfTruth(SRC src, CmdParser parser, string expr)
+        {
+            try
+            {
+                var dl = new EventDataLine(0, EventDataSource.Scenario, "probe", 0, "If " + expr + " Then");
+                var cmd = parser.Parse(src, dl) as SRCCore.CmdDatas.Commands.AIfCmd;
+                if (cmd == null)
+                {
+                    return "<ERR:NotIf>";
+                }
+                return cmd.Evaluate() ? "1" : "0";
+            }
+            catch (Exception e)
+            {
+                return "<ERR:" + e.GetType().Name + ">";
+            }
         }
 
         // データロード検証モード: pilot.txt/unit.txt をロードし、標準入力の probe を評価。

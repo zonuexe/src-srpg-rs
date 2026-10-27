@@ -1,0 +1,535 @@
+//! SRC の式評価器 (`Expression.bas` の `EvalExpr` / `EvalTerm` の移植)。
+//!
+//! 式は空白区切りの「項」に分解し (`list_split`、括弧・クォート内は区切らない)、
+//! 最も優先度の低い演算子で左右に分けて再帰的に評価する。演算子の選び方・型の
+//! 規則は原典どおり:
+//!
+//! - 優先度 (低い順): `Or` < `And` < `Not` < 比較 (`=` `<>` `!=` `<` `<=` `>` `>=` `Like`)
+//!   < `&` < `+` `-` < `Mod` < `\` < `*` `/` < `^`。同じ優先度なら右端の演算子で
+//!   分割する (= 左結合)。`Or` / `And` / `Not` だけは左端で分割する。
+//! - 演算子は**空白で区切られた項**のときだけ認識する (`n+1` は 1 つの項 = 文字列)。
+//! - `=` / `<>` は、左右どちらかの**生のテキスト**が数値リテラルなら数値比較、
+//!   それ以外は文字列比較。`<` `>` などは常に数値比較。
+//! - 項の解決順: 数値リテラル → クォート文字列 (`"..."` 内は `$(...)` を展開) →
+//!   括弧式 → 関数呼び出し → 変数 (システム変数 / 配列 / スクリプト変数)。
+//!   未定義変数は名前そのものの文字列 (数値文脈では 0)。
+//!
+//! 値は「期待する型」(`Ty::Str` / `Ty::Num`) を受け取り、その型で結果を返す
+//! (`GetValueAsString` / `GetValueAsDouble` / `GetValueAsLong` に相当)。
+//!
+//! 原典との意図的な差: なし。C# 移植 (SRC.Sharp) とは `\` / `Mod` の非整数
+//! オペランドの扱いが異なる (VB6 は整数へ丸めてから演算する。本実装は VB6 準拠)。
+//!
+//! ユーザ定義関数は `&mut App` を要するため、呼び出し側が事前に
+//! `preprocess_user_functions` で値へ畳み込んでおく。
+
+use super::*;
+use crate::util::number::round_half_to_even;
+
+/// 期待する値の型 (原典 `ValueType` の `StringType` / `NumericType`)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Ty {
+    Str,
+    Num,
+}
+
+/// 評価結果。文字列を期待したときは `s`、数値を期待したときは `n` が意味を持つ
+/// (原典の `str_result` / `num_result` の組)。
+#[derive(Debug, Clone, Default)]
+pub(super) struct Val {
+    pub s: String,
+    pub n: f64,
+}
+
+impl Val {
+    fn str(s: impl Into<String>) -> Self {
+        Val {
+            s: s.into(),
+            n: 0.0,
+        }
+    }
+    fn num(n: f64) -> Self {
+        Val {
+            s: String::new(),
+            n,
+        }
+    }
+    /// 比較・論理演算の結果 (真=1 / 偽=0) を期待型で返す。
+    fn bool_as(b: bool, ety: Ty) -> Self {
+        Self::num_as(if b { 1.0 } else { 0.0 }, ety)
+    }
+    /// 数値結果を期待型で返す (文字列期待なら `FormatNum`)。
+    fn num_as(n: f64, ety: Ty) -> Self {
+        if ety == Ty::Str {
+            Val::str(format_num(n))
+        } else {
+            Val::num(n)
+        }
+    }
+}
+
+/// 式を文字列として評価する (原典 `GetValueAsString`)。
+pub(super) fn value_as_string(app: &App, expr: &str) -> String {
+    eval_expr(app, expr, Ty::Str).s
+}
+
+/// 式を浮動小数点数として評価する (原典 `GetValueAsDouble`)。
+pub(super) fn value_as_double(app: &App, expr: &str) -> f64 {
+    eval_expr(app, expr, Ty::Num).n
+}
+
+/// 式を整数として評価する (原典 `GetValueAsLong`。ゼロ方向へ切り捨て)。
+pub(super) fn value_as_long(app: &App, expr: &str) -> i64 {
+    to_long(value_as_double(app, expr))
+}
+
+/// 1 項を整数として評価する (原典 `GetValueAsLong(expr, is_term: true)`)。
+pub(super) fn term_as_long(app: &App, term: &str) -> i64 {
+    to_long(eval_term(app, term, Ty::Num).n)
+}
+
+fn to_long(n: f64) -> i64 {
+    if n.is_finite() {
+        n.trunc() as i64
+    } else {
+        0
+    }
+}
+
+/// 演算子の種類 (原典 `OperatorType`)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Op {
+    Expo,
+    Mult,
+    Div,
+    IntDiv,
+    Mod,
+    Plus,
+    Minus,
+    Cat,
+    Eq,
+    NotEq,
+    Lt,
+    LtEq,
+    Gt,
+    GtEq,
+    Like,
+    Not,
+    And,
+    Or,
+}
+
+/// 項 `t` が演算子なら (種類, 優先度, 右端優先か) を返す。右端優先 (`true`) の演算子は
+/// 同じ優先度が後に出れば置き換える (= 左結合)。`Or` / `And` / `Not` は左端を採る。
+fn operator_of(t: &str) -> Option<(Op, u8, bool)> {
+    let op = match t {
+        "^" => (Op::Expo, 10, true),
+        "*" => (Op::Mult, 9, true),
+        "/" => (Op::Div, 9, true),
+        "\\" => (Op::IntDiv, 8, true),
+        "+" => (Op::Plus, 6, true),
+        "-" => (Op::Minus, 6, true),
+        "&" => (Op::Cat, 5, true),
+        "<" => (Op::Lt, 4, true),
+        "=" => (Op::Eq, 4, true),
+        ">" => (Op::Gt, 4, true),
+        "!=" | "<>" => (Op::NotEq, 4, true),
+        "<=" => (Op::LtEq, 4, true),
+        ">=" => (Op::GtEq, 4, true),
+        _ => match t.to_ascii_lowercase().as_str() {
+            "mod" => (Op::Mod, 7, true),
+            // 原典は Like を優先度 7 以上のときだけ採用し、採用後の優先度は 4 とする。
+            "like" => (Op::Like, 4, true),
+            "not" => (Op::Not, 3, false),
+            "and" => (Op::And, 2, false),
+            "or" => (Op::Or, 1, false),
+            _ => return None,
+        },
+    };
+    Some(op)
+}
+
+/// 式を評価する (原典 `EvalExpr`)。
+pub(super) fn eval_expr(app: &App, expr: &str, ety: Ty) -> Val {
+    let Some(terms) = list_split(expr) else {
+        // 括弧の対応が取れていない文字列
+        return if ety == Ty::Num {
+            Val::num(0.0)
+        } else {
+            Val::str(expr)
+        };
+    };
+    match terms.len() {
+        0 => return Val::default(),
+        1 => return eval_term(app, &terms[0], ety),
+        _ => {}
+    }
+
+    // 優先度に合わせ、どの演算を実行するか判定する。
+    let mut op_idx: Option<usize> = None;
+    let mut op_type = Op::Plus;
+    let mut op_pri: u8 = 100;
+    for (i, t) in terms.iter().enumerate() {
+        let Some((op, pri, rightmost)) = operator_of(t) else {
+            continue;
+        };
+        // 原典: Like は「現在の優先度 >= 7」のときだけ採用する。
+        let take = match op {
+            Op::Like => op_pri >= 7,
+            _ if rightmost => op_pri >= pri,
+            _ => op_pri > pri,
+        };
+        if take {
+            op_type = op;
+            op_pri = pri;
+            op_idx = Some(i);
+        }
+    }
+    let Some(op_idx) = op_idx else {
+        // 単なる文字列
+        return Val::str(expr);
+    };
+
+    // 演算子の引数。片側が 1 項なら項として評価する。
+    let (lop, is_lop_term) = match op_idx {
+        0 => (String::new(), true),
+        1 => (terms[0].clone(), true),
+        _ => (terms[..op_idx].join(" "), false),
+    };
+    let (rop, is_rop_term) = if op_idx == terms.len() - 1 {
+        (terms[terms.len() - 1].clone(), true)
+    } else {
+        (terms[op_idx + 1..].join(" "), false)
+    };
+    let side = |s: &str, is_term: bool, t: Ty| {
+        if is_term {
+            eval_term(app, s, t)
+        } else {
+            eval_expr(app, s, t)
+        }
+    };
+    let lnum = || side(&lop, is_lop_term, Ty::Num).n;
+    let rnum = || side(&rop, is_rop_term, Ty::Num).n;
+    let lstr = || side(&lop, is_lop_term, Ty::Str).s;
+    let rstr = || side(&rop, is_rop_term, Ty::Str).s;
+
+    match op_type {
+        Op::Plus => Val::num_as(lnum() + rnum(), ety),
+        Op::Minus => Val::num_as(lnum() - rnum(), ety),
+        Op::Mult => Val::num_as(lnum() * rnum(), ety),
+        Op::Div => {
+            let (l, r) = (lnum(), rnum());
+            Val::num_as(if r != 0.0 { l / r } else { 0.0 }, ety)
+        }
+        Op::IntDiv => {
+            // VB6 `\`: 両辺を整数へ丸めて (偶数丸め) から整数除算する。
+            let (l, r) = (lnum(), rnum());
+            let (l, r) = (vb_clng(l), vb_clng(r));
+            Val::num_as(if r != 0 { (l / r) as f64 } else { 0.0 }, ety)
+        }
+        Op::Mod => {
+            // VB6 `Mod`: 両辺を整数へ丸めて (偶数丸め) から剰余を取る (符号は左辺)。
+            let (l, r) = (vb_clng(lnum()), vb_clng(rnum()));
+            Val::num_as(if r != 0 { (l % r) as f64 } else { 0.0 }, ety)
+        }
+        Op::Expo => Val::num_as(lnum().powf(rnum()), ety),
+        Op::Cat => {
+            let s = lstr() + &rstr();
+            if ety == Ty::Num {
+                Val::num(str_to_dbl(&s))
+            } else {
+                Val::str(s)
+            }
+        }
+        Op::Eq | Op::NotEq => {
+            let equal = if is_number(&lop) || is_number(&rop) {
+                lnum() == rnum()
+            } else {
+                lstr() == rstr()
+            };
+            Val::bool_as(equal == (op_type == Op::Eq), ety)
+        }
+        Op::Lt => Val::bool_as(lnum() < rnum(), ety),
+        Op::LtEq => Val::bool_as(lnum() <= rnum(), ety),
+        Op::Gt => Val::bool_as(lnum() > rnum(), ety),
+        Op::GtEq => Val::bool_as(lnum() >= rnum(), ety),
+        Op::Like => Val::bool_as(like_match(&lstr(), &rstr()), ety),
+        Op::Not => Val::bool_as(rnum() == 0.0, ety),
+        Op::And => {
+            if lnum() == 0.0 {
+                return Val::bool_as(false, ety);
+            }
+            Val::bool_as(rnum() != 0.0, ety)
+        }
+        Op::Or => {
+            if lnum() != 0.0 {
+                return Val::bool_as(true, ety);
+            }
+            Val::bool_as(rnum() != 0.0, ety)
+        }
+    }
+}
+
+/// 1 項を評価する (原典 `EvalTerm`)。
+pub(super) fn eval_term(app: &App, expr: &str, ety: Ty) -> Val {
+    let Some(first) = expr.chars().next() else {
+        return Val::default();
+    };
+    match first {
+        // タブを含む項は Trim のため式として評価する。
+        '\t' => return eval_expr(app, expr, ety),
+        ' ' => return eval_term(app, expr.trim(), ety),
+        '"' => {
+            let mut v = Val::str(if expr.len() >= 2 && expr.ends_with('"') {
+                replace_sub_expression(app, &expr[1..expr.len() - 1])
+            } else {
+                expr.to_string()
+            });
+            if ety != Ty::Str {
+                v.n = str_to_dbl(&v.s);
+            }
+            return v;
+        }
+        // 色指定
+        '#' => return Val::str(expr),
+        '(' => {
+            if expr.len() >= 2 && expr.ends_with(')') {
+                return eval_expr(app, &expr[1..expr.len() - 1], ety);
+            }
+            let mut v = Val::str(expr);
+            if ety != Ty::Str {
+                v.n = str_to_dbl(expr);
+            }
+            return v;
+        }
+        '+' | '-' | '0'..='9' if is_numeric(expr) => {
+            return if ety == Ty::Str {
+                Val::str(expr)
+            } else {
+                Val::num(str_to_dbl(expr))
+            };
+        }
+        '`' => {
+            let mut v = Val::str(if expr.len() >= 2 && expr.ends_with('`') {
+                expr[1..expr.len() - 1].to_string()
+            } else {
+                expr.to_string()
+            });
+            if ety != Ty::Str {
+                v.n = str_to_dbl(&v.s);
+            }
+            return v;
+        }
+        _ => {}
+    }
+    if let Some(v) = call_function(app, expr, ety) {
+        return v;
+    }
+    get_variable(app, expr, ety)
+}
+
+/// 項 `expr` 全体が組み込み関数呼び出しなら評価する (原典 `CallFunction`)。
+/// 関数でなければ `None`。引数は既存の関数実装と同じく `expand_vars` 済みで渡す。
+fn call_function(app: &App, expr: &str, ety: Ty) -> Option<Val> {
+    let (name, args, total) = take_function_call(expr, 0)?;
+    if total != expr.len() {
+        return None;
+    }
+    let args = if name.eq_ignore_ascii_case("IsVarDefined") {
+        args.to_string()
+    } else {
+        expand_vars(app, args)
+    };
+    let s = eval_script_function(app, name, &args)?;
+    let mut v = Val::str(s);
+    if ety != Ty::Str {
+        v.n = str_to_dbl(&v.s);
+    }
+    Some(v)
+}
+
+/// 変数を評価する (原典 `GetVariable`)。システム変数 → 配列要素 → スクリプト変数。
+/// 未定義なら文字列値は変数名そのもの (未定義の配列要素は空)・数値は 0。
+fn get_variable(app: &App, name: &str, ety: Ty) -> Val {
+    let with_num = |s: String| {
+        let mut v = Val::str(s);
+        if ety != Ty::Str {
+            v.n = str_to_dbl(&v.s);
+        }
+        v
+    };
+    if let Some(sys) = system_variable_value(app, name) {
+        return with_num(sys);
+    }
+    let is_array = name.len() > 2 && name.ends_with(']') && name.find('[').is_some_and(|i| i > 0);
+    let key = if is_array {
+        resolve_lhs_name(app, name)
+    } else {
+        name.to_string()
+    };
+    if app.is_script_var_defined(&key) {
+        return with_num(app.script_var(&key).to_string());
+    }
+    Val {
+        s: if is_array {
+            String::new()
+        } else {
+            name.to_string()
+        },
+        n: 0.0,
+    }
+}
+
+/// 文字列中の `$(式)` を式の値で置き換える (原典 `ReplaceSubExpression`)。
+pub(super) fn replace_sub_expression(app: &App, s: &str) -> String {
+    let mut out = s.to_string();
+    let mut search_from = 0;
+    while let Some(rel) = out[search_from..].find("$(") {
+        let start = search_from + rel;
+        let Some(close) = find_matching_paren(&out, start + 1) else {
+            break;
+        };
+        let value = value_as_string(app, &out[start + 2..close]);
+        out.replace_range(start..=close, &value);
+        search_from = start + value.len();
+    }
+    out
+}
+
+/// 空白で項に分解する (原典 `ListSplit`)。`"..."` / `` `...` `` / `(...)` / `[...]`
+/// の内側では区切らない。括弧の対応が取れなければ `None`。
+pub(super) fn list_split(s: &str) -> Option<Vec<String>> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let (mut in_dq, mut in_bq) = (false, false);
+    let mut depth = 0i32;
+    for c in s.chars() {
+        if !in_dq && !in_bq && depth == 0 && (c == ' ' || c == '\t') {
+            if !cur.is_empty() {
+                out.push(std::mem::take(&mut cur));
+            }
+            continue;
+        }
+        if in_bq {
+            if c == '`' {
+                in_bq = false;
+            }
+        } else if in_dq {
+            if c == '"' {
+                in_dq = false;
+            }
+        } else {
+            match c {
+                '(' | '[' => depth += 1,
+                ')' | ']' => {
+                    depth -= 1;
+                    if depth < 0 {
+                        return None;
+                    }
+                }
+                '`' => in_bq = true,
+                '"' => in_dq = true,
+                _ => {}
+            }
+        }
+        cur.push(c);
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    if depth != 0 || in_dq || in_bq {
+        return None;
+    }
+    Some(out)
+}
+
+/// VB の `IsNumeric` 相当: 空白を除いて 10 進数として読めるか
+/// (符号・小数点・桁区切り `,` を許す。指数表記は許さない)。
+pub(super) fn is_numeric(s: &str) -> bool {
+    let t: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+    let body = t.strip_prefix(['+', '-']).unwrap_or(&t);
+    if body.is_empty() {
+        return false;
+    }
+    let (int_part, frac_part) = match body.split_once('.') {
+        Some((i, f)) => (i, Some(f)),
+        None => (body, None),
+    };
+    let int_ok = int_part.chars().all(|c| c.is_ascii_digit() || c == ',');
+    let frac_ok = match frac_part {
+        Some(f) => f.chars().all(|c| c.is_ascii_digit()),
+        None => true,
+    };
+    let has_digit = body.chars().any(|c| c.is_ascii_digit());
+    int_ok && frac_ok && has_digit && !int_part.starts_with(',')
+}
+
+/// 原典 `IsNumber`: 数値として読めて、かつ `(` で始まらない (`(1)` を除外)。
+pub(super) fn is_number(s: &str) -> bool {
+    is_numeric(s) && !s.starts_with('(')
+}
+
+/// 原典 `StrToDbl` (`double.TryParse`、失敗なら 0)。前後の空白・符号・小数点・
+/// 指数・桁区切り `,` を受け付ける。
+pub(super) fn str_to_dbl(s: &str) -> f64 {
+    let t = s.trim();
+    if t.is_empty()
+        || !t
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '+' | '-' | '.' | 'e' | 'E' | ','))
+    {
+        return 0.0;
+    }
+    t.replace(',', "").parse::<f64>().unwrap_or(0.0)
+}
+
+/// VB の `CLng` (偶数丸め) 相当。範囲外は飽和させる。
+fn vb_clng(x: f64) -> i64 {
+    if x.is_finite() {
+        round_half_to_even(x) as i64
+    } else {
+        0
+    }
+}
+
+/// `If` / `ElseIf` の条件式を評価する (原典 `ExecIfCmd`、項数は構文解析時に決まる)。
+///
+/// - 1 項 (`$` / `(` で始まらない) でパイロット名なら、そのパイロットが盤上
+///   (出撃 / 格納) にいるか。パイロット名でなければ項を整数として評価する。
+/// - 2 項 `Not X` (X が `$` / `(` で始まらない) で X がパイロット名なら、盤上に
+///   いないか。パイロット名でなければ X が 0 か。
+/// - それ以外は式を整数として評価し、0 以外を真とする。
+///
+/// 注: C# 移植 (SRC.Sharp) は項数を記録し忘れており、常に式として評価する。
+pub(super) fn if_condition(app: &App, expr: &str) -> bool {
+    let terms = list_split(expr).unwrap_or_default();
+    let is_expr_head = |t: &str| t.starts_with('$') || t.starts_with('(');
+    match terms.as_slice() {
+        [t] if !is_expr_head(t) => match pilot_on_board(app, t) {
+            Some(on_board) => on_board,
+            None => term_as_long(app, t) != 0,
+        },
+        [not, t] if not.eq_ignore_ascii_case("not") && !is_expr_head(t) => {
+            match pilot_on_board(app, t) {
+                Some(on_board) => !on_board,
+                None => term_as_long(app, t) == 0,
+            }
+        }
+        _ => value_as_long(app, expr) != 0,
+    }
+}
+
+/// `name` がパイロット名なら、そのパイロットのユニットが盤上にいるかを返す。
+/// パイロット名でなければ `None`。
+fn pilot_on_board(app: &App, name: &str) -> Option<bool> {
+    let db = app.database();
+    let defined = db
+        .pilot_instances
+        .iter()
+        .any(|p| p.id == name || p.pilot_data_name == name)
+        || db.unit_instances.iter().any(|u| u.pilot_name == name);
+    if !defined {
+        return None;
+    }
+    Some(db.unit_instances.iter().any(|u| u.pilot_name == name))
+}
