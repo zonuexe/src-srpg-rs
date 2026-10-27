@@ -188,3 +188,21 @@ EndSw
 "#);
     assert_eq!(app.script_var("v"), "1-2");
 }
+
+#[test]
+fn case_value_evaluating_to_itself_stays_literal() {
+    // 原典 `ExecSwitchCmd`: 評価しても自分自身 (未定義の名前) だった Case の値は
+    // 文字列として固定され、後から同名の変数を定義しても再評価しない。
+    let app = run(r#"
+Set 名前 同
+Set n 0
+For i = 1 To 2
+  Switch 名前
+  Case 同
+    Incr n
+  EndSw
+  Set 同 別の値
+Next
+"#);
+    assert_eq!(app.script_var("n"), "2");
+}

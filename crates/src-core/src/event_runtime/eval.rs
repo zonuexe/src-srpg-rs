@@ -170,6 +170,11 @@ pub(super) fn arg_as_string(app: &App, raw: &str) -> String {
     }
 }
 
+/// 構文解析で型の決まらない (評価が要る) 引数か (原典 `ArgsType = UndefinedType`)。
+pub(super) fn is_term_arg(raw: &str) -> bool {
+    matches!(arg_kind(raw), ArgKind::Term)
+}
+
 /// `Case` の値 1 つ (原典 `ExecSwitchCmd`)。構文解析で型の決まった引数 (文字列リテラル・
 /// 数値リテラル) は評価せず原文 (`GetArg`) を使うため、`Case 05` は `"05"` としか一致しない。
 /// それ以外は `GetArgAsString` で項として評価する。

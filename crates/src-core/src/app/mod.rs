@@ -302,6 +302,11 @@ pub struct App {
     /// フロントエンド側で `take_pending_audio()` を呼んで実再生する。
     #[serde(skip)]
     pending_audio: Vec<crate::audio::AudioRequest>,
+    /// `Case` の値のうち、評価しても自分自身になったため文字列として固定したもの
+    /// (原典 `ExecSwitchCmd` の `SetArgsType j, StringType`。以後は再評価しない)。
+    /// キーは (文の並びの識別, pc, 引数位置)。原典もセーブには持たない。
+    #[serde(skip)]
+    case_literal_args: std::collections::HashSet<(usize, usize, usize)>,
     /// `Wait <duration>` で設定されるタイマ秒数。> 0 のあいだスクリプトは
     /// 中断し、`tick(dt)` で減算、0 以下になったら `resume()` で再開する。
     ///
@@ -719,6 +724,7 @@ impl App {
             action_mode: crate::command_menu::ActionMode::Browse,
             hotpoints: Vec::new(),
             pending_audio: Vec::new(),
+            case_literal_args: std::collections::HashSet::new(),
             pending_timer: None,
             talk_pages: Vec::new(),
             talk_pages_speaker: String::new(),
@@ -777,6 +783,16 @@ impl App {
     pub fn set_last_script_error(&mut self, msg: String) {
         self.last_script_error = Some(msg);
     }
+    /// `Case` の引数が文字列として固定済みか (原典 `ExecSwitchCmd`)。
+    pub(crate) fn case_arg_is_literal(&self, key: (usize, usize, usize)) -> bool {
+        self.case_literal_args.contains(&key)
+    }
+
+    /// `Case` の引数を文字列として固定する (以後は書かれたまま比べる)。
+    pub(crate) fn mark_case_arg_literal(&mut self, key: (usize, usize, usize)) {
+        self.case_literal_args.insert(key);
+    }
+
     /// 反撃手段の選択待ち (ウィンドウのビューモデル組み立て用)。
     pub(crate) fn pending_reaction(&self) -> Option<&PendingReaction> {
         self.pending_reaction.as_ref()

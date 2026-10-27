@@ -275,7 +275,7 @@ pub(super) fn jump_to(
 /// (`Case 1 2 3` は 3 値のいずれか)。一致が無ければ同階層の `Case Else` / `CaseElse`
 /// へ、それも無ければ `EndSw` の次へ進む。
 pub(super) fn find_matching_case(
-    app: &App,
+    app: &mut App,
     pc: usize,
     stmts: &[EventStatement],
     value: &str,
@@ -294,7 +294,10 @@ pub(super) fn find_matching_case(
                     return Ok(i + 1);
                 }
                 "case"
-                    if depth == 0 && raw_args.iter().any(|a| eval::case_value(app, a) == value) =>
+                    if depth == 0
+                        && raw_args.iter().enumerate().any(|(j, a)| {
+                            case_arg_value(app, (stmts.as_ptr() as usize, i, j), a) == value
+                        }) =>
                 {
                     return Ok(i + 1);
                 }
@@ -304,6 +307,19 @@ pub(super) fn find_matching_case(
         i += 1;
     }
     Err(err(line, "SwitchとEndSwが対応していません"))
+}
+
+/// `Case` の引数 1 つの値。原典は評価が要る引数を評価して、結果が書かれたままの文字列と
+/// 同じなら以後は文字列として扱う (未定義の名前は後から同名の変数を定義しても再評価しない)。
+fn case_arg_value(app: &mut App, key: (usize, usize, usize), raw: &str) -> String {
+    if app.case_arg_is_literal(key) {
+        return raw.to_string();
+    }
+    let v = eval::case_value(app, raw);
+    if eval::is_term_arg(raw) && v == raw {
+        app.mark_case_arg_literal(key);
+    }
+    v
 }
 
 /// `Case Else` か (原典は引数 1 個で `else` のときだけ `CaseElseCmd` とする)。本移植は
