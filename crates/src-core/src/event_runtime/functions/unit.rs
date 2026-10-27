@@ -207,9 +207,9 @@ fn fn_bullet(app: &App, c: &FnCall) -> Option<String> {
                         -1
                     } else {
                         u.weapons
-                            .get(i)
-                            .map(|uw| uw.bullet_remaining)
-                            .unwrap_or(w.bullet)
+                            .iter()
+                            .find(|uw| uw.weapon_index == i)
+                            .map_or(w.bullet, |uw| uw.bullet_remaining)
                     }
                 })
         })

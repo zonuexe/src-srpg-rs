@@ -897,14 +897,14 @@ impl App {
     /// `weapon_di` は `unit_data.weapons` でのインデックス (= `UnitWeapon.weapon_index`)。
     /// EN コスト 0・無限弾 (bullet ≤ 0) の武器は実質無消費 (= テスト用武器へ無影響)。
     pub(crate) fn consume_weapon_resources(&mut self, unit_idx: usize, weapon_di: usize) {
-        let (en_cost, has_ammo) = {
+        let (en_cost, bullet, name) = {
             let u = &self.database.unit_instances[unit_idx];
             match self
                 .database
                 .unit_by_name(&u.unit_data_name)
                 .and_then(|d| d.weapons.get(weapon_di))
             {
-                Some(wd) => (wd.en_consumption, wd.bullet > 0),
+                Some(wd) => (wd.en_consumption, wd.bullet, wd.name.clone()),
                 None => return,
             }
         };
@@ -912,10 +912,18 @@ impl App {
         if en_cost > 0 {
             u.en_consumed += en_cost;
         }
-        if has_ammo {
-            if let Some(uw) = u.weapons.iter_mut().find(|w| w.weapon_index == weapon_di) {
-                uw.consume_bullet();
-            }
+        if bullet > 0 {
+            // 残弾の実行時状態は初めて撃ったときに満タンで作る (原典はユニット生成時に
+            // 全武器の残弾を最大弾数で持つ)。
+            let pos = match u.weapons.iter().position(|w| w.weapon_index == weapon_di) {
+                Some(p) => p,
+                None => {
+                    u.weapons
+                        .push(crate::UnitWeapon::from_data(name, weapon_di, bullet));
+                    u.weapons.len() - 1
+                }
+            };
+            u.weapons[pos].consume_bullet();
         }
     }
 
