@@ -343,8 +343,14 @@ impl App {
         };
 
         let msg = if hit {
-            if let Some(sub) = self.apply_migawari(def_idx, atk_idx, &weapon.class, applied_damage)
-            {
+            if let Some(sub) = self.apply_migawari(
+                def_idx,
+                atk_idx,
+                &weapon,
+                StrikeKind::Main,
+                critical,
+                parried,
+            ) {
                 // みがわり (身代わり, 最優先・SRC Unit.cls:14855): 指定された身代わりユニットが
                 // 防御側のダメージを 1 回肩代わりする。防御側は無傷、condition は消費される。
                 format!(
@@ -787,6 +793,17 @@ impl App {
         def_idx: usize,
         weapon: &crate::data::unit::WeaponData,
     ) -> Option<combat::CombatPreview> {
+        self.forecast_strike_as(atk_idx, def_idx, weapon, StrikeKind::Main)
+    }
+
+    /// `forecast_strike` の攻撃種別つき版 (援護攻撃・反撃の補正を反映する)。
+    fn forecast_strike_as(
+        &self,
+        atk_idx: usize,
+        def_idx: usize,
+        weapon: &crate::data::unit::WeaponData,
+        kind: StrikeKind,
+    ) -> Option<combat::CombatPreview> {
         let (atk_pilot, atk_unit) = self.database.effective_combat_data(atk_idx)?;
         let (def_pilot, mut def_unit) = self.database.effective_combat_data(def_idx)?;
         self.apply_defense_armor_mod(def_idx, &weapon.class, &mut def_unit);
@@ -809,7 +826,7 @@ impl App {
                 def_hit_mod: self.database.terrain_hit_mod(terrain_id),
                 def_damage_mod: self.database.terrain_damage_mod(terrain_id),
             },
-            StrikeKind::Main,
+            kind,
         );
         Some(preview)
     }
@@ -872,11 +889,12 @@ impl App {
         } else {
             preview.damage
         };
-        let applied_damage = if def_mode == "防御" {
-            (crit_damage / 2).max(0)
-        } else {
-            crit_damage.max(0)
-        };
+        let applied_damage =
+            if def_mode == "防御" && self.defense_halves_damage(def_idx, &weapon.class) {
+                (crit_damage / 2).max(0)
+            } else {
+                crit_damage.max(0)
+            };
         // 即死 (即): 命中時に特殊効果発動率で proc し、ボス以外を致死化する
         // (`特殊効果攻撃属性.md`)。proc すると致死ダメージにして撃破サイトへ流す。
         // 非 即 武器は RNG を消費しない (既存の乱数列を保つ)。
@@ -1163,31 +1181,41 @@ impl App {
         }
     }
 
-    /// シールド防御 (防御能力 (B) 段階・SRC.NET `Unit.cs::CheckShieldFeature` 準拠):
-    /// 防御側 `def_idx` が **Ｓ防御技能** + シールド系特殊能力 (シールド/小型/大型/アクティブ
-    /// シールド) を持ち、行動可能 (行動不能/麻痺/石化/凍結/睡眠 でない) で武器が 精/殺/浸 で
-    /// ないとき、`Ｓ防御Lv(+大型1/アクティブ2) >= Dice(16)` で発動し被ダメージを半減する
-    /// (小型=2/3、破属性は 3/4・小型破は 5/6)。発動時は最低 10。実行段 (予測ではなく) で
-    /// ロールするため、プレビューは確率的シールドを反映しない (SRC と同じ)。
-    ///
-    /// 発動しなければ `dmg` をそのまま返す。`バリア`/`フィールド` 系 (S防御非依存の吸収/÷2) は
-    /// 対象外で、現状は予測の ÷2 近似 ((A)) のまま。
+    /// 防御を選んだ防御側 `def_idx` のダメージが半減するか (原典 `Unit.Attack`
+    /// 「防御＆かばう時はダメージを半減」)。殺 属性の武器、無防備 (捨て身 等) の防御側、
+    /// `防御不可` を持つ防御側では半減しない。
+    fn defense_halves_damage(&self, def_idx: usize, weapon_class: &str) -> bool {
+        let u = &self.database.unit_instances[def_idx];
+        !weapon_class.contains('殺')
+            && !u
+                .conditions
+                .iter()
+                .any(|c| c.name == "捨て身" || self.spirit_has_effect(&c.name, "無防備"))
+            && !crate::feature::has_feature(&u.active_features, "防御不可")
+    }
+
     /// みがわり (身代わり, SRC `Unit.cls:14855`): 防御側 `def_idx` が `みがわり` condition
-    /// (data=身代わりユニット uid) を持つとき、攻撃ダメージ `damage` を身代わりユニットへ
-    /// **1 回だけ**肩代わりさせる。肩代わりが成立したら身代わりユニットの愛称を返し
-    /// condition を消費する。身代わりが盤上に居ない / 防御側自身なら `None`（通常処理）。
+    /// (data=身代わりユニット uid) を持つとき、攻撃を身代わりユニットへ **1 回だけ**
+    /// 肩代わりさせる。肩代わりが成立したら身代わりユニットの愛称を返し condition を
+    /// 消費する。身代わりが盤上に居ない / 防御側自身 / 防御側が切り払った なら `None`
+    /// (通常処理)。
     ///
-    /// 身代わりユニットは自身の バリア/フィールド/シールド/不死身 を適用してダメージを
-    /// 受け、HP0 なら（復活が無ければ）撃破・破壊イベント発火・勝敗判定まで処理する。
-    /// 近似: 肩代わりダメージは防御側に向かっていた値をそのまま用い、身代わりの装甲で
-    /// 再計算はしない（SRC は再計算する）。Ｓ防御依存シールド等は身代わり基準で適用。
-    pub(super) fn apply_migawari(
+    /// 原典どおり身代わりを新しい攻撃対象としてダメージを計算し直し (`Damage(w, su)`、
+    /// クリティカルなら 1.5 倍)、常に防御扱いで半減する。そのうえで身代わり自身の
+    /// 防御特性・バリア・フィールド・シールド・不死身を適用し、HP0 なら (復活が無ければ)
+    /// 撃破・破壊イベント発火・勝敗判定まで処理する。
+    fn apply_migawari(
         &mut self,
         def_idx: usize,
         atk_idx: usize,
-        weapon_class: &str,
-        damage: i64,
+        weapon: &crate::data::unit::WeaponData,
+        kind: StrikeKind,
+        critical: bool,
+        parried: bool,
     ) -> Option<String> {
+        if parried {
+            return None;
+        }
         let sub_uid = self.database.unit_instances[def_idx]
             .conditions
             .iter()
@@ -1201,13 +1229,24 @@ impl App {
         self.database.unit_instances[def_idx]
             .conditions
             .retain(|c| c.name != "みがわり");
-        // 身代わりユニットがダメージを受ける（自身の バリア/フィールド/シールド/不死身）。
+        // 身代わりを対象にダメージを計算し直す。
+        let dmg = self
+            .forecast_strike_as(atk_idx, sub_idx, weapon, kind)
+            .map_or(0, |p| p.damage);
+        let dmg = if critical { dmg * 3 / 2 } else { dmg }.max(0);
+        let dmg = if self.defense_halves_damage(sub_idx, &weapon.class) {
+            dmg / 2
+        } else {
+            dmg
+        };
+        // 身代わりユニットがダメージを受ける（自身の 防御特性/バリア/フィールド/シールド/不死身）。
+        let dmg = self.defense_attribute_damage(sub_idx, &weapon.class, dmg);
         let sub_max_hp = self
             .database
             .effective_max_hp(&self.database.unit_instances[sub_idx]);
-        let dmg = self.apply_barrier_absorb(sub_idx, atk_idx, weapon_class, damage);
-        let dmg = self.apply_active_field_absorb(sub_idx, atk_idx, weapon_class, dmg);
-        let dmg = self.apply_shield_defense(sub_idx, weapon_class, dmg);
+        let dmg = self.apply_barrier_absorb(sub_idx, atk_idx, &weapon.class, dmg);
+        let dmg = self.apply_active_field_absorb(sub_idx, atk_idx, &weapon.class, dmg);
+        let dmg = self.apply_shield_defense(sub_idx, &weapon.class, dmg);
         let dmg = self.cap_damage_for_immortal(sub_idx, sub_max_hp, dmg);
         let sub_name = self.database.unit_instances[sub_idx].unit_data_name.clone();
         let sub_nick = self
@@ -1215,7 +1254,9 @@ impl App {
             .pilot_by_name(&self.database.unit_instances[sub_idx].pilot_name)
             .map(|p| p.nickname.clone())
             .unwrap_or_else(|| sub_name.clone());
-        self.database.unit_instances[sub_idx].damage += dmg;
+        // 吸収 (負のダメージ) は回復として扱い、損傷は 0 未満にしない。
+        let sub_dmg = &mut self.database.unit_instances[sub_idx].damage;
+        *sub_dmg = (*sub_dmg + dmg).max(0);
         if sub_max_hp - self.database.unit_instances[sub_idx].damage <= 0
             && !self.revive_if_possible(sub_idx)
         {
@@ -1228,6 +1269,15 @@ impl App {
         Some(sub_nick)
     }
 
+    /// シールド防御 (防御能力 (B) 段階・SRC.NET `Unit.cs::CheckShieldFeature` 準拠):
+    /// 防御側 `def_idx` が **Ｓ防御技能** + シールド系特殊能力 (シールド/小型/大型/アクティブ
+    /// シールド) を持ち、行動可能 (行動不能/麻痺/石化/凍結/睡眠 でない) で武器が 精/殺/浸 で
+    /// ないとき、`Ｓ防御Lv(+大型1/アクティブ2) >= Dice(16)` で発動し被ダメージを半減する
+    /// (小型=2/3、破属性は 3/4・小型破は 5/6)。発動時は最低 10。実行段 (予測ではなく) で
+    /// ロールするため、プレビューは確率的シールドを反映しない (SRC と同じ)。
+    ///
+    /// 発動しなければ `dmg` をそのまま返す。`バリア`/`フィールド` 系 (S防御非依存の吸収/÷2) は
+    /// 対象外で、現状は予測の ÷2 近似 ((A)) のまま。
     pub(super) fn apply_shield_defense(
         &mut self,
         def_idx: usize,
@@ -1710,7 +1760,14 @@ impl App {
             let dmg = strike.damage;
             // みがわり (身代わり, 最優先・SRC Unit.cls:14855): 防御側が みがわり を持てば
             // 身代わりが肩代わりし、防御側への被ダメージは 0 になる。
-            let dmg = if let Some(sub) = self.apply_migawari(def_idx, sup_idx, &weapon.class, dmg) {
+            let dmg = if let Some(sub) = self.apply_migawari(
+                def_idx,
+                sup_idx,
+                &weapon,
+                StrikeKind::Support,
+                strike.critical,
+                strike.parried,
+            ) {
                 self.push_message(format!(
                     "みがわり: {} が {} の身代わりになった！",
                     sub, def_pilot.nickname
@@ -2085,9 +2142,14 @@ impl App {
             let counter_dmg = strike.damage;
             // みがわり (身代わり, 最優先・SRC Unit.cls:14855): 反撃を受ける側 (atk_idx) が
             // みがわり を持てば身代わりが肩代わりし、被ダメージは 0 になる。
-            let counter_dmg = if let Some(sub) =
-                self.apply_migawari(atk_idx, def_idx, &weapon.class, counter_dmg)
-            {
+            let counter_dmg = if let Some(sub) = self.apply_migawari(
+                atk_idx,
+                def_idx,
+                &weapon,
+                StrikeKind::Counter,
+                strike.critical,
+                strike.parried,
+            ) {
                 self.push_message(format!(
                     "みがわり: {} が {} の身代わりになった！",
                     sub, atk_unit.name

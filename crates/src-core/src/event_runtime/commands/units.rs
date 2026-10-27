@@ -807,7 +807,7 @@ fn exec_center(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
             c.long(app, 0).unwrap_or(0),
             c.long(app, 1).unwrap_or(0),
         );
-        app.set_map_cursor(x, y);
+        app.center_map_on(x, y);
         return Ok(pc + 1);
     }
     // unit 指定
@@ -819,7 +819,7 @@ fn exec_center(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         .find(|u| matches_unit_handle(u, &key))
         .map(|u| (u.x, u.y));
     if let Some((x, y)) = pos {
-        app.set_map_cursor(x, y);
+        app.center_map_on(x, y);
     }
     Ok(pc + 1)
 }
