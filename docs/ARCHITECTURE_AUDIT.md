@@ -12,12 +12,18 @@
 | 3. テスト外出し | 済 | `app/tests.rs`、`event_runtime/tests.rs`（トピック別の再分割は未） |
 | 4. CLAUDE.md 修正 | 済 | §6 の記述ずれをすべて修正 |
 | 5. `impl App` 分割 | 済 | app/mod.rs 1,564 行 + 子モジュール 14 個 |
-| 6. event_runtime 分割 | 一部 | 周辺関数を 8 個の子モジュールへ。`exec_command_pc`（約 5,700 行）のカテゴリ別分割は未 |
+| 6. event_runtime 分割 | 済 | 周辺関数を 8 個の子モジュールへ。`exec_command_pc` の 186 アームを 1 コマンド 1 関数にして `commands/` 以下の 10 カテゴリへ（mod.rs 約 7,000 → 1,687 行）。`eval_script_function` の分割は未 |
 | 7. ビューモデル・ジオメトリを scene/ へ | 未 | |
 | 8. B1〜B3 修正 | 済 | 回帰テスト 4 件を追加（すべて修正前に失敗することを確認） |
-| 9〜13 | 未 | |
+| 9. `.eve` コマンドをドメイン経路へ | 一部 | SpecialPower / Mind → `execute_spirit_by_event`、Transform → `set_unit_form`、UseAbility → `execute_ability`、Attack → `script_attack`（`resolve_strike` を本線攻撃と共有）。`map_attack*` の combat.rs 移動は未 |
+| 10. 戦闘の一本化 | 一部 | 命中・ダメージ判定を `resolve_strike` に切り出し、本線攻撃と `.eve Attack` で共有。援護攻撃・反撃・先制反撃は未 |
+| 11〜13 | 未 | |
 
 作業中に見つかった追加の課題:
+- **sp.txt の効果行**: 旧パーサは効果を `,` で区切っていたが、実データと C# `ToList` は空白区切り（`挑発 命中率低下Lv5`）。修正済。
+- **`.eve Attack`**: 旧実装は命中判定なし・基本データの簡易式で、撃破したユニットを HP 0 以下のまま盤面に残していた。修正済（`script_attack`）。
+- **`.eve UseAbility`**: 旧実装はアビリティ名で効果を決め打ちし、ユニットデータの効果を見ていなかった。データにあればそれを使うよう修正済。データに無い名前は旧処理にフォールバックする。
+- **`.eve Transform` の変形イベント**（未決）: C# `TransformCmd` は変形イベントを発火しないが、本移植は fixture 21 に合わせて発火している（`Combine` も同様）。原典の挙動に合わせるかは要判断。
 - **B7**: 援護防御の発動判定 `try_find_support_guard`（app/battle.rs）は、最大 HP に基本値（`unit_by_name(..).hp`）を使っている。戦闘本体は `effective_combat_data` で実効 HP を使うので、改造機や BossRank 機では発動閾値が食い違う（要検証。B3 の App 側版）。
 
 ## 0. 全体像
@@ -103,8 +109,8 @@ CLAUDE.md が挙げている `expression/` モジュールは存在しない。
 | B1 | 反撃で攻撃側を撃破すると破壊・全滅イベントが発火しない | app.rs:5227–5250 | 確認済（SRC 仕様との照合は未） |
 | B2 | `.eve` の `Kill` / `Destroy` / `RemoveUnit` / `StopSummoning` が `unit_instances.retain` で直接消すため、`pos_index` が古いまま残る。その結果 `uid_at` が空きマスを占有中と判定する | event_runtime.rs:6236, 3936 ほか。`remove_unit_at` (db.rs:228) を迂回している | コード上は確認済、実害は要テスト |
 | B3 | `RecoverHP` / `RecoverEN` / `Damage` が基本 HP (`unit_by_name(..).hp`) を基準にしている。アイテム、改造、BossRank 込みの `effective_max_hp` (db.rs:630) と食い違う | event_runtime.rs:7112, 7145, 7177, 7199 | 確認済 |
-| B4 | スクリプトから呼んだ SpecialPower では、回復・気力などの効果が出ない | 1-2 参照 | 要検証 |
-| B5 | `.eve` の Transform で abilities が再構築されない | 1-2 参照 | 要検証 |
+| B4 | スクリプトから呼んだ SpecialPower では、回復・気力などの効果が出ない。さらに原典仕様に反して SP を消費し、不足時は効果を出さなかった | 1-2 参照 | 修正済（回帰テスト 3 件） |
+| B5 | `.eve` の Transform で abilities が再構築されない | 1-2 参照 | 修正済（回帰テスト 1 件） |
 | B6 | `eval_numeric_atoms` がシステム変数を解決しない | 1-4 参照 | 要検証 |
 
 ## 3. レイヤリング

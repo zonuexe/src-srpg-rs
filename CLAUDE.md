@@ -90,7 +90,7 @@ nix --extra-experimental-features 'nix-command flakes' develop --command just <r
 | `condition.rs` | 状態異常・精神コマンド効果 |
 | `feature.rs` | ユニット特殊能力・スキル有効化判定 |
 | `item_slot.rs` | 装備スロット管理 |
-| `event_runtime/` | `.eve` イベントスクリプト実行 (`ScriptContext`, `execute()`)。コマンド dispatch は `mod.rs`、`library` / `labels` (自動発火) / `vars` / `expression` (式評価) / `functions` / `info` / `blocks` / `unit_effects` に分割 |
+| `event_runtime/` | `.eve` イベントスクリプト実行 (`ScriptContext`, `execute()`)。各コマンドの本体は `commands/` 以下のカテゴリ別モジュール (1 コマンド 1 関数)。ほかに `library` / `labels` (自動発火) / `vars` / `expression` (式評価) / `functions` / `info` / `blocks` / `unit_effects`。ユニットへの作用はなるべく App のドメイン関数 (`set_unit_form` / `execute_ability` / `execute_spirit_by_event` / `script_attack` 等) を呼ぶ |
 | `util/` | App 非依存の純粋ユーティリティ (SJIS 文字列・全角変換・Like・VB 数値書式) |
 | `necessary_skill.rs` | 必要技能 / 必要条件の評価 (武器ゲート `weapon_usable_by`) |
 | `combat.rs` | 戦闘予測・実行（命中率・ダメージ計算） |
