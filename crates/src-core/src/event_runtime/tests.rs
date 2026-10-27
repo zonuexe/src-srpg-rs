@@ -681,19 +681,10 @@ fn paren_arith_missing_operand_defaults_to_zero() {
     // 残っても括弧算術が評価できること (スパロボ戦記 AlphaSecond の
     // `次のレベル(500 - )` / `(500 * 0 - 500 + )` 由来の生式表示の防止)。
     let app = App::new();
-    assert_eq!(
-        eval::try_numeric(&app, "(500 - )").map(format_num),
-        Some("500".to_string())
-    );
-    assert_eq!(
-        eval::try_numeric(&app, "(500 * 0 - 500 + )").map(format_num),
-        Some("-500".to_string())
-    );
+    assert_eq!(eval::value_as_string(&app, "(500 - )"), "500");
+    assert_eq!(eval::value_as_string(&app, "(500 * 0 - 500 + )"), "-500");
     // 通常の括弧算術は従来どおり評価される (回帰防止)。
-    assert_eq!(
-        eval::try_numeric(&app, "(2 + 3)").map(format_num),
-        Some("5".to_string())
-    );
+    assert_eq!(eval::value_as_string(&app, "(2 + 3)"), "5");
 }
 
 #[test]
@@ -6370,24 +6361,13 @@ Goto loop
 }
 
 #[test]
-fn parse_i32_at_accepts_arithmetic_expression() {
-    let app = App::new();
-    // 平文の整数はそのまま解釈する。
-    assert_eq!(parse_i32_at(&app, "5", 1).unwrap(), 5);
-    assert_eq!(parse_i32_at(&app, "-3", 1).unwrap(), -3);
-    // `(味方レベル平均値 - 1)` 等が展開後に括弧付き算術として残るケース。
-    assert_eq!(parse_i32_at(&app, "(4 - 1)", 1).unwrap(), 3);
-    assert_eq!(parse_i32_at(&app, "(2 + 3 * 4)", 1).unwrap(), 14);
-    // 真に不正な値は従来どおりエラー。
-    assert!(parse_i32_at(&app, "abc", 1).is_err());
-}
-
-#[test]
-fn parse_i64_at_accepts_arithmetic_expression() {
-    let app = App::new();
-    assert_eq!(parse_i64_at(&app, "100", 1).unwrap(), 100);
-    assert_eq!(parse_i64_at(&app, "(10 - 4)", 1).unwrap(), 6);
-    assert!(parse_i64_at(&app, "xyz", 1).is_err());
+fn parse_int_reads_evaluated_numbers_only() {
+    // データ定義形式の数値欄は評価済みの値を数値として読むだけ (再評価しない)。
+    assert_eq!(parse_i32_at("5", 1).unwrap(), 5);
+    assert_eq!(parse_i32_at("-3", 1).unwrap(), -3);
+    assert_eq!(parse_i64_at("2.5", 1).unwrap(), 2);
+    assert!(parse_i32_at("abc", 1).is_err());
+    assert!(parse_i64_at("(10 - 4)", 1).is_err());
 }
 
 /// B6: 数値引数・括弧算術・数学関数の引数でもシステム変数を解決する。旧実装の
@@ -6403,11 +6383,8 @@ Money 500
     let stmts = event::parse(src).unwrap();
     let mut app = App::new();
     execute(&mut app, &stmts).unwrap();
-    assert_eq!(parse_i32_at(&app, "(味方数 + 1)", 1).unwrap(), 2);
-    assert_eq!(
-        eval::try_numeric(&app, "(資金 + 100)").map(format_num),
-        Some("600".to_string())
-    );
+    assert_eq!(eval::value_as_long(&app, "(味方数 + 1)"), 2);
+    assert_eq!(eval::value_as_string(&app, "(資金 + 100)"), "600");
     let stmts = event::parse("Set m Max(資金 - 100, 0)\nSet p (味方数 * 10)\n").unwrap();
     execute(&mut app, &stmts).unwrap();
     assert_eq!(app.script_var("m"), "400");
@@ -6496,6 +6473,45 @@ Return
     // クォート文字列はリテラル (中の関数呼び出しの形は評価しない)。
     assert_eq!(app.script_var("got2"), "Len(x)");
     assert_eq!(app.script_var("got3"), "3");
+}
+
+/// 数値引数は原典 `GetArgAsLong` / `GetArgAsDouble` どおり評価済みの値から読み、
+/// もう一度評価しない。`[unit] value` 形式は引数 1 個なら選択中のユニットが対象。
+#[test]
+fn numeric_args_follow_get_arg_as_long() {
+    let mut app = App::new();
+    setup_two_units(&mut app);
+    let braver = app.database().unit_instances[0].uid.clone();
+    app.set_selected_unit_for_event(braver.clone());
+    let src = "\
+Set a b
+Set b 99
+Hotpoint h a 0 1 1
+Set k 0
+Incr k \"5\"
+SetStatus ブレイバー 攻撃不能 3
+SetStatus 移動不能 -1
+IncreaseMorale 10
+Set 待ち時間 5
+Wait 待ち時間
+";
+    execute(&mut app, &event::parse(src).unwrap()).unwrap();
+    // `Wait 変数` は変数の値 (0.1 秒単位) だけ待つ (旧実装は原文を数値化して 0 秒)。
+    assert_eq!(app.pending_timer(), Some(0.5));
+    // 座標 `a` の値 `b` は数値ではないので 0 (旧実装は `b` を再評価して 99)。
+    assert_eq!(app.hotpoints()[0].x, 0);
+    // 引用符付きの文字列は 0。
+    assert_eq!(app.script_var("k"), "0");
+    let u = &app.database().unit_instances[0];
+    let lifetime = |name: &str| {
+        u.conditions
+            .iter()
+            .find(|c| c.name == name)
+            .map(|c| c.lifetime)
+    };
+    assert_eq!(lifetime("攻撃不能"), Some(3));
+    assert_eq!(lifetime("移動不能"), Some(-1));
+    assert_eq!(u.morale, 110);
 }
 
 /// `Print F msg;` は改行せず、次の Print が同じ行に続く (原典 ExecPrintCmd)。

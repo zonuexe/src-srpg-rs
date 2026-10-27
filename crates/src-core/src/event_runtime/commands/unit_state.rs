@@ -53,7 +53,8 @@ fn exec_bossrank(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         1 => (app.selected_unit_for_event().to_string(), xargs[0].clone()),
         _ => (xargs[0].clone(), xargs[1].clone()),
     };
-    let rank: i32 = rank_str.to_string().parse().unwrap_or(0).clamp(0, 5);
+    // 原典は `CInt(GetArgAsString(i))`。
+    let rank = eval::str_to_lng(&rank_str).clamp(0, 5) as i32;
     app.set_script_var(format!("__rank_{target}"), rank.to_string());
     if let Some(u) = app
         .database_mut()
@@ -70,19 +71,32 @@ fn exec_setstatus(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     let Cmd {
         xargs, line, pc, ..
     } = *c;
-    // `SetStatus unit "状態"`
+    // 原典 `ExecSetStatusCmd`: `SetStatus [unit] 状態 ターン数` (ターン数は `GetArgAsLong`、
+    // -1 は永続)。引数 2 個なら対象は選択中のユニット。本移植の拡張: 引数 2 個で 2 個目が
+    // 数値でなければ `unit 状態` (永続) とみなす。
     if xargs.len() < 2 {
         return Err(err(line, "SetStatus 命令は 2 引数必要 (unit status)。"));
     }
-    let target = xargs[0].clone();
-    let status = xargs[1].clone();
+    let (target, status, lifetime) = if xargs.len() >= 3 {
+        (
+            xargs[0].clone(),
+            xargs[1].clone(),
+            c.long(app, 2).unwrap_or(0),
+        )
+    } else if eval::is_numeric(&xargs[1]) {
+        let target = app.selected_unit_for_event().to_string();
+        (target, xargs[0].clone(), c.long(app, 1).unwrap_or(0))
+    } else {
+        (xargs[0].clone(), xargs[1].clone(), -1)
+    };
+    let lifetime = lifetime.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
     if let Some(u) = app
         .database_mut()
         .unit_instances
         .iter_mut()
         .find(|u| matches_unit_handle(u, &target))
     {
-        u.add_condition(Condition::new(status, -1));
+        u.add_condition(Condition::new(status, lifetime));
     }
     Ok(pc + 1)
 }
@@ -182,7 +196,8 @@ fn exec_setskill(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     }
     let pilot_key = xargs[0].clone();
     let skill_name = xargs[1].clone();
-    let level: i32 = xargs[2].parse().unwrap_or(0);
+    // レベルは原典どおり `GetArgAsDouble`。
+    let level = c.double(app, 2).unwrap_or(0.0) as i32;
     // PilotInstance を探す。無ければパイロット名で作成。
     let idx = app
         .database()
@@ -297,7 +312,8 @@ fn exec_setbullet(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     }
     let unit_name = xargs[0].clone();
     let weapon_name = xargs[1].clone();
-    let n: i32 = xargs[2].parse().unwrap_or(0);
+    // 残弾数は原典どおり `GetArgAsLong`。
+    let n = c.long(app, 2).unwrap_or(0) as i32;
     // unit_data_name か pilot_name で unit_data を引く
     let data_name = app
         .database()
@@ -481,9 +497,10 @@ fn exec_release(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
 
 fn exec_rankup(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     let Cmd { xargs, pc, .. } = *c;
-    // `RankUp pilot [n=1]` — pilot の rank を script_var に記録
-    if let Some(target) = xargs.first() {
-        let n: i32 = xargs.get(1).and_then(|s| s.parse().ok()).unwrap_or(1);
+    // `RankUp [unit] n` — unit の rank を script_var に記録
+    if !xargs.is_empty() {
+        let (target, n) = target_and_amount(app, c, 1);
+        let n = n as i32;
         let key = format!("__rank_{target}");
         let cur: i32 = app.script_var(&key).parse().unwrap_or(0);
         app.set_script_var(key, (cur + n).to_string());
@@ -641,14 +658,15 @@ fn exec_setstock(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         return Ok(pc + 1);
     }
     // 引数は `unit ability stock` または `ability stock` の 2 形式。
-    let (unit_key, ability_key, stock_raw) = if xargs.len() >= 3 {
-        (xargs[0].clone(), xargs[1].clone(), xargs[2].clone())
+    let (unit_key, ability_key, stock_idx) = if xargs.len() >= 3 {
+        (xargs[0].clone(), xargs[1].clone(), 2)
     } else {
         // unit 省略: 選択中ユニット
         let uid = app.selected_unit_for_event().to_string();
-        (uid, xargs[0].clone(), xargs[1].clone())
+        (uid, xargs[0].clone(), 1)
     };
-    let stock: i32 = stock_raw.parse().unwrap_or(0);
+    // 残り回数は原典どおり `GetArgAsLong`。
+    let stock = c.long(app, stock_idx).unwrap_or(0) as i32;
     // アビリティ番号指定 (1-origin 数字) か名前指定かを判断。
     // 番号指定の場合は UnitData.features から名前を解決する。
     let resolved_ability_name: Option<String> = if let Ok(n) = ability_key.parse::<usize>() {
@@ -709,7 +727,7 @@ fn exec_decreasemorale(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         return Err(err(line, "DecreaseMorale には対象名が必要。"));
     }
     let delta = if xargs.len() >= 2 {
-        parse_i32_at(app, &xargs[1], line)?
+        c.long(app, 1).unwrap_or(0) as i32
     } else {
         5
     };
@@ -735,7 +753,7 @@ fn exec_damage(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         return Err(err(line, "Damage 命令は 2 引数必要 (name amount)。"));
     }
     let target = &xargs[0];
-    let amount = parse_i64_at(app, &xargs[1], line)?;
+    let amount = parse_i64_at(&xargs[1], line)?;
     apply_damage(app, target, amount);
     Ok(pc + 1)
 }
@@ -749,7 +767,7 @@ fn exec_heal(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         return Err(err(line, "Heal 命令は 2 引数必要 (name amount)。"));
     }
     let target = &xargs[0];
-    let amount = parse_i64_at(app, &xargs[1], line)?;
+    let amount = parse_i64_at(&xargs[1], line)?;
     apply_damage(app, target, -amount);
     Ok(pc + 1)
 }
@@ -769,13 +787,13 @@ fn exec_recoverhp(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
             // RecoverHP rate — 選択ユニットを使用
             let key = app.selected_unit_for_event().to_string();
             if !key.is_empty() {
-                recover_hp(app, &key, Some(&xargs[0]));
+                recover_hp(app, &key, c.double(app, 0));
             }
         }
         2 => {
             // RecoverHP unit rate
             let key = xargs[0].clone();
-            recover_hp(app, &key, Some(&xargs[1]));
+            recover_hp(app, &key, c.double(app, 1));
         }
     }
     Ok(pc + 1)
@@ -792,12 +810,12 @@ fn exec_recoveren(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         1 => {
             let key = app.selected_unit_for_event().to_string();
             if !key.is_empty() {
-                recover_en(app, &key, Some(&xargs[0]));
+                recover_en(app, &key, c.double(app, 0));
             }
         }
         2 => {
             let key = xargs[0].clone();
-            recover_en(app, &key, Some(&xargs[1]));
+            recover_en(app, &key, c.double(app, 1));
         }
     }
     Ok(pc + 1)
@@ -814,17 +832,19 @@ fn exec_recoversp(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     // パイロット名からユニットを逆引き (pilot_name 一致)。
     // C# RecoverSPCmd.cs: ArgNum==2 (rate only) or ArgNum==3 (pilot + rate)。
     // 1引数 = rate (デフォルトユニット)、2引数 = pilot + rate。
-    let (pilot_key, rate_str): (String, &str) = match xargs.len() {
+    // 回復率は原典どおり `GetArgAsDouble`。
+    let (pilot_key, rate_idx) = match xargs.len() {
         0 => {
             return Err(err(line, "RecoverSPコマンドの引数の数が違います"));
         }
         1 => {
             // rate のみ → デフォルトユニットのメインパイロット
             let key = app.selected_unit_for_event().to_string();
-            (key, xargs[0].as_str())
+            (key, 0)
         }
-        _ => (xargs[0].clone(), xargs[1].as_str()),
+        _ => (xargs[0].clone(), 1),
     };
+    let pct = c.double(app, rate_idx).unwrap_or(0.0);
     // パイロット名 or ユニット識別子で UnitInstance を探す
     let idx =
         app.database().unit_instances.iter().position(|u| {
@@ -843,13 +863,8 @@ fn exec_recoversp(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
                 .unwrap_or(0)
         };
         let cur = app.database().unit_instances[idx].sp_consumed;
-        let new_consumed = if rate_str.eq_ignore_ascii_case("full") || rate_str == "全" {
-            0
-        } else {
-            let pct: f64 = rate_str.trim_end_matches('%').parse().unwrap_or(0.0);
-            let recover = ((max_sp as f64) * pct / 100.0) as i32;
-            (cur - recover).max(0)
-        };
+        let recover = ((max_sp as f64) * pct / 100.0) as i32;
+        let new_consumed = (cur - recover).max(0);
         app.database_mut().unit_instances[idx].sp_consumed = new_consumed;
     }
     Ok(pc + 1)
@@ -859,20 +874,17 @@ fn exec_increasemorale(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     let Cmd {
         xargs, line, pc, ..
     } = *c;
-    // IncreaseMorale unit [delta]
+    // IncreaseMorale [unit] delta
     if xargs.is_empty() {
         return Err(err(line, "IncreaseMorale には対象名が必要。"));
     }
-    let delta = if xargs.len() >= 2 {
-        parse_i32_at(app, &xargs[1], line)?
-    } else {
-        5
-    };
+    let (target, delta) = target_and_amount(app, c, 5);
+    let delta = delta as i32;
     if let Some(u) = app
         .database_mut()
         .unit_instances
         .iter_mut()
-        .find(|u| matches_unit_handle(u, &xargs[0]))
+        .find(|u| matches_unit_handle(u, &target))
     {
         // C# IncreaseMoraleCmd.cs: モラルは [50, 150] にクランプ。
         u.morale = (u.morale + delta).clamp(50, 150);
@@ -884,16 +896,17 @@ fn exec_expup(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     let Cmd {
         xargs, line, pc, ..
     } = *c;
-    // ExpUp unit n
-    if xargs.len() < 2 {
+    // ExpUp [pilot] n
+    if xargs.is_empty() {
         return Err(err(line, "ExpUp 命令は 2 引数必要 (name n)。"));
     }
-    let n = parse_i32_at(app, &xargs[1], line)?;
+    let (target, n) = target_and_amount(app, c, 0);
+    let n = n as i32;
     let target_idx = app
         .database()
         .unit_instances
         .iter()
-        .position(|u| matches_unit_handle(u, &xargs[0]));
+        .position(|u| matches_unit_handle(u, &target));
     // `Level()` 関数の規約に合わせ、`level_from_exp` (SRC: 500 exp/level) で算出。
     // レベル繰り上がりは event 発火条件。
     let (old_level, new_level, pilot_ids): (i32, i32, Vec<String>) = if let Some(i) = target_idx {
@@ -1124,12 +1137,8 @@ fn exec_levelup(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     if xargs.is_empty() {
         return Err(err(line, "LevelUp には対象名が必要。"));
     }
-    let n = if xargs.len() >= 2 {
-        parse_i32_at(app, &xargs[1], line)?
-    } else {
-        1
-    };
-    let key = xargs[0].clone();
+    let (key, n) = target_and_amount(app, c, 1);
+    let n = n as i32;
     let found = app
         .database_mut()
         .unit_instances
@@ -1168,4 +1177,19 @@ fn exec_levelup(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         }
     }
     Ok(pc + 1)
+}
+
+/// `Cmd [unit] value` 形式 (`IncreaseMorale` / `LevelUp` / `ExpUp` / `RankUp`) の対象と値。
+/// 原典は引数 2 個なら `unit value`、1 個なら値だけで対象は選択中のユニット。値は
+/// `GetArgAsLong`。本移植の拡張: 引数 1 個が数値でなければ対象名とみなし、値は `default`。
+fn target_and_amount(app: &App, c: &Cmd, default: i64) -> (String, i64) {
+    let xargs = c.xargs;
+    if xargs.len() >= 2 {
+        (xargs[0].clone(), c.long(app, 1).unwrap_or(0))
+    } else if xargs.first().is_some_and(|a| eval::is_numeric(a)) {
+        let target = app.selected_unit_for_event().to_string();
+        (target, c.long(app, 0).unwrap_or(0))
+    } else {
+        (xargs.first().cloned().unwrap_or_default(), default)
+    }
 }

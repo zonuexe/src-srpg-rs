@@ -106,13 +106,9 @@ fn exec_money(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     if xargs.len() != 1 {
         return Err(err(line, "Moneyコマンドの引数の数が間違っています"));
     }
-    if let Some(arg) = xargs.first() {
-        let s = arg.trim();
-        // `+` プレフィックスを除去してから parse（`-` は i64::parse が処理）
-        let s = s.strip_prefix('+').unwrap_or(s);
-        if let Ok(n) = s.parse::<i64>() {
-            app.add_money(n);
-        }
+    // 増減額は原典どおり `GetArgAsLong`。
+    if let Some(n) = c.long(app, 0) {
+        app.add_money(n);
     }
     Ok(pc + 1)
 }
@@ -273,9 +269,10 @@ fn exec_organize(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     if xargs.len() < 3 {
         return Ok(pc + 1);
     }
-    let count: usize = xargs[0].to_string().parse().unwrap_or(9);
-    let cx: i32 = xargs[1].to_string().parse().unwrap_or(5);
-    let cy: i32 = xargs[2].to_string().parse().unwrap_or(5);
+    // 数・座標は原典どおり `GetArgAsLong`。
+    let count = c.long(app, 0).unwrap_or(0).max(0) as usize;
+    let cx = c.long(app, 1).unwrap_or(0) as i32;
+    let cy = c.long(app, 2).unwrap_or(0) as i32;
     // 配置済 (! off_map) の Player ユニットは触らず、off_map なものから
     // 配置する。何も off_map に無い場合は no-op。
     let (mw, mh) = app
@@ -502,17 +499,18 @@ fn exec_changeterrain(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
             "ChangeTerrain 命令は 4 引数必要 (X Y name bitmap)。",
         ));
     }
-    let Ok(x) = xargs[0].trim().parse::<u32>() else {
-        return Ok(pc + 1);
-    };
-    let Ok(y) = xargs[1].trim().parse::<u32>() else {
+    // 座標・ビットマップ番号は原典どおり `GetArgAsLong`。範囲外は no-op。
+    let (Ok(x), Ok(y)) = (
+        u32::try_from(c.long(app, 0).unwrap_or(0)),
+        u32::try_from(c.long(app, 1).unwrap_or(0)),
+    ) else {
         return Ok(pc + 1);
     };
     let mut name = xargs[2].clone();
     if let Some(stripped) = name.strip_suffix("(ローカル)") {
         name = stripped.to_string();
     }
-    let bitmap: u32 = xargs[3].trim().parse().unwrap_or(0);
+    let bitmap = c.long(app, 3).unwrap_or(0).max(0) as u32;
     // name → terrain_id 解決。scenario terrains → built-in の順。
     let terrain_id = app
         .database()

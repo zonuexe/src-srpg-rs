@@ -34,6 +34,35 @@ pub(super) struct Cmd<'a> {
     pub labels: &'a HashMap<String, usize>,
 }
 
+impl Cmd<'_> {
+    /// 第 `i` 引数 (0 始まり) の整数値 (原典 `GetArgAsLong`: 文字列リテラルは 0、数値は偶数丸め、
+    /// 項は評価した値を数値として読む。数値でなければ 0)。引数が無ければ `None`。
+    pub fn long(&self, app: &App, i: usize) -> Option<i64> {
+        let raw = self.raw_args.get(i)?;
+        Some(match self.evaluated(i) {
+            Some(v) => eval::evaluated_arg_as_long(raw, v),
+            None => eval::arg_as_long(app, raw),
+        })
+    }
+
+    /// 第 `i` 引数 (0 始まり) の実数値 (原典 `GetArgAsDouble`)。引数が無ければ `None`。
+    pub fn double(&self, app: &App, i: usize) -> Option<f64> {
+        let raw = self.raw_args.get(i)?;
+        Some(match self.evaluated(i) {
+            Some(v) => eval::evaluated_arg_as_double(raw, v),
+            None => eval::arg_as_double(app, raw),
+        })
+    }
+
+    /// `xargs[i]` が原文を評価した値ならそれを返す (原文のまま渡す位置なら `None`)。
+    fn evaluated(&self, i: usize) -> Option<&str> {
+        if evaluates_raw_args(self.lname) || raw_arg_position(self.lname, i) {
+            return None;
+        }
+        self.xargs.get(i).map(String::as_str)
+    }
+}
+
 /// `c.lname` のコマンドを実行する。該当コマンドが無ければ `None`。
 pub(super) fn dispatch(app: &mut App, c: &Cmd) -> Option<Result<usize, ScriptError>> {
     control::exec(app, c)

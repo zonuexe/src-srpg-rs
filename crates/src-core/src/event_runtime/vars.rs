@@ -59,7 +59,8 @@ pub(super) fn resolve_lhs_name(app: &App, raw: &str) -> String {
 /// の特殊ケース (`ターン数` / `総ターン数` / `資金`) に対応。
 /// 書き込みを処理した場合は `true`、対象外なら `false`。
 pub(super) fn try_system_var_assign(app: &mut App, lhs: &str, value: &str) -> bool {
-    let n_i64 = eval::try_numeric(app, value).map_or(0, |v| v.trunc() as i64);
+    // 代入値は評価済みなので数値として読むだけ (数値でなければ 0)。
+    let n_i64 = eval::str_to_lng(value);
     let n_i64 = || n_i64;
     match lhs {
         "ターン数" => {
@@ -92,8 +93,8 @@ pub(super) fn try_function_lhs_assign(app: &mut App, lhs: &str, value: &str) -> 
     let arg = lhs[open + 1..lhs.len() - 1].trim();
     let lower = func_name.to_ascii_lowercase();
 
-    // 数値変換: 非数値は 0 扱い (SRC.Sharp VB5 `Val()` 相当)。
-    let n: i64 = eval::try_numeric(app, value).map_or(0, |v| v.trunc() as i64);
+    // 代入値は評価済みなので数値として読むだけ (数値でなければ 0)。
+    let n = eval::str_to_lng(value);
 
     match lower.as_str() {
         "hp" => {

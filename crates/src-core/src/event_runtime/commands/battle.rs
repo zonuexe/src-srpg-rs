@@ -34,8 +34,9 @@ fn exec_mapattack(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         return Ok(pc + 1);
     }
     let n = xa.len();
-    let cx: u32 = xa[n - 2].parse().unwrap_or(0);
-    let cy: u32 = xa[n - 1].parse().unwrap_or(0);
+    // 座標は原典どおり `GetArgAsLong`。
+    let cx = c.long(app, n - 2).unwrap_or(0).max(0) as u32;
+    let cy = c.long(app, n - 1).unwrap_or(0).max(0) as u32;
     let weapon_name = xa[n - 3].clone();
     let unit_key = if n >= 4 {
         Some(xa[n - 4].clone())
@@ -53,8 +54,8 @@ fn exec_mapability(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         return Ok(pc + 1);
     }
     let n = xargs.len();
-    let cx: u32 = xargs[n - 2].parse().unwrap_or(0);
-    let cy: u32 = xargs[n - 1].parse().unwrap_or(0);
+    let cx = c.long(app, n - 2).unwrap_or(0).max(0) as u32;
+    let cy = c.long(app, n - 1).unwrap_or(0).max(0) as u32;
     let weapon_name = xargs[n - 3].clone();
     let unit_key = if n >= 4 {
         Some(xargs[n - 4].clone())
@@ -84,8 +85,8 @@ fn exec_explode(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         _ => 24.0,
     };
     let (cx, cy) = if xargs.len() >= 3 {
-        let x: f64 = xargs[1].parse().unwrap_or(0.0);
-        let y: f64 = xargs[2].parse().unwrap_or(0.0);
+        let x = c.long(app, 1).unwrap_or(0) as f64;
+        let y = c.long(app, 2).unwrap_or(0) as f64;
         // タイル座標から pixel に変換 (1 タイル = 32px)
         (x * 32.0 + 16.0, y * 32.0 + 16.0)
     } else {
@@ -195,10 +196,10 @@ fn exec_useability(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     app.set_script_var("直前使用アビリティ".to_string(), ability.clone());
     match ability.as_str() {
         "修理装置" | "修理" => {
-            recover_hp(app, &target_key, Some("全"));
+            recover_hp(app, &target_key, None);
         }
         "補給装置" | "補給" => {
-            recover_en(app, &target_key, Some("全"));
+            recover_en(app, &target_key, None);
         }
         "状態異常回復" | "状態回復" => {
             if let Some(u) = app
@@ -383,8 +384,8 @@ fn exec_useability(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
             if let Some((parent_uid, party, px, py)) = parent_pos {
                 let (sx, sy) = if xargs.len() >= 5 {
                     (
-                        parse_u32(app, xargs, 3, line).unwrap_or(px),
-                        parse_u32(app, xargs, 4, line).unwrap_or(py),
+                        parse_u32(xargs, 3, line).unwrap_or(px),
+                        parse_u32(xargs, 4, line).unwrap_or(py),
                     )
                 } else {
                     (px, py)

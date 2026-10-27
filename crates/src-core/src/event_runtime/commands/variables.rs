@@ -127,13 +127,9 @@ fn exec_incr(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     // LHS は Set と同様に原文の args[0] から resolve_lhs_name で実キーに解決する
     // (評価済みの xargs[0] は配列要素の値になってしまい、別キーを破壊する)。
     let var = resolve_lhs_name(app, &args[0]);
-    // delta は f64 で計算 (SRC.Sharp は GetArgAsDouble を使用)
-    let delta: f64 = if xargs.len() >= 2 {
-        let s = xargs[1].trim();
-        s.parse::<f64>()
-            .ok()
-            .or_else(|| eval::try_numeric(app, s))
-            .unwrap_or(0.0)
+    // 増分は原典どおり `GetArgAsDouble` (引用符付きの文字列は 0)。
+    let delta = if xargs.len() >= 2 {
+        c.double(app, 1).unwrap_or(0.0)
     } else {
         1.0
     };

@@ -199,7 +199,7 @@ fn exec_wait(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         if xargs.len() != 2 {
             return Err(err(line, "Waitコマンドの引数の数が違います"));
         }
-        let t: f64 = xargs.get(1).and_then(|s| s.parse().ok()).unwrap_or(0.0);
+        let t = c.double(app, 1).unwrap_or(0.0);
         let delta = app.advance_wait_clock(0.1 * t);
         if delta > 0.0 {
             app.set_pending_timer(delta.min(5.0));
@@ -234,8 +234,8 @@ fn exec_wait(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     } else if !kind.is_empty() {
         // 書式1: 数値秒数。SRC 仕様では実待機は 0.1×time 秒
         // (`Wait 10` = 1 秒)。巨大値での擬似フリーズ防止に 5 秒で
-        // クランプする。
-        let t: f64 = kind.parse().unwrap_or(0.0);
+        // クランプする。秒数は原典どおり `GetArgAsDouble` (変数・式も評価する)。
+        let t = c.double(app, 0).unwrap_or(0.0);
         let secs = 0.1 * t;
         if secs > 0.0 {
             app.set_pending_timer(secs.min(5.0));

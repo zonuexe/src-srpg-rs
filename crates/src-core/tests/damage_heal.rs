@@ -82,15 +82,23 @@ fn heal_cannot_go_below_zero() {
 // ============================================================
 
 #[test]
-fn recover_hp_full_keyword() {
+fn recover_hp_rate_is_evaluated_as_double() {
+    // 回復率は原典 `GetArgAsDouble`: 変数・式を評価し、数値でない語 (`Full`) は 0%。
+    let app = run_setup(
+        r#"
+Damage リオ 500
+Set 率 100
+RecoverHP リオ 率
+"#,
+    );
+    assert_eq!(unit_damage(&app, "ブレイバー"), 0);
     let app = run_setup(
         r#"
 Damage リオ 500
 RecoverHP リオ Full
 "#,
     );
-    // "Full" / "全" spec は 100% 回復
-    assert_eq!(unit_damage(&app, "ブレイバー"), 0);
+    assert_eq!(unit_damage(&app, "ブレイバー"), 500);
 }
 
 #[test]
@@ -262,11 +270,11 @@ fn recoversp_plain_number_is_percentage_not_raw() {
 }
 
 #[test]
-fn recoversp_percent_suffix_is_also_percentage() {
-    // "50%" と "50" は同じ計算になる。
+fn recoversp_rate_is_evaluated_as_double() {
+    // 回復率は原典 `GetArgAsDouble`。式 `(25 * 2)` も評価する。
     let mut app = make_app_with_sp(200, "");
     app.database_mut().unit_instances[0].sp_consumed = 100;
-    let stmts = src_core::data::event::parse("RecoverSP リオ 50%\n").unwrap();
+    let stmts = src_core::data::event::parse("RecoverSP リオ (25 * 2)\n").unwrap();
     src_core::event_runtime::execute(&mut app, &stmts).unwrap();
     assert_eq!(sp_consumed(&app), 0);
 }

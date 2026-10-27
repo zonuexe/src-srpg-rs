@@ -556,8 +556,9 @@ fn exec_launch(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         return Ok(pc + 1);
     }
     let target = &xargs[0];
-    let nx: u32 = xargs[1].parse().unwrap_or(0);
-    let ny: u32 = xargs[2].parse().unwrap_or(0);
+    // 座標は原典どおり `GetArgAsLong`。
+    let nx = c.long(app, 1).unwrap_or(0).max(0) as u32;
+    let ny = c.long(app, 2).unwrap_or(0).max(0) as u32;
     let uid = app
         .database()
         .unit_instances
@@ -624,7 +625,8 @@ fn exec_setrelation(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     }
     let a = xargs[0].clone();
     let b = xargs[1].clone();
-    let value = xargs[2].to_string();
+    // 値は原典どおり `GetArgAsLong`。
+    let value = c.long(app, 2).unwrap_or(0).to_string();
     app.set_script_var(format!("__rel_{a}_{b}"), value.clone());
     app.set_script_var(format!("__rel_{b}_{a}"), value);
     Ok(pc + 1)
@@ -793,15 +795,13 @@ fn exec_center(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     if xargs.is_empty() {
         return Ok(pc + 1);
     }
-    // 数値 2 引数なら座標指定。1 引数 (または最初が数値でなければ) は unit 指定。
-    if xargs.len() >= 2 {
-        if let (Ok(x), Ok(y)) = (
-            xargs[0].trim().parse::<u32>(),
-            xargs[1].trim().parse::<u32>(),
-        ) {
-            app.set_map_cursor(x, y);
-            return Ok(pc + 1);
-        }
+    // 末尾の `非同期` を除いて 2 引数なら座標指定 (原典 `GetArgAsLong`)、1 引数なら unit 指定。
+    let n = xargs.len() - usize::from(xargs.last().is_some_and(|s| s == "非同期"));
+    if n >= 2 {
+        let x = c.long(app, 0).unwrap_or(0).max(0) as u32;
+        let y = c.long(app, 1).unwrap_or(0).max(0) as u32;
+        app.set_map_cursor(x, y);
+        return Ok(pc + 1);
     }
     // unit 指定
     let key = xargs[0].to_string();
@@ -893,8 +893,8 @@ fn exec_movunit(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         return Err(err(line, "MoveUnit 命令は 3 引数必要 (name x y)。"));
     }
     let target = &xargs[0];
-    let nx = parse_u32(app, xargs, 1, line)?;
-    let ny = parse_u32(app, xargs, 2, line)?;
+    let nx = parse_u32(xargs, 1, line)?;
+    let ny = parse_u32(xargs, 2, line)?;
     let uid = app
         .database()
         .unit_instances
@@ -919,20 +919,19 @@ fn exec_move(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     // 移動力制限・EN 消費は無視 (原典準拠)、母艦格納時は自動発進 (off_map=false)。
     // SRC `Move` 命令経由のスクリプト移動は `進入イベント` を **発火させない**
     // (原典: "Moveコマンド等でユニットを移動させた場合、進入イベントは発生しません")。
-    let (target_key, nx, ny) = match xargs.len() {
-        0 | 1 => return Err(err(line, "Move 命令は最低 2 引数必要 (x y)。")),
-        2 => {
-            let nx = parse_u32(app, xargs, 0, line)?;
-            let ny = parse_u32(app, xargs, 1, line)?;
-            (app.selected_unit_for_event().to_string(), nx, ny)
-        }
-        _ => {
-            let target = xargs[0].clone();
-            let nx = parse_u32(app, xargs, 1, line)?;
-            let ny = parse_u32(app, xargs, 2, line)?;
-            (target, nx, ny)
-        }
+    // 原典 `ExecMoveCmd`: 第 1 引数が数値でなければユニット指定。座標は `GetArgAsLong`。
+    if xargs.len() < 2 {
+        return Err(err(line, "Move 命令は最低 2 引数必要 (x y)。"));
+    }
+    let (target_key, idx) = if eval::is_numeric(&xargs[0]) {
+        (app.selected_unit_for_event().to_string(), 0)
+    } else {
+        (xargs[0].clone(), 1)
     };
+    let (Some(nx), Some(ny)) = (c.long(app, idx), c.long(app, idx + 1)) else {
+        return Err(err(line, "Move 命令は最低 2 引数必要 (x y)。"));
+    };
+    let (nx, ny) = (nx.max(0) as u32, ny.max(0) as u32);
     let uid = app
         .database()
         .unit_instances
@@ -998,7 +997,8 @@ fn exec_create(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     // (差分オラクル placeunit で C# 実測: rank2 → MaxHP+400・装甲+200)。
     // 本実装の改造段階は `UnitInstance.upgrade_level`・`effective_*` がこの加算を
     // 持つので、rank をそこへ配線する (旧実装は rank を捨てて常に素のステータスだった)。
-    let rank: i32 = xargs[2].to_string().parse().unwrap_or(0);
+    // 原典 `ExecCreateCmd` はランク・レベル・座標を `CInt(GetArgAsString(i))` で読む。
+    let rank = eval::str_to_lng(&xargs[2]) as i32;
     let pilot = xargs[3].to_string();
     // level = xargs[4] = 主パイロットの初期レベル。SRC `PList.Add(pname, plevel, …)` は
     // `Pilot.Level=plevel` でレベルを設定する。本実装はレベルを累積経験値から導くため
@@ -1006,12 +1006,10 @@ fn exec_create(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     // (旧実装は level を捨てて常にレベル 1 だった = 増援が指定レベルにならなかった)。
     // 注: レベルに応じた能力値成長 (`grown_pilot`) は class ベースの簡易式で、SRC の
     // 成長タイプ準拠成長とは乖離する (穴埋めロードマップ・docs/SRC_SHARP_DIVERGENCE.md)。
-    let level: i32 = xargs[4].to_string().parse().unwrap_or(1);
-    // 座標は app-aware 式評価で解決する。SRC は座標を式として評価するため、
-    // `For i = ... / Create 中立 壁 0 P 1 4 i / Next` のような**裸のループ変数**や
-    // 算術式が座標に来る (`eval_coord_u32`)。
-    let x = eval_coord_u32(app, xargs, 5);
-    let y = eval_coord_u32(app, xargs, 6);
+    // 原典はレベルを 1 以上に揃える。
+    let level = eval::str_to_lng(&xargs[4]).max(1) as i32;
+    let x = eval_coord_u32(xargs, 5);
+    let y = eval_coord_u32(xargs, 6);
     let mut inst = UnitInstance::new(unit_data_name, pilot.clone(), party, x, y);
     inst.upgrade_level = rank.max(0);
     inst.total_exp = crate::pilot_instance::exp_for_level(level);

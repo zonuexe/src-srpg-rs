@@ -1,16 +1,8 @@
-//! 式評価の補助: `If` の項分割に使う比較演算子判定と、統一評価器 (`eval`) を使う数値ヘルパ。
-
-use super::*;
+//! 式評価の補助: `If` の項分割に使う比較演算子判定と、算術演算子の文字判定。
 
 pub(super) fn is_comparison_op(s: &str) -> bool {
     matches!(s, "=" | "==" | "<>" | "!=" | "<" | "<=" | ">" | ">=")
         || s.eq_ignore_ascii_case("like")
-}
-
-/// 式を整数として評価する (原典 `GetValueAsLong`、統一評価器)。i32 範囲へ飽和させる。
-/// 座標・サイズ等の数値引数 (`(j * 40 - 35)` / `("3" * 70 + 15)` / ループ変数 `i`) に使う。
-pub(super) fn eval_int_expr_app(app: &App, s: &str) -> i32 {
-    eval::value_as_long(app, s.trim()).clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
 
 /// 式中の算術演算子 (`+ - * / \\ ^`) と括弧の 1 文字集合。算術式のアトム分割

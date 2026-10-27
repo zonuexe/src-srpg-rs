@@ -191,25 +191,12 @@ fn exec_for(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         return Err(err(line, "For 構文: For var = start To end [Step n]"));
     }
     let var = xargs[0].clone();
-    // SRC は `For i = 1 To Info(...)` で Info() が "" を返すと
-    // ループを実行せずに次へ進む。空文字 / 非数値は 0 と解釈してその
-    // 旨を反映する (start > end → 即ループスキップ)。
-    // 終端等の式は `eval_int_expr_app` で評価する。`Set` は算術を
-    // 評価せず literal を保持するため、`For i = 1 To 敵配置数` の
-    // `敵配置数` が `(6 + (ダンジョン進行度 / 5))` のように裸変数入りの
-    // 式文字列であることがある。app-aware 評価で変数も解決する。
-    let parse_lenient = |app: &App, s: &str| -> i64 {
-        let t = s.trim();
-        if t.is_empty() {
-            return 0;
-        }
-        t.parse::<i64>()
-            .unwrap_or_else(|_| i64::from(eval_int_expr_app(app, t)))
-    };
-    let start = parse_lenient(app, &xargs[2]);
-    let end = parse_lenient(app, &xargs[4]);
+    // 開始値・終端・増分は原典どおり `GetArgAsLong` (空文字・非数値は 0 なので、
+    // `For i = 1 To Info(...)` で Info() が "" ならループに入らない)。
+    let start = c.long(app, 2).unwrap_or(0);
+    let end = c.long(app, 4).unwrap_or(0);
     let step = if xargs.len() >= 7 && xargs[5].eq_ignore_ascii_case("step") {
-        parse_lenient(app, &xargs[6])
+        c.long(app, 6).unwrap_or(0)
     } else {
         1
     };

@@ -2,12 +2,8 @@
 
 use super::*;
 
-/// `RecoverHP unit [spec]` の本処理。
-/// `spec` 解釈:
-/// - `"Full"` / `"全"` / `None` → 完全回復 (damage = 0)
-/// - `"50%"` 等 → 最大 HP × % を回復
-/// - `"500"` 等 → 直接 500 ダメージ減
-pub(super) fn recover_hp(app: &mut App, key: &str, spec: Option<&str>) {
+/// `RecoverHP unit rate` の本処理。最大 HP の `rate`% を回復する (`None` は完全回復)。
+pub(super) fn recover_hp(app: &mut App, key: &str, rate: Option<f64>) {
     let idx = match app
         .database()
         .unit_instances
@@ -21,14 +17,10 @@ pub(super) fn recover_hp(app: &mut App, key: &str, spec: Option<&str>) {
         .database()
         .effective_max_hp(&app.database().unit_instances[idx]);
     let cur_dmg = app.database().unit_instances[idx].damage;
-    // `rate` は常にパーセント (SRC 準拠: "HP を rate% 回復")。
-    // `%` サフィックスは後方互換として受け入れるが、付いていない数値も百分率扱い。
     // RecoverHP によって HP が 0 以下になることはない (最低値 = 1 → damage = max_hp - 1)。
-    let new_dmg = match spec {
-        None | Some("") => 0,
-        Some(s) if s.eq_ignore_ascii_case("full") || s == "全" => 0,
-        Some(s) => {
-            let pct: f64 = s.trim_end_matches('%').parse().unwrap_or(0.0);
+    let new_dmg = match rate {
+        None => 0,
+        Some(pct) => {
             let recover = ((max_hp as f64) * pct / 100.0).round() as i64;
             // 回復後ダメージ: 下限 0 (HP = max_hp)、上限 max_hp - 1 (HP = 1)
             (cur_dmg - recover).max(0).min(max_hp - 1)
@@ -37,8 +29,8 @@ pub(super) fn recover_hp(app: &mut App, key: &str, spec: Option<&str>) {
     app.database_mut().unit_instances[idx].damage = new_dmg;
 }
 
-/// `RecoverEN unit [spec]` の本処理。
-pub(super) fn recover_en(app: &mut App, key: &str, spec: Option<&str>) {
+/// `RecoverEN unit rate` の本処理。最大 EN の `rate`% を回復する (`None` は完全回復)。
+pub(super) fn recover_en(app: &mut App, key: &str, rate: Option<f64>) {
     let idx = match app
         .database()
         .unit_instances
@@ -52,12 +44,10 @@ pub(super) fn recover_en(app: &mut App, key: &str, spec: Option<&str>) {
         .database()
         .effective_max_en(&app.database().unit_instances[idx]);
     let cur_consumed = app.database().unit_instances[idx].en_consumed;
-    // `rate` は常にパーセント (RecoverHP と同じ仕様)。EN の下限は 0。
-    let new_consumed = match spec {
-        None | Some("") => 0,
-        Some(s) if s.eq_ignore_ascii_case("full") || s == "全" => 0,
-        Some(s) => {
-            let pct: f64 = s.trim_end_matches('%').parse().unwrap_or(0.0);
+    // EN の下限は 0。
+    let new_consumed = match rate {
+        None => 0,
+        Some(pct) => {
             let recover = ((max_en as f64) * pct / 100.0).round() as i32;
             (cur_consumed - recover).max(0)
         }

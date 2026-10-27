@@ -85,14 +85,15 @@ pub(super) fn value_as_double(app: &App, expr: &str) -> f64 {
     eval_expr(app, expr, Ty::Num).n
 }
 
-/// 式を整数として評価する (原典 `GetValueAsLong`。ゼロ方向へ切り捨て)。
+/// 式を整数として評価する (原典 `GetValueAsLong`)。原典は Double を Long へ代入するので
+/// VB の型変換どおり偶数丸めになる (`3.5` → 4、`2.5` → 2)。C# 移植は切り捨てで、原典と異なる。
 pub(super) fn value_as_long(app: &App, expr: &str) -> i64 {
-    to_long(value_as_double(app, expr))
+    vb_clng(value_as_double(app, expr))
 }
 
 /// 1 項を整数として評価する (原典 `GetValueAsLong(expr, is_term: true)`)。
 pub(super) fn term_as_long(app: &App, term: &str) -> i64 {
-    to_long(eval_term(app, term, Ty::Num).n)
+    vb_clng(eval_term(app, term, Ty::Num).n)
 }
 
 /// `Set var value` / `var = 式` の代入値 (原典 `ExecSetCmd`)。1 項なら項として、
@@ -118,19 +119,6 @@ pub(super) fn assignment_value(app: &App, terms: &[String]) -> String {
     } else {
         v.s
     }
-}
-
-/// 式を数値として評価できれば値を返す。結果が数値型、または数値として読める文字列
-/// (前後の空白は可・途中の空白は不可) なら `Some`、それ以外の文字列なら `None`。
-/// 「数値なら数値・そうでなければ文字列」で扱いを分ける呼び出し側 (数値引数の解釈・
-/// 配列添字の正規化・`LSet` 等) が使う。
-pub(super) fn try_numeric(app: &App, expr: &str) -> Option<f64> {
-    let v = eval_expr(app, expr, Ty::Undefined);
-    if v.ty == Ty::Num {
-        return Some(v.n);
-    }
-    let t = v.s.trim();
-    (!t.is_empty() && !t.contains(char::is_whitespace) && is_numeric(t)).then(|| str_to_dbl(t))
 }
 
 /// コマンド引数の型 (原典 `CmdData` の構文解析時の `ArgsType`)。先頭の 1 文字で決まる。
@@ -202,6 +190,42 @@ pub(super) fn arg_as_long(app: &App, raw: &str) -> i64 {
     }
 }
 
+/// コマンド引数 (原文トークン) の実数値 (原典 `CmdData.GetArgAsDouble`)。文字列リテラルは 0。
+pub(super) fn arg_as_double(app: &App, raw: &str) -> f64 {
+    match arg_kind(raw) {
+        ArgKind::Literal(_) => 0.0,
+        ArgKind::Number(n) => n,
+        ArgKind::Term => eval_term(app, raw, Ty::Num).n,
+    }
+}
+
+/// 評価済みのコマンド引数 `value` (= `arg_as_string(raw)`) から、原文 `raw` の
+/// `GetArgAsDouble` を求める。項の数値は文字列値を数値として読んだものと同じなので
+/// (`EvalTerm` の数値期待)、引数をもう一度評価せずに済む (`Random` 等を 2 度呼ばない)。
+pub(super) fn evaluated_arg_as_double(raw: &str, value: &str) -> f64 {
+    match arg_kind(raw) {
+        ArgKind::Literal(_) => 0.0,
+        ArgKind::Number(n) => n,
+        ArgKind::Term => str_to_dbl(value),
+    }
+}
+
+/// [`evaluated_arg_as_double`] の整数版 (原典 `GetArgAsLong`。偶数丸め)。
+pub(super) fn evaluated_arg_as_long(raw: &str, value: &str) -> i64 {
+    vb_clng(evaluated_arg_as_double(raw, value))
+}
+
+/// 評価済みの文字列を整数として読む (原典 `StrToLng`: 数値として読めれば偶数丸め、
+/// 読めなければ 0)。`GetArgAsString` の値を数値化するコマンド (`PaintString` / `PaintPicture`
+/// の座標、`Create` のランク等の `CInt(buf)`) が使う。
+pub(super) fn str_to_lng(s: &str) -> i64 {
+    if is_numeric(s) {
+        vb_clng(str_to_dbl(s))
+    } else {
+        0
+    }
+}
+
 /// `Print #f, msg` の書き込み文字列 (原典 `ExecPrintCmd`)。`msg` はハンドルより後ろの原文
 /// (末尾の `;` は除去済み)。バッククォートで囲まれていればそのまま (`$(...)` も展開しない)。
 /// それ以外は、全体が `$(式)` ならその値、1 項ならその値を取り、最後に `$(...)` を展開する。
@@ -229,14 +253,6 @@ pub(super) fn param_value(app: &App, param: &str) -> String {
     match list_split(param) {
         Some(terms) if terms.len() == 1 => eval_term(app, param, Ty::Str).s,
         _ => value_as_string(app, param),
-    }
-}
-
-fn to_long(n: f64) -> i64 {
-    if n.is_finite() {
-        n.trunc() as i64
-    } else {
-        0
     }
 }
 

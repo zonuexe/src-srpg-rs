@@ -84,11 +84,11 @@ fn exec_sepia(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
 }
 
 fn exec_whiteout(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
-    let Cmd { xargs, pc, .. } = *c;
+    let Cmd { pc, .. } = *c;
     // SRC `WhiteOut n`: 画面が白へフェードアウト (終状態: 白で覆う)。
     // 引数 n は 0..255 程度の段階値。n が大きいほど不透明 (= より白い)。
     // アニメーションせず終状態のみ描くので白の全画面 Fade を 1 枚積む。
-    let n: f64 = xargs.first().and_then(|s| s.parse().ok()).unwrap_or(255.0);
+    let n = c.long(app, 0).map_or(255.0, |n| n as f64);
     let alpha = (n / 255.0).clamp(0.0, 1.0);
     app.script_overlay_mut()
         .push(crate::script_overlay::DrawCmd::Fade {
@@ -170,7 +170,7 @@ fn exec_hotpointstring(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     // `HotpointString x y text...` — 文字列を描画しつつ、その矩形領域を
     // クリック領域として登録する。x が "-" の場合は水平方向中央寄せ
     // (簡易実装)。クリック名はテキストそのもの。
-    let (x, y, text) = parse_paintstring_args(app, xargs);
+    let (x, y, text) = parse_paintstring_args(xargs);
     if !text.is_empty() {
         app.script_overlay_mut()
             .push(crate::script_overlay::DrawCmd::PaintString {
@@ -204,12 +204,9 @@ fn exec_hotpoint(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         return Ok(pc + 1);
     }
     let name = xargs[0].clone();
-    // 座標 / サイズは `(j * 40 - 35)` のようにループ変数を含む算術式に
-    // なりうるので、裸の識別子を解決する app-aware 評価を使う。
-    let x = xargs.get(1).map(|s| eval_int_expr_app(app, s)).unwrap_or(0);
-    let y = xargs.get(2).map(|s| eval_int_expr_app(app, s)).unwrap_or(0);
-    let w = xargs.get(3).map(|s| eval_int_expr_app(app, s)).unwrap_or(0);
-    let h = xargs.get(4).map(|s| eval_int_expr_app(app, s)).unwrap_or(0);
+    // 座標 / サイズは原典どおり `GetArgAsLong`。
+    let num = |i: usize| c.long(app, i).unwrap_or(0) as i32;
+    let (x, y, w, h) = (num(1), num(2), num(3), num(4));
     let invisible = xargs
         .get(5)
         .map(|s| s == "非表示" || s.eq_ignore_ascii_case("invisible"))
@@ -343,7 +340,7 @@ fn exec_paintstring(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     // `PaintString x y text...` または `PaintString text x y` の二形式に
     // 対応するため、整数が見つかる位置で分岐。
     // 簡略実装: 引数の最初の 2 整数を x,y、残りを連結して text。
-    let (x, y, text) = parse_paintstring_args(app, xargs);
+    let (x, y, text) = parse_paintstring_args(xargs);
     app.script_overlay_mut()
         .push(crate::script_overlay::DrawCmd::PaintString { x, y, text });
     Ok(pc + 1)
@@ -362,8 +359,8 @@ fn exec_paintpicture(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         if s.trim() == "-" {
             None
         } else {
-            // `(j * 40 - 35)` 等のループ変数入り算術式を解決。
-            Some(eval_int_expr_app(app, s))
+            // 原典 `ExecPaintPictureCmd` は `StrToLng(GetArgAsString(i))`。
+            Some(eval::str_to_lng(s) as i32)
         }
     };
     // x/y: "-" は MAP_AREA 中央寄せ。サイズは後で w/h と組み合わせて確定する。
@@ -502,11 +499,8 @@ fn exec_color(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
 }
 
 fn exec_drawwidth(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
-    let Cmd { xargs, pc, .. } = *c;
-    let n: f64 = xargs
-        .first()
-        .map(|s| eval_int_expr_app(app, s) as f64)
-        .unwrap_or(1.0);
+    let Cmd { pc, .. } = *c;
+    let n = c.long(app, 0).map_or(1.0, |n| n as f64);
     app.script_overlay_mut()
         .push(crate::script_overlay::DrawCmd::SetLineWidth(n.max(0.5)));
     Ok(pc + 1)
@@ -805,10 +799,10 @@ fn exec_line(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     if xargs.len() >= 4 {
         // 座標は `(307 + i * 30)` のような変数入り算術式でありうるため
         // app-aware に評価する (生 parse だと式が 0 に潰れて線がずれる)。
-        let x1 = eval_int_expr_app(app, &xargs[0]) as f64;
-        let y1 = eval_int_expr_app(app, &xargs[1]) as f64;
-        let x2 = eval_int_expr_app(app, &xargs[2]) as f64;
-        let y2 = eval_int_expr_app(app, &xargs[3]) as f64;
+        let x1 = c.long(app, 0).unwrap_or(0) as f64;
+        let y1 = c.long(app, 1).unwrap_or(0) as f64;
+        let x2 = c.long(app, 2).unwrap_or(0) as f64;
+        let y2 = c.long(app, 3).unwrap_or(0) as f64;
         let mut color: Option<String> = None;
         let mut box_mode: Option<&'static str> = None;
         for tok in xargs.iter().skip(4) {
@@ -869,8 +863,8 @@ fn exec_pset(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     if xargs.len() >= 2 {
         // `PSet x, y` の SRC 構文は tokenizer 上で trailing `,` が
         // 付くため strip してから parse する。
-        let x = eval_int_expr_app(app, &xargs[0]) as f64;
-        let y = eval_int_expr_app(app, &xargs[1]) as f64;
+        let x = c.long(app, 0).unwrap_or(0) as f64;
+        let y = c.long(app, 1).unwrap_or(0) as f64;
         app.script_overlay_mut()
             .push(crate::script_overlay::DrawCmd::PSet { x, y });
     }
@@ -882,9 +876,9 @@ fn exec_circle(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     // `Circle x y r [color]` — 中心 (x,y)・半径 r の真円 (SRC `Circleコマンド`)。
     // 色省略時は現在の線色。座標は変数入り算術式でありうるため app-aware に評価。
     if xargs.len() >= 3 {
-        let cx = eval_int_expr_app(app, &xargs[0]) as f64;
-        let cy = eval_int_expr_app(app, &xargs[1]) as f64;
-        let r = eval_int_expr_app(app, &xargs[2]) as f64;
+        let cx = c.long(app, 0).unwrap_or(0) as f64;
+        let cy = c.long(app, 1).unwrap_or(0) as f64;
+        let r = c.long(app, 2).unwrap_or(0) as f64;
         if let Some(c) = optional_draw_color(app, &xargs[3..]) {
             app.script_overlay_mut()
                 .push(crate::script_overlay::DrawCmd::SetColor { color: c });
@@ -899,10 +893,10 @@ fn exec_oval(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     let Cmd { xargs, pc, .. } = *c;
     // `Oval x y r ratio [color]` — 中心 (x,y)・横半径 r・縦横比 ratio の楕円。
     if xargs.len() >= 4 {
-        let cx = eval_int_expr_app(app, &xargs[0]) as f64;
-        let cy = eval_int_expr_app(app, &xargs[1]) as f64;
-        let r = eval_int_expr_app(app, &xargs[2]) as f64;
-        let ratio = numeric_arg(&xargs[3]).unwrap_or(1.0);
+        let cx = c.long(app, 0).unwrap_or(0) as f64;
+        let cy = c.long(app, 1).unwrap_or(0) as f64;
+        let r = c.long(app, 2).unwrap_or(0) as f64;
+        let ratio = c.double(app, 3).unwrap_or(1.0);
         if let Some(c) = optional_draw_color(app, &xargs[4..]) {
             app.script_overlay_mut()
                 .push(crate::script_overlay::DrawCmd::SetColor { color: c });
@@ -918,11 +912,11 @@ fn exec_arc(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     // `Arc x y r start end [color]` — 中心 (x,y)・半径 r の円弧。
     // 角度は度数法・右向き=0・反時計回り増加 (SRC `Arcコマンド`)。
     if xargs.len() >= 5 {
-        let cx = eval_int_expr_app(app, &xargs[0]) as f64;
-        let cy = eval_int_expr_app(app, &xargs[1]) as f64;
-        let r = eval_int_expr_app(app, &xargs[2]) as f64;
-        let start_deg = numeric_arg(&xargs[3]).unwrap_or(0.0) % 360.0;
-        let end_deg = numeric_arg(&xargs[4]).unwrap_or(0.0) % 360.0;
+        let cx = c.long(app, 0).unwrap_or(0) as f64;
+        let cy = c.long(app, 1).unwrap_or(0) as f64;
+        let r = c.long(app, 2).unwrap_or(0) as f64;
+        let start_deg = c.double(app, 3).unwrap_or(0.0) % 360.0;
+        let end_deg = c.double(app, 4).unwrap_or(0.0) % 360.0;
         if let Some(c) = optional_draw_color(app, &xargs[5..]) {
             app.script_overlay_mut()
                 .push(crate::script_overlay::DrawCmd::SetColor { color: c });
@@ -943,15 +937,14 @@ fn exec_polygon(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     let Cmd { xargs, pc, .. } = *c;
     // `Polygon x1 y1 x2 y2 …` — 頂点列を結ぶ多角形 (SRC `Polygonコマンド`)。
     // 色オプションは無く、現在の線色のみ。頂点は座標ペアで任意個数。
-    let mut points = Vec::new();
-    for pair in xargs.chunks(2) {
-        if pair.len() < 2 {
-            break; // 余った単独座標は無視 (C# `2*pnum < ArgNum` と同等)
-        }
-        let px = eval_int_expr_app(app, &pair[0]) as f64;
-        let py = eval_int_expr_app(app, &pair[1]) as f64;
-        points.push((px, py));
-    }
+    // 余った単独座標は無視する (原典 `2 * pnum < ArgNum`)。
+    let points: Vec<(f64, f64)> = (0..xargs.len() / 2)
+        .map(|k| {
+            let px = c.long(app, 2 * k).unwrap_or(0) as f64;
+            let py = c.long(app, 2 * k + 1).unwrap_or(0) as f64;
+            (px, py)
+        })
+        .collect();
     if points.len() >= 2 {
         app.script_overlay_mut()
             .push(crate::script_overlay::DrawCmd::Polygon { points });
@@ -976,13 +969,10 @@ fn exec_fillcolor(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
 }
 
 fn exec_fadeout(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
-    let Cmd { xargs, pc, .. } = *c;
+    let Cmd { pc, .. } = *c;
     // `FadeOut n` — 画面が黒へフェードアウト (終状態: 黒で覆う)。
     // n は段階値。終状態のみ描くので黒の全画面 Fade を 1 枚積む。
-    let n = xargs
-        .first()
-        .and_then(|s| s.parse::<u32>().ok())
-        .unwrap_or(0);
+    let n = c.long(app, 0).unwrap_or(0);
     let alpha = (n as f64 / 60.0).clamp(0.0, 1.0);
     app.script_overlay_mut()
         .push(crate::script_overlay::DrawCmd::Fade {
