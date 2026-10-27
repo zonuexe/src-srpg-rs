@@ -388,8 +388,9 @@ fn unit_terrain_name(unit: &UnitInstance, db: &GameDatabase) -> Option<String> {
 }
 
 fn unit_has_item(unit: &UnitInstance, db: &GameDatabase, iname: &str) -> bool {
-    unit.equipped_items
-        .iter()
+    // 装備中のアイテム (原典 `IsEquiped`) の名前か分類が一致するか。
+    unit.equipped_item_names()
+        .into_iter()
         .any(|name| name == iname || db.item_by_name(name).is_some_and(|it| it.class == iname))
 }
 
@@ -445,6 +446,17 @@ fn eval_proximity(unit: &UnitInstance, db: &GameDatabase, sname: &str) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `<アイテム>装備` は装備スロット (Item / Equip コマンドが使う `item_slots`) を見る
+    /// (原典 `IsEquiped`)。旧実装は誰も書き込まない別リストを見ていて常に偽だった。
+    #[test]
+    fn item_equipped_condition_reads_item_slots() {
+        let db = GameDatabase::new();
+        let mut unit = UnitInstance::new("U", "P", crate::Party::Player, 0, 0);
+        assert!(!is_satisfied("ビームサーベル装備", &unit, &db));
+        unit.equip_item(crate::item_slot::SlotType::RightHand, "ビームサーベル");
+        assert!(is_satisfied("ビームサーベル装備", &unit, &db));
+    }
 
     #[test]
     fn parse_leading_int_handles_digits_and_sign() {

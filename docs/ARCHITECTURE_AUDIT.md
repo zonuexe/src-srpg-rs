@@ -139,6 +139,8 @@ CLAUDE.md が挙げている `expression/` モジュールは存在しない。
 5. `data ⇄ necessary_skill`（`data/unit.rs:542` が `split_necessary` を使う）
 6. `db → event_runtime`（`round_half_to_even` を使うためだけ。db.rs:679）
 
+**残る `app ⇄ event_runtime` について（2026-10-27 判断: 解消しない）**: 1 番以外の循環は解消済み。残る循環は、App がインタプリタのホスト（`run_from_pc` / `resume` / `trigger_label` / `fire_*_labels` を呼ぶ）で、インタプリタが App を操作するという設計そのものから来る。断ち切るには、中立層に置いたトレイトオブジェクトを App に注入する依存性逆転が要るが、単一クレート内では改修量に見合う利点が無いため行わない。App が使うインタプリタの API を上記の入口に限るという形で整理を終えた（マップ攻撃は App 側へ移動済み）。
+
 根本原因は **`GameDatabase` が静的データの集約ではないこと**。
 `unit_instances`、`pilot_instances`、`map`、`pos_index` といった実行時の盤面を抱えている。
 さらに盤面を使う問い合わせ（`effective_*`、`combat_bonuses`、`unit_move_range_from`）も持っているので、上位の層を引き込んでいる。

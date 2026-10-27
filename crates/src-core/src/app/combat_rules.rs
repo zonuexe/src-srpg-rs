@@ -548,12 +548,11 @@ impl App {
 
     /// 盗 (`盗`): クリティカル時に相手から資金またはアイテムを奪う (`特殊効果攻撃属性.md`)。
     /// 相手が `アイテム所有=<item>` を持てばそのアイテムを (`レアアイテム所有` があれば 1/8 で
-    /// 代わりにレアアイテムを) 攻撃側へ移す。持たなければ修理費の 1/4 の資金。攻撃側が味方
+    /// 代わりにレアアイテムを) 味方の未装備アイテムに加える (原典 `IList.Add`)。持たなければ修理費の 1/4 の資金。攻撃側が味方
     /// (Player) のときのみ。同じ相手からは 1 度だけ (`被盗` 状態で再取得を抑止)。
     pub(super) fn apply_weapon_crit_steal(
         &mut self,
         def_idx: usize,
-        atk_idx: usize,
         atk_party: crate::Party,
         victim_value: i64,
         weapon: &crate::data::unit::WeaponData,
@@ -583,9 +582,7 @@ impl App {
         };
 
         if let Some(item) = stolen_item {
-            self.database.unit_instances[atk_idx]
-                .equipped_items
-                .push(item.clone());
+            self.database.spare_items.push(item.clone());
             self.database.unit_instances[def_idx].add_condition(crate::Condition::new("被盗", -1));
             return vec![format!("アイテム奪取: {item}")];
         }
@@ -847,6 +844,10 @@ impl App {
         unit_idx: usize,
         wd: &crate::data::unit::WeaponData,
     ) -> bool {
+        // イベントコマンド `Disable` で封印されている。
+        if self.is_disabled(&self.database.unit_instances[unit_idx], &wd.name) {
+            return false;
+        }
         // 必要技能 / 必要条件 (使用資格)。
         if !self.weapon_skill_ok(unit_idx, wd) {
             return false;
@@ -874,6 +875,15 @@ impl App {
             }
         }
         true
+    }
+
+    /// 能力 (武器・アビリティ) `name` が `Disable` で封印されているか (原典 `IsDisabled`)。
+    /// 全ユニット共通の `Disable(<name>)` と、ユニット名 (ユニットデータ名) 指定の
+    /// `Disable(<ユニット名>,<name>)` を見る。
+    pub(crate) fn is_disabled(&self, unit: &crate::UnitInstance, name: &str) -> bool {
+        !name.is_empty()
+            && (self.is_script_var_defined(&format!("Disable({name})"))
+                || self.is_script_var_defined(&format!("Disable({},{name})", unit.unit_data_name)))
     }
 
     /// 射程内かつ発射可能 (残弾/EN/気力) な最高威力武器を選ぶ。`combat::best_weapon_in_range`

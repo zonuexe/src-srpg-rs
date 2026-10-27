@@ -12,9 +12,6 @@ pub struct UnitWeapon {
     pub bullet_remaining: i32,
     /// EN consumed by this weapon this battle (tracked separately from unit's total EN).
     pub en_consumed_this_battle: i32,
-    /// Weapon is disabled by a condition or feature.
-    #[serde(default)]
-    pub is_disabled: bool,
 }
 
 impl UnitWeapon {
@@ -29,7 +26,6 @@ impl UnitWeapon {
             weapon_index,
             bullet_remaining: initial_bullet,
             en_consumed_this_battle: 0,
-            is_disabled: false,
         }
     }
 
@@ -54,7 +50,6 @@ impl UnitWeapon {
     pub fn reset_ammo(&mut self, initial_bullet: i32) {
         self.bullet_remaining = initial_bullet;
         self.en_consumed_this_battle = 0;
-        self.is_disabled = false;
     }
 }
 
@@ -97,6 +92,5 @@ mod tests {
         assert!(weapon.has_ammo());
         assert_eq!(weapon.bullet_remaining, 5);
         assert_eq!(weapon.en_consumed_this_battle, 0);
-        assert!(!weapon.is_disabled);
     }
 }

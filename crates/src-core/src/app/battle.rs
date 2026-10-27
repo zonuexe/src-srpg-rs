@@ -520,7 +520,6 @@ impl App {
                         d.extend(self.apply_weapon_crit_reposition(def_idx, (cx, cy), &weapon));
                         d.extend(self.apply_weapon_crit_steal(
                             def_idx,
-                            atk_idx,
                             atk_party,
                             def_unit.value,
                             &weapon,

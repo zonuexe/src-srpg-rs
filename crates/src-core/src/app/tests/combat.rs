@@ -1157,11 +1157,11 @@ fn weapon_steal_grants_money_once() {
     };
     let money0 = app.money();
     // 修理費 800 → 1/4 = 200。
-    let applied = app.apply_weapon_crit_steal(def_idx, 0, crate::Party::Player, 800, &weapon);
+    let applied = app.apply_weapon_crit_steal(def_idx, crate::Party::Player, 800, &weapon);
     assert_eq!(applied, vec!["資金奪取 +200".to_string()]);
     assert_eq!(app.money(), money0 + 200, "資金 +200");
     // 再取得は不可 (被盗)。
-    let applied2 = app.apply_weapon_crit_steal(def_idx, 0, crate::Party::Player, 800, &weapon);
+    let applied2 = app.apply_weapon_crit_steal(def_idx, crate::Party::Player, 800, &weapon);
     assert!(applied2.is_empty(), "同じ相手から再取得しない");
     assert_eq!(app.money(), money0 + 200, "資金は変わらない");
 }
@@ -1203,17 +1203,15 @@ fn weapon_steal_takes_item_when_target_owns_one() {
         extras: Vec::new(),
     };
     let money0 = app.money();
-    let applied = app.apply_weapon_crit_steal(def_idx, 0, crate::Party::Player, 800, &weapon);
+    let applied = app.apply_weapon_crit_steal(def_idx, crate::Party::Player, 800, &weapon);
     assert_eq!(applied, vec!["アイテム奪取: 賢者の石".to_string()]);
     assert!(
-        app.database().unit_instances[0]
-            .equipped_items
-            .contains(&"賢者の石".to_string()),
-        "攻撃側がアイテムを取得"
+        app.database().spare_items.contains(&"賢者の石".to_string()),
+        "盗んだアイテムは味方の未装備アイテムに入る (原典 IList.Add)"
     );
     assert_eq!(app.money(), money0, "アイテム盗み時は資金を奪わない");
     // 再取得不可 (被盗)。
-    let applied2 = app.apply_weapon_crit_steal(def_idx, 0, crate::Party::Player, 800, &weapon);
+    let applied2 = app.apply_weapon_crit_steal(def_idx, crate::Party::Player, 800, &weapon);
     assert!(applied2.is_empty(), "同じ相手から再取得しない");
 }
 
@@ -1641,6 +1639,27 @@ fn limited_ammo_runs_out_without_preseeded_state() {
         app.try_counterattack(3, 6, (2, 6)).is_none(),
         "弾切れで反撃できない"
     );
+}
+
+/// `Disable <武器名>` / `Disable <ユニット名> <武器名>` で封印した武器は使えない
+/// (原典 `IsWeaponAvailable` の `IsDisabled`)。旧実装は誰も読まないフラグを立てるだけだった。
+#[test]
+fn disabled_weapon_is_not_firable() {
+    let mut app = App::new();
+    enter_mapview_with_demo_map(&mut app);
+    place_player_unit(&mut app, "Hero", 2, 6);
+    add_weapon(&mut app, "Hero", 300, 1);
+    let w = app.database().unit_by_name("Hero").unwrap().weapons[0].clone();
+    let run = |app: &mut App, src: &str| {
+        crate::event_runtime::execute(app, &crate::data::event::parse(src).unwrap()).unwrap();
+    };
+    assert!(app.weapon_firable(0, &w));
+    run(&mut app, &format!("Disable {}\n", w.name));
+    assert!(!app.weapon_firable(0, &w), "全ユニット共通の封印");
+    run(&mut app, &format!("Enable {}\n", w.name));
+    assert!(app.weapon_firable(0, &w));
+    run(&mut app, &format!("Disable Hero {}\n", w.name));
+    assert!(!app.weapon_firable(0, &w), "ユニット名指定の封印");
 }
 
 #[test]

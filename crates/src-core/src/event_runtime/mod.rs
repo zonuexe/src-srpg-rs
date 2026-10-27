@@ -1104,6 +1104,10 @@ fn exec_command_pc(
                     let mut inst =
                         UnitInstance::new(unit_data_name, String::new(), Party::Player, 0, 0);
                     inst.off_map = true;
+                    // ランク (改造段階) は原典どおり `GetArgAsLong`。特殊能力・アビリティの
+                    // 実行時状態は他の生成経路と同じく初期化する。
+                    inst.upgrade_level = c.long(app, 1).unwrap_or(0).max(0) as i32;
+                    populate_active_features(&mut inst, app);
                     let uid = app.database_mut().register_unit(inst);
                     app.set_selected_unit_for_event(uid);
                 }

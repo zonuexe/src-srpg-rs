@@ -371,8 +371,8 @@ fn exec_disable(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     } else {
         app.unset_script_var(&key);
     }
-    // UnitInstance の weapon.is_disabled フラグも同期する。
-    // C# では Unit.Update() で再計算されるが、Rust は直接フラグをセットする。
+    // 武器・アビリティの封印は使用可否の判定 (`App::is_disabled`) がこの変数を見る。
+    // 特殊能力は下で is_active を切り替える (C# では Unit.Update() で再計算)。
     let n = app.database().unit_instances.len();
     for i in 0..n {
         let matches = match &unit_name_opt {
@@ -383,11 +383,6 @@ fn exec_disable(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
             None => true, // グローバル: 全ユニット対象
         };
         if matches {
-            for w in &mut app.database_mut().unit_instances[i].weapons {
-                if w.weapon_data_name == ability_name {
-                    w.is_disabled = is_disable;
-                }
-            }
             // 特殊能力 (active_features) も切替える。`Disable unit ＨＰ回復` のように
             // レベル無し基底名で指定された能力を実体 (`ＨＰ回復Lv1` 等) と突き合わせ、
             // is_active を反転する。回復系等は feature_level が is_active を見るため、

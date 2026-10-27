@@ -101,9 +101,6 @@ pub struct UnitInstance {
     /// 現在の士気 (0..=150 想定)。元 SRC は 100 で開始。
     #[serde(default = "default_morale")]
     pub morale: i32,
-    /// 装備中アイテム名 (`ItemData.name` で参照)。重複は許容しない簡略化。
-    #[serde(default)]
-    pub equipped_items: Vec<String>,
     /// 装備スロット列表。
     #[serde(default)]
     pub item_slots: Vec<ItemSlot>,
@@ -283,7 +280,6 @@ impl UnitInstance {
             upgrade_level: 0,
             en_consumed: 0,
             morale: 100,
-            equipped_items: Vec::new(),
             item_slots: Vec::new(),
             conditions: Vec::new(),
             has_acted: false,
