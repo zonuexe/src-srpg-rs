@@ -1641,6 +1641,27 @@ fn limited_ammo_runs_out_without_preseeded_state() {
     );
 }
 
+/// `Disable <武器名>` / `Disable <ユニット名> <武器名>` で封印した武器は使えない
+/// (原典 `IsWeaponAvailable` の `IsDisabled`)。旧実装は誰も読まないフラグを立てるだけだった。
+#[test]
+fn disabled_weapon_is_not_firable() {
+    let mut app = App::new();
+    enter_mapview_with_demo_map(&mut app);
+    place_player_unit(&mut app, "Hero", 2, 6);
+    add_weapon(&mut app, "Hero", 300, 1);
+    let w = app.database().unit_by_name("Hero").unwrap().weapons[0].clone();
+    let run = |app: &mut App, src: &str| {
+        crate::event_runtime::execute(app, &crate::data::event::parse(src).unwrap()).unwrap();
+    };
+    assert!(app.weapon_firable(0, &w));
+    run(&mut app, &format!("Disable {}\n", w.name));
+    assert!(!app.weapon_firable(0, &w), "全ユニット共通の封印");
+    run(&mut app, &format!("Enable {}\n", w.name));
+    assert!(app.weapon_firable(0, &w));
+    run(&mut app, &format!("Disable Hero {}\n", w.name));
+    assert!(!app.weapon_firable(0, &w), "ユニット名指定の封印");
+}
+
 #[test]
 fn firing_a_weapon_consumes_en_and_ammo() {
     use crate::data::unit::WeaponData;

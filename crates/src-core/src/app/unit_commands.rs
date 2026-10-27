@@ -336,6 +336,10 @@ impl App {
         let Some(ab) = self.ability_at(caster_uid, idx) else {
             return false;
         };
+        // イベントコマンド `Disable` で封印されている。
+        if self.is_disabled(u, &ab.name) {
+            return false;
+        }
         // 回数切れ (stock_remaining=Some(0))。無制限 (None) は常に可。
         if let Some(stock) = u.abilities.get(idx).and_then(|ua| ua.stock_remaining) {
             if stock <= 0 {
