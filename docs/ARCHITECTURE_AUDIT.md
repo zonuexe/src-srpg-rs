@@ -121,7 +121,7 @@ CLAUDE.md が挙げている `expression/` モジュールは存在しない。
 
 | # | 内容 | 根拠 | 状態 |
 |---|---|---|---|
-| B1 | 反撃で攻撃側を撃破すると破壊・全滅イベントが発火しない | app.rs:5227–5250 | 確認済（SRC 仕様との照合は未） |
+| B1 | 反撃で攻撃側を撃破すると破壊・全滅イベントが発火しない | app.rs:5227–5250 | 修正済（回帰テスト `counterattack_kill_fires_destruction_event`）。原典も反撃は `Unit.Attack` を通り、本線攻撃と同じ撃破処理になることを VB6 で確認 |
 | B2 | `.eve` の `Kill` / `Destroy` / `RemoveUnit` / `StopSummoning` が `unit_instances.retain` で直接消すため、`pos_index` が古いまま残る。その結果 `uid_at` が空きマスを占有中と判定する | event_runtime.rs:6236, 3936 ほか。`remove_unit_at` (db.rs:228) を迂回している | コード上は確認済、実害は要テスト |
 | B3 | `RecoverHP` / `RecoverEN` / `Damage` が基本 HP (`unit_by_name(..).hp`) を基準にしている。アイテム、改造、BossRank 込みの `effective_max_hp` (db.rs:630) と食い違う | event_runtime.rs:7112, 7145, 7177, 7199 | 確認済 |
 | B4 | スクリプトから呼んだ SpecialPower では、回復・気力などの効果が出ない。さらに原典仕様に反して SP を消費し、不足時は効果を出さなかった | 1-2 参照 | 修正済（回帰テスト 3 件） |
