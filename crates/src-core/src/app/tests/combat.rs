@@ -1589,6 +1589,60 @@ fn damage_morale_skill_adds_on_top_of_base_hit_gain() {
 }
 
 /// 武器を発射すると EN と残弾を消費する (命中の有無に依らない)。
+/// 実戦で生成したユニット (残弾の実行時状態を持たない) でも、有限弾の武器は撃つたびに
+/// 減り、弾切れで使えなくなる。旧実装は実行時状態を作らず、弾数が減らなかった。
+#[test]
+fn limited_ammo_runs_out_without_preseeded_state() {
+    use crate::data::unit::WeaponData;
+    let mut app = App::new();
+    enter_mapview_with_demo_map(&mut app);
+    place_player_unit(&mut app, "Hero", 2, 6);
+    app.database_mut()
+        .catalog
+        .units
+        .iter_mut()
+        .find(|d| d.name == "Hero")
+        .unwrap()
+        .hp = 1_000_000;
+    let mut gunner = app.database().unit_by_name("Hero").cloned().unwrap();
+    gunner.name = "Gunner".into();
+    gunner.weapons = vec![WeaponData {
+        name: "ミサイル".into(),
+        power: 1,
+        min_range: 1,
+        max_range: 1,
+        precision: 0,
+        bullet: 2,
+        en_consumption: 0,
+        necessary_morale: 0,
+        adaption: "AAAA".into(),
+        critical: 0,
+        class: String::new(),
+        extras: Vec::new(),
+    }];
+    app.database_mut().catalog.units.push(gunner);
+    let shooter = app.database_mut().register_unit(crate::UnitInstance::new(
+        "Gunner",
+        "PILOT",
+        crate::Party::Enemy,
+        3,
+        6,
+    ));
+    for shot in 1..=2 {
+        assert!(
+            app.try_counterattack(3, 6, (2, 6)).is_some(),
+            "{shot} 発目は撃てる"
+        );
+    }
+    let idx = app.database().idx_by_uid(&shooter).unwrap();
+    let w = app.database().unit_by_name("Gunner").unwrap().weapons[0].clone();
+    assert!(!app.weapon_firable(idx, &w), "2 発で弾切れ");
+    assert!(
+        app.try_counterattack(3, 6, (2, 6)).is_none(),
+        "弾切れで反撃できない"
+    );
+}
+
 #[test]
 fn firing_a_weapon_consumes_en_and_ammo() {
     use crate::data::unit::WeaponData;

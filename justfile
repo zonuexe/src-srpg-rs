@@ -7,6 +7,12 @@ default:
 serve:
     trunk serve
 
+# テスト用フィクスチャを開発サーバ (`trunk serve`) の `/fixtures/` に配る静的サーバ
+# (127.0.0.1:8090、Trunk.toml の proxy 経由)。`http://127.0.0.1:8080/?load=fixtures/<名前>.zip`
+# で起動時にそのシナリオを読み込む。フィクスチャは dist/ に複製しない。
+fixtures:
+    python3 -m http.server 8090 --bind 127.0.0.1 --directory crates/src-web/tests/fixtures
+
 # 本番ビルド (dist/ に出力)
 build:
     trunk build --release
