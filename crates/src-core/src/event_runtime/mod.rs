@@ -1668,35 +1668,31 @@ fn exec_command_pc(
             return Ok(pc + 1);
         }
         "transform" => {
-            // `Transform unit "newunit"`
-            if xargs.len() < 2 {
-                return Err(err(line, "Transform 命令は 2 引数必要 (unit new_unit)。"));
-            }
-            let target = xargs[0].clone();
-            let new_unit = xargs[1].clone();
-            let mut fire: Option<(String, String, crate::Party)> = None;
-            if let Some(idx) = app
+            // SRC `Transform [unit] mode` (`Transformコマンド.md`, C# `TransformCmd`)。
+            // 形態の差し替えはプレイヤーの変形 / 換装と同じ `App::set_unit_form` を通し、
+            // 新形態の active_features (必要技能ゲート込み) と abilities を作り直す。
+            // 現形態と同じなら何もしない (C# 準拠)。
+            // 注: C# `TransformCmd` は 変形 イベントを発火しない (発火はプレイヤーの変形
+            // コマンドと AI 側) が、本移植は `Combine` と揃えて発火する (fixture 21 で固定)。
+            let (target, new_form) = match xargs.len() {
+                0 => return Err(err(line, "Transformコマンドの引数の数が違います")),
+                1 => (app.selected_unit_for_event().to_string(), xargs[0].clone()),
+                _ => (xargs[0].clone(), xargs[1].clone()),
+            };
+            let found = app
                 .database()
                 .unit_instances
                 .iter()
-                .position(|u| matches_unit_handle(u, &target))
-            {
-                app.database_mut().unit_instances[idx].unit_data_name = new_unit.clone();
-                // 変形後フォームの UnitData.features で active_features を更新 (§3 必要技能ゲート込み)。
-                let feats = app
-                    .database()
-                    .unit_by_name(&new_unit)
-                    .map(|ud| ud.features.clone())
-                    .unwrap_or_default();
-                let new_features = crate::necessary_skill::gated_active_features(
-                    &feats,
-                    &app.database().unit_instances[idx],
-                    app.database(),
-                );
-                app.database_mut().unit_instances[idx].active_features = new_features;
-                let u = &app.database().unit_instances[idx];
-                fire = Some((u.pilot_name.clone(), u.unit_data_name.clone(), u.party));
-            }
+                .find(|u| matches_unit_handle(u, &target))
+                .map(|u| (u.uid.clone(), u.unit_data_name != new_form));
+            let Some((uid, true)) = found else {
+                return Ok(pc + 1);
+            };
+            app.set_unit_form(&uid, &new_form);
+            let fire = app
+                .database()
+                .unit_by_uid(&uid)
+                .map(|u| (u.pilot_name.clone(), u.unit_data_name.clone(), u.party));
             if let Some((pilot_name, unit_data_name, party)) = fire {
                 fire_unit_event_labels(
                     app,
@@ -1704,7 +1700,7 @@ fn exec_command_pc(
                     &pilot_name,
                     &unit_data_name,
                     party,
-                    Some(&new_unit),
+                    Some(&new_form),
                 );
             }
             return Ok(pc + 1);

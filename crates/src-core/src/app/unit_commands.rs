@@ -251,7 +251,7 @@ impl App {
     /// ユニット `uid` の形態 (`unit_data_name`) を `new_form` に差し替え、新形態の
     /// `active_features` / `abilities` を反映する（イベント発火・メッセージ無し）。
     /// 変形 / 換装 の共通コア。形態が存在し差し替えたら `true`。
-    pub(super) fn set_unit_form(&mut self, uid: &str, new_form: &str) -> bool {
+    pub(crate) fn set_unit_form(&mut self, uid: &str, new_form: &str) -> bool {
         let Some(idx) = self.database.idx_by_uid(uid) else {
             return false;
         };
@@ -286,8 +286,9 @@ impl App {
         true
     }
 
-    /// ユニット `uid` を `new_form` へ変形させる。`変形`/`Transform` イベントを
-    /// 発火する（`.eve Transform` と同じ本体処理）。行動は消費しない。
+    /// ユニット `uid` を `new_form` へ変形させる (プレイヤーの変形コマンド)。
+    /// `変形`/`Transform` イベントを発火する。行動は消費しない。形態の差し替え自体は
+    /// `.eve Transform` と共通の `set_unit_form`。
     pub(super) fn transform_unit_by_uid(&mut self, uid: &str, new_form: &str) {
         if !self.set_unit_form(uid, new_form) {
             return;

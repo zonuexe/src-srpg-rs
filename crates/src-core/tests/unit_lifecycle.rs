@@ -446,6 +446,47 @@ Set after IsAvailable(リオ, 飛行)
     assert_eq!(app.script_var("after"), "1", "変形後は飛行あり");
 }
 
+/// B5: Transform は新形態のアビリティを作り直す (プレイヤーの変形と同じ
+/// `set_unit_form` 経路)。旧実装は active_features だけ更新し、旧形態の
+/// アビリティが残っていた。
+#[test]
+fn transform_rebuilds_abilities() {
+    use src_core::data::unit;
+    use src_core::event_runtime::execute;
+
+    let unit_txt = "\
+天使機
+天使機,てんし,リアル系,1,4
+陸宇,5,M,3000,400
+特殊能力なし
+3500,120,1200,110
+AAAA,Angel.bmp
+バルカン砲,200,1,1,10,99
+===
+修理装置, 回復Lv3, 1, 5, -, -, -
+";
+    let units = unit::parse(unit_txt).expect("unit parse");
+    let mut app = App::new();
+    app.database_mut().extend_units(units);
+
+    let src = "\
+Pilot リオ リオ 男性 超能力者 AAAA 100 100 100 100 100 100 100
+Unit ブレイバー リアル系 1 0 陸 5 M 1000 100 3500 120 1200 110 AAAA
+Place ブレイバー リオ Player 0 0
+Transform リオ 天使機
+";
+    let stmts = src_core::data::event::parse(src).unwrap();
+    execute(&mut app, &stmts).unwrap();
+
+    let u = find_unit_named(&app, "天使機").expect("変形後のユニット");
+    let names: Vec<&str> = u.abilities.iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["修理装置"],
+        "変形後のアビリティが新形態のものでない"
+    );
+}
+
 // ============================================================
 //  RemoveUnit / RemovePilot (追加 edge cases)
 // ============================================================
