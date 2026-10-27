@@ -72,7 +72,7 @@ nix --extra-experimental-features 'nix-command flakes' develop --command just <r
 - 元 VB5 の `.bas` / `.cls` を 1 モジュール（または型）単位で移植
 
 **`src-web`** — WASM フロントエンド（wasm-bindgen + Canvas 2D）
-- Archive（ZIP展開）/ Assets / Audio / Render モジュール
+- Archive（画像・音声の Assets 登録。展開と取り込みは src-core）/ Assets / Audio / Render モジュール
 - Canvas API 呼び出しとイベント処理（キーボード・マウス・ファイル選択）
 - 描画エントリポイント: `src-web/src/render.rs` の `draw_scene()`
 
@@ -103,6 +103,7 @@ nix --extra-experimental-features 'nix-command flakes' develop --command just <r
 | `command_catalog.rs` | `.eve` コマンドの単一カタログ (配線不足の検出・verify-archive のカバレッジ計測) |
 | `flow.rs` / `modal.rs` | スクリプト完了後の継続 (`FlowCont`) / スクリプトを止めるモーダル (対話・タイマー) の型付きビュー |
 | `battle_anim.rs` / `script_overlay.rs` | 戦闘・移動アニメ状態 / スクリプト描画 (`Paint*` 等) の命令列 |
+| `archive.rs` / `scenario.rs` | アーカイブ展開 (`.zip` / `.lzh`) と、シナリオの取り込み・起動 (`load_scenario`: データファイル → DB、`.ini` / `.eve` 登録、エントリ実行、Continue チェイン / ブートストラップ)。src-web・verify-archive・テストが共有する |
 | `entrypoint.rs` | アーカイブ内のシナリオ開始ファイル推定 |
 | `test_harness.rs` | `.eve` E2E テスト用ドライバ (統合テストから使用) |
 
@@ -161,7 +162,7 @@ PilotInstance (runtime)   UnitInstance (runtime)    Tile (x,y,terrain_id)
 ### ファイル I/O
 
 - VFS（Virtual FileSystem）ベース、物理ファイルアクセスは禁止
-- `src-web/archive.rs` が ZIP 展開 → `App.database` / Assets に蓄積
+- `src_core::archive` が展開し、`src_core::scenario::load_scenario` が `App.database` / スクリプトライブラリに取り込む。src-web (`archive.rs`) は画像・音声を Assets に登録するだけ
 - `.eve` 内の `Open / Read / Write` は VFS 操作
 
 ---

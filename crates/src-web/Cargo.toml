@@ -18,14 +18,6 @@ js-sys.workspace = true
 console_error_panic_hook.workspace = true
 log.workspace = true
 wasm-bindgen-futures = "0.4"
-# LZH / LHA (lh0/lh1/lh4/lh5/lh6/lh7) 展開
-delharc = "0.6"
-
-# .zip 展開用。wasm に乗せるため最小機能セットで取り込む。
-[dependencies.zip]
-version = "2"
-default-features = false
-features = ["deflate"]
 
 [dependencies.web-sys]
 workspace = true

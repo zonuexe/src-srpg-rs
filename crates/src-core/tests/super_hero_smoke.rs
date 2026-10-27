@@ -8,7 +8,6 @@
 //! 同等の検証は `tools/verify-archive` の `VERIFY_SMOKE=1` でも手動実行可能。
 //! こちらは CI でも回るよう cargo test に組み込む。
 
-use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 
 use src_core::data::{
@@ -21,22 +20,6 @@ fn fixture_path() -> PathBuf {
         .parent()
         .unwrap()
         .join("src-web/tests/fixtures/スーパーヒーロー伝説.zip")
-}
-
-fn unzip(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
-    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| e.to_string())?;
-    let mut out = Vec::with_capacity(archive.len());
-    for i in 0..archive.len() {
-        let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
-        if entry.is_dir() {
-            continue;
-        }
-        let name = loader::decode_text(entry.name_raw());
-        let mut buf = Vec::with_capacity(entry.size() as usize);
-        entry.read_to_end(&mut buf).map_err(|e| e.to_string())?;
-        out.push((name, buf));
-    }
-    Ok(out)
 }
 
 fn basename(lname: &str) -> String {
@@ -55,7 +38,7 @@ fn super_hero_zip_opens_and_starts_scenario() {
         return;
     };
 
-    let entries = unzip(&bytes).expect("unzip failed");
+    let entries = src_core::archive::unzip(&bytes).expect("unzip failed");
     assert!(!entries.is_empty(), "アーカイブが空");
 
     let mut app = App::with_rng_seed(0xCAFE_BABE);

@@ -83,37 +83,10 @@ fn sparobo_scenario_loads_without_crashing() {
     for p in &data_paths {
         let Ok(bytes) = fs::read(p) else { continue };
         let txt = loader::decode_text(&bytes);
-        let base = basename_lower(p);
-        let result: Result<(), String> = match base.as_str() {
-            "pilot.txt" => pilot::parse(&txt)
-                .map(|v| {
-                    app.database_mut().extend_pilots(v);
-                })
-                .map_err(|e| e.to_string()),
-            "unit.txt" | "robot.txt" => unit::parse(&txt)
-                .map(|v| {
-                    app.database_mut().extend_units(v);
-                })
-                .map_err(|e| e.to_string()),
-            "item.txt" => item::parse(&txt)
-                .map(|v| {
-                    app.database_mut().extend_items(v);
-                })
-                .map_err(|e| e.to_string()),
-            "sp.txt" | "mind.txt" => special_power::parse(&txt)
-                .map(|v| {
-                    app.database_mut().extend_special_powers(v);
-                })
-                .map_err(|e| e.to_string()),
-            "terrain.txt" => terrain_file::parse(&txt)
-                .map(|v| {
-                    app.database_mut().extend_terrains(v);
-                })
-                .map_err(|e| e.to_string()),
-            "non_pilot.txt" => Ok(()), // 一旦スキップ (フォーマット最小)
-            _ if p.extension().and_then(|s| s.to_str()) == Some("map") => mapdata::parse(&txt)
-                .map(|m| app.database_mut().store_map(base, m))
-                .map_err(|e| e.to_string()),
+        let name = p.to_string_lossy();
+        // 取り込み規則はブラウザのシナリオ読込と共通 (`scenario::ingest_data_file`)。
+        let result = match src_core::scenario::ingest_data_file(&mut app, &name, &txt) {
+            Some(r) if !r.errors.is_empty() => Err(r.errors[0].clone()),
             _ => Ok(()),
         };
         if result.is_ok() {
@@ -446,39 +419,7 @@ fn sparobo_title_drive_reaches_intermission() {
     for p in &data_paths {
         let Ok(bytes) = fs::read(p) else { continue };
         let txt = loader::decode_text(&bytes);
-        match basename_lower(p).as_str() {
-            "pilot.txt" => {
-                if let Ok(v) = pilot::parse(&txt) {
-                    app.database_mut().extend_pilots(v);
-                }
-            }
-            "unit.txt" | "robot.txt" => {
-                if let Ok(v) = unit::parse(&txt) {
-                    app.database_mut().extend_units(v);
-                }
-            }
-            "item.txt" => {
-                if let Ok(v) = item::parse(&txt) {
-                    app.database_mut().extend_items(v);
-                }
-            }
-            "sp.txt" | "mind.txt" => {
-                if let Ok(v) = special_power::parse(&txt) {
-                    app.database_mut().extend_special_powers(v);
-                }
-            }
-            "terrain.txt" => {
-                if let Ok(v) = terrain_file::parse(&txt) {
-                    app.database_mut().extend_terrains(v);
-                }
-            }
-            _ if p.extension().and_then(|s| s.to_str()) == Some("map") => {
-                if let Ok(m) = mapdata::parse(&txt) {
-                    app.database_mut().store_map(basename_lower(p), m);
-                }
-            }
-            _ => {}
-        }
+        src_core::scenario::ingest_data_file(&mut app, &p.to_string_lossy(), &txt);
     }
 
     let mut eves: Vec<PathBuf> = Vec::new();

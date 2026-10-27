@@ -26,8 +26,8 @@
 //! 使い方:
 //!   cargo run -q -p verify-archive --bin oracle_move -- <data_dir> < move_corpus.txt
 
+use src_core::data::loader;
 use src_core::data::map::{MapCell, MapData};
-use src_core::data::{item, loader, pilot, special_power, terrain_file, unit};
 use src_core::App;
 use std::io::{self, BufRead, Write};
 use std::path::Path;
@@ -194,28 +194,22 @@ fn eval_move(app: &App, map: Option<&MapData>, placed: &[PlacedUnit], name: &str
 /// (oracle_loaddata.rs と同一。terrain.txt は `<dir>/../system/terrain.txt`)。
 fn load_data_directory(app: &mut App, dir: &Path) {
     if let Some(txt) = read_data(dir, "mind.txt").or_else(|| read_data(dir, "sp.txt")) {
-        let (sps, _) = special_power::parse_lenient(&txt);
-        app.database_mut().extend_special_powers(sps);
+        src_core::scenario::ingest_data_file(app, "sp.txt", &txt);
     }
     if let Some(txt) = read_data(dir, "pilot.txt") {
-        let (pilots, _) = pilot::parse_lenient(&txt);
-        app.database_mut().extend_pilots(pilots);
+        src_core::scenario::ingest_data_file(app, "pilot.txt", &txt);
     }
     if let Some(txt) = read_data(dir, "robot.txt") {
-        let (units, _) = unit::parse_lenient(&txt);
-        app.database_mut().extend_units(units);
+        src_core::scenario::ingest_data_file(app, "unit.txt", &txt);
     }
     if let Some(txt) = read_data(dir, "unit.txt") {
-        let (units, _) = unit::parse_lenient(&txt);
-        app.database_mut().extend_units(units);
+        src_core::scenario::ingest_data_file(app, "unit.txt", &txt);
     }
     if let Some(txt) = read_data(dir, "item.txt") {
-        let (items, _) = item::parse_lenient(&txt);
-        app.database_mut().extend_items(items);
+        src_core::scenario::ingest_data_file(app, "item.txt", &txt);
     }
     if let Some(txt) = read_data(&dir.join("..").join("system"), "terrain.txt") {
-        let (terrains, _) = terrain_file::parse_lenient(&txt);
-        app.database_mut().extend_terrains(terrains);
+        src_core::scenario::ingest_data_file(app, "terrain.txt", &txt);
     }
 
     eprintln!(

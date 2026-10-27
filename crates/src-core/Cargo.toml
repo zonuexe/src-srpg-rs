@@ -17,6 +17,6 @@ encoding_rs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 regex.workspace = true
-
-[dev-dependencies]
+# シナリオアーカイブ (.zip / .lzh) の展開 (`archive`)。どちらも純 Rust で wasm でも動く。
 zip = { version = "2", default-features = false, features = ["deflate"] }
+delharc = "0.6"

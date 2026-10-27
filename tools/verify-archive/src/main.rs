@@ -13,14 +13,11 @@
 
 use std::env;
 use std::fs;
-use std::io::{Cursor, Read};
 use std::path::Path;
 use std::process::ExitCode;
 
-use src_core::data::{
-    event, item, loader, map as mapdata, pilot, special_power, terrain_file, unit,
-};
-use src_core::{entrypoint, event_runtime, App};
+use src_core::data::{event, item, loader, pilot, special_power, terrain_file, unit};
+use src_core::App;
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
@@ -39,7 +36,7 @@ fn main() -> ExitCode {
     let lower = path.to_ascii_lowercase();
 
     let entries: Vec<(String, Vec<u8>)> = if lower.ends_with(".zip") {
-        match unzip(&bytes) {
+        match src_core::archive::unzip(&bytes) {
             Ok(v) => v,
             Err(e) => {
                 eprintln!("zip 展開失敗: {e}");
@@ -47,7 +44,7 @@ fn main() -> ExitCode {
             }
         }
     } else if lower.ends_with(".lzh") || lower.ends_with(".lha") {
-        match unlzh(&bytes) {
+        match src_core::archive::unlzh(&bytes) {
             Ok(v) => v,
             Err(e) => {
                 eprintln!("lzh 展開失敗: {e}");
@@ -227,177 +224,16 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
         app.set_animate_ai(true);
         app.set_animate_battle(true);
     }
-    let mut deferred_eves: Vec<(String, String)> = Vec::new();
-    let mut deferred_inis: Vec<(String, String)> = Vec::new();
-    let mut counts = std::collections::BTreeMap::<&str, usize>::new();
-
-    let is_text = |base: &str, lname: &str| -> bool {
-        lname.ends_with(".eve")
-            || lname.ends_with(".ini")
-            || lname.ends_with(".map")
-            || matches!(
-                base,
-                "pilot.txt"
-                    | "non_pilot.txt"
-                    | "unit.txt"
-                    | "robot.txt"
-                    | "item.txt"
-                    | "sp.txt"
-                    | "mind.txt"
-                    | "terrain.txt"
-            )
-    };
-    let basename = |lname: &str| -> String {
-        lname
-            .rsplit(['/', '\\'])
-            .next()
-            .unwrap_or(lname)
-            .to_string()
-    };
-
-    // 原典 SRC と同じく `Data\` 配下のみをシナリオデータとして読む
-    // (`SRC.bas::SearchDataFolder`)。`Data/` を持たないデータ集アーカイブは
-    // 従来どおり basename 一致で拾う。
-    let data_scope = loader::scope_to_data_dir(entries.iter().map(|(n, _)| n.as_str()));
-
-    for (name, data) in entries {
-        let lname = name.to_ascii_lowercase();
-        let base = basename(&lname);
-        if !is_text(&base, &lname) {
-            continue;
-        }
-        if loader::is_data_file_name(&lname) && !loader::accept_data_entry(name, data_scope) {
-            continue;
-        }
-        let txt = loader::decode_text(data);
-        if lname.ends_with(".eve") {
-            deferred_eves.push((name.clone(), txt));
-        } else if lname.ends_with(".ini") {
-            deferred_inis.push((name.clone(), txt));
-        } else if base == "pilot.txt" {
-            let (pilots, errors) = pilot::parse_lenient(&txt);
-            *counts.entry("pilot").or_default() += pilots.len();
-            app.database_mut().extend_pilots(pilots);
-            if let Some(e) = errors.first() {
-                eprintln!(
-                    "  ⚠ {name} pilot parse: {} レコードをスキップ: {e}",
-                    errors.len()
-                );
-            }
-        } else if base == "non_pilot.txt" {
-            // 原典 `NonPilotDataList.Load` 相当。実フロントエンド (src-web) も
-            // 読み込むので計測側でも取り込む。これが無いと `non_pilot.txt` だけを
-            // 持つシナリオ (例: 明けない夜を待ちわびて) のパイロットが 0 件になり、
-            // ステージのブートストラップが素材パック扱いで打ち切られる。
-            let non_pilots = src_core::data::non_pilot::parse(&txt);
-            *counts.entry("non_pilot").or_default() += non_pilots.len();
-            app.database_mut().extend_pilots(non_pilots);
-        } else if base == "unit.txt" || base == "robot.txt" {
-            let (units, errors) = unit::parse_lenient(&txt);
-            *counts.entry("unit").or_default() += units.len();
-            app.database_mut().extend_units(units);
-            if let Some(e) = errors.first() {
-                eprintln!(
-                    "  ⚠ {name} unit parse: {} レコードをスキップ: {e}",
-                    errors.len()
-                );
-            }
-        } else if base == "item.txt" {
-            let (items, errors) = item::parse_lenient(&txt);
-            *counts.entry("item").or_default() += items.len();
-            app.database_mut().extend_items(items);
-            if let Some(e) = errors.first() {
-                eprintln!(
-                    "  ⚠ {name} item parse: {} レコードをスキップ: {e}",
-                    errors.len()
-                );
-            }
-        } else if base == "sp.txt" || base == "mind.txt" {
-            let (sps, errors) = special_power::parse_lenient(&txt);
-            *counts.entry("sp").or_default() += sps.len();
-            app.database_mut().extend_special_powers(sps);
-            if let Some(e) = errors.first() {
-                eprintln!(
-                    "  ⚠ {name} sp parse: {} レコードをスキップ: {e}",
-                    errors.len()
-                );
-            }
-        } else if base == "terrain.txt" {
-            let (terrains, errors) = terrain_file::parse_lenient(&txt);
-            *counts.entry("terrain").or_default() += terrains.len();
-            app.database_mut().extend_terrains(terrains);
-            if let Some(e) = errors.first() {
-                eprintln!(
-                    "  ⚠ {name} terrain parse: {} レコードをスキップ: {e}",
-                    errors.len()
-                );
-            }
-        } else if lname.ends_with(".map") {
-            if let Ok(m) = mapdata::parse(&txt) {
-                *counts.entry("map").or_default() += 1;
-                app.database_mut().store_map(base.clone(), m);
-            }
-        }
-    }
-    for (k, n) in &counts {
-        println!("  ✓ DB: {k:8} {n:>6}");
-    }
-
-    // .ini を script_library に登録（自動実行はしない、Require 用の登録のみ）。
-    for (name, txt) in &deferred_inis {
-        if let Ok(stmts) = event::parse(txt) {
-            app.script_library_mut().append_with_name(&stmts, name);
-        }
-    }
-
-    let analysis = entrypoint::analyze(entries);
-    if let Some(best) = analysis.best_runnable() {
-        println!(
-            "  → entry-point: {} (候補 {} 件, スコア降順)",
-            best,
-            analysis.candidates.len()
-        );
-    } else {
-        println!("  → entry-point なし (データ専用?)");
-    }
-    let ep_score: std::collections::HashMap<&str, i32> = analysis
-        .candidates
-        .iter()
-        .map(|c| (c.name.as_str(), c.score))
-        .collect();
-    deferred_eves.sort_by(|a, b| {
-        let sa = ep_score.get(a.0.as_str()).copied().unwrap_or(i32::MIN);
-        let sb = ep_score.get(b.0.as_str()).copied().unwrap_or(i32::MIN);
-        sb.cmp(&sa).then_with(|| {
-            a.0.matches(['/', '\\'])
-                .count()
-                .cmp(&b.0.matches(['/', '\\']).count())
-        })
-    });
-
-    let mut eve_entries: Vec<(String, usize, usize)> = Vec::new();
-    let mut eve_parse_errors = 0;
-    for (name, txt) in &deferred_eves {
-        match event::parse(txt) {
-            Ok(stmts) => {
-                let len = stmts.len();
-                let pc = app.script_library().statements.len();
-                app.script_library_mut().append_with_name(&stmts, name);
-                eve_entries.push((name.clone(), pc, len));
-            }
-            Err(e) => {
-                eve_parse_errors += 1;
-                eprintln!("  ⚠ {name} parse: {e}");
-            }
-        }
-    }
+    // 取り込み・エントリ実行・起動はブラウザ (src-web) と同じ src-core の
+    // `scenario` を通す (VERIFY_ENTRY でエントリポイントだけ差し替えられる)。
+    let reg = src_core::scenario::register_scenario(&mut app, entries);
+    print!("{}", reg.log);
     println!(
         "  ✓ .eve 登録 {} 本 (parse errors: {})",
-        eve_entries.len(),
-        eve_parse_errors
+        reg.eves.len(),
+        reg.eve_parse_errors
     );
 
-    // エントリポイントのみ run_from_pc で実行。サブ .eve はロード時に実行しない。
     // VERIFY_ENTRY で entry-point を上書きできる (D triage: root シナリオ起点で駆動)。
     // 形式: 部分一致文字列、または `@N`(登録一覧の 1 始まり index)。
     // 日本語 env 値はシェル/nix 経由で文字化けしマッチしないことがあるため index 形式を併用。
@@ -405,51 +241,33 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
         Ok(sub) if !sub.trim().is_empty() => {
             let sub = sub.trim();
             let found = match sub.strip_prefix('@').and_then(|n| n.parse::<usize>().ok()) {
-                Some(idx) if idx >= 1 => eve_entries.get(idx - 1).map(|(n, _, _)| n.clone()),
-                _ => eve_entries
+                Some(idx) if idx >= 1 => reg.eves.get(idx - 1).map(|e| e.name.clone()),
+                _ => reg
+                    .eves
                     .iter()
-                    .map(|(n, _, _)| n.clone())
+                    .map(|e| e.name.clone())
                     .find(|n| n.contains(sub)),
             };
             match &found {
                 Some(f) => println!("  → entry-point 上書き (VERIFY_ENTRY={sub}): {f}"),
                 None => {
                     println!("  → VERIFY_ENTRY={sub} に一致する .eve なし (既定を使用)。登録 .eve 一覧 (1始まり):");
-                    for (i, (n, _, _)) in eve_entries.iter().enumerate() {
-                        println!("      @{} {n}", i + 1);
+                    for (i, e) in reg.eves.iter().enumerate() {
+                        println!("      @{} {}", i + 1, e.name);
                     }
                 }
             }
-            found.or_else(|| analysis.best_runnable().map(String::from))
+            found.or_else(|| reg.entry.clone())
         }
-        _ => analysis.best_runnable().map(String::from),
+        _ => reg.entry.clone(),
     };
-    let entry_name = effective_entry.as_deref();
-    let mut run_errors = 0;
-    let mut run_count = 0;
-    for (name, pc, _len) in &eve_entries {
-        if entry_name == Some(name.as_str()) {
-            if let Err(e) = event_runtime::run_from_pc(&mut app, *pc) {
-                run_errors += 1;
-                eprintln!("  ⚠ {name} runtime: {e}");
-            } else {
-                run_count += 1;
-            }
-        }
+    if let Some(entry) = effective_entry.as_deref() {
+        print!("{}", src_core::scenario::run_entry(&mut app, &reg, entry));
     }
-    println!(
-        "  ✓ .eve 実行 {} 本 (runtime errors: {})",
-        run_count, run_errors
+    print!(
+        "{}",
+        src_core::scenario::boot_after_load(&mut app, effective_entry.as_deref())
     );
-
-    // src-web (archive.rs) と同じロード末尾ブートストラップ:
-    // `Stage` / `Continue` を使わないシナリオでもエントリ .eve をステージ
-    // ファイルとして `スタート` 発火 → 味方フェイズ開始まで進める。
-    if let Some(best) = effective_entry.as_deref() {
-        app.bootstrap_stage_after_load(best);
-        println!("  → ステージブートストラップ: {best}");
-    }
-    app.on_script_completed();
 
     println!("--- final app state ---");
     println!("  scene:           {:?}", app.scene());
@@ -696,11 +514,11 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                         .max_by_key(|(_, &p)| p)
                         .map(|(n, p)| format!("{n}@{p}"))
                         .unwrap_or_else(|| "?".to_string());
-                    let file = eve_entries
+                    let file = reg
+                        .eves
                         .iter()
-                        .find(|(_, p, l)| *p <= pc && pc < p + l)
-                        .map(|(n, _, _)| n.as_str())
-                        .unwrap_or("?");
+                        .find(|e| e.pc <= pc && pc < e.pc + e.len)
+                        .map_or("?", |e| e.name.as_str());
                     format!(" {{src pc={pc} {lbl} file={file}}}")
                 };
                 // パイロット/ユニット能力の「閲覧画面」(タブ [ユニット|機体|レーダー|武器|
@@ -944,96 +762,4 @@ fn trunc(s: &str, max: usize) -> String {
         let head: String = one_line.chars().take(max).collect();
         format!("{head}…")
     }
-}
-
-fn unzip(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
-    let cursor = Cursor::new(bytes);
-    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| e.to_string())?;
-    let mut out = Vec::with_capacity(archive.len());
-    for i in 0..archive.len() {
-        let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
-        if entry.is_dir() {
-            continue;
-        }
-        let name = loader::decode_text(entry.name_raw());
-        let mut buf = Vec::with_capacity(entry.size() as usize);
-        entry.read_to_end(&mut buf).map_err(|e| e.to_string())?;
-        out.push((name, buf));
-    }
-    Ok(out)
-}
-
-/// LZH / LHA アーカイブを展開。delharc クレートに丸投げ。
-fn unlzh(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
-    use delharc::LhaDecodeReader;
-    let mut reader = LhaDecodeReader::new(Cursor::new(bytes))
-        .map_err(|e| format!("LZH ヘッダ読み取り失敗: {e}"))?;
-    let mut out = Vec::new();
-    loop {
-        let header = reader.header();
-        let is_dir = header.parse_pathname().to_string_lossy().ends_with('/');
-        if !is_dir && reader.is_decoder_supported() {
-            let name = decode_lzh_filename(header);
-            let mut buf = Vec::with_capacity(header.original_size as usize);
-            reader
-                .read_to_end(&mut buf)
-                .map_err(|e| format!("LZH デコード失敗: {e}"))?;
-            out.push((name, buf));
-        } else if !is_dir && !reader.is_decoder_supported() {
-            let _ = reader.read_to_end(&mut Vec::new()).map_err(|_| ());
-        }
-        if !reader
-            .next_file()
-            .map_err(|e| format!("LZH 次エントリ取得失敗: {e}"))?
-        {
-            break;
-        }
-    }
-    Ok(out)
-}
-
-const EXT_HEADER_FILENAME: u8 = 0x01;
-const EXT_HEADER_PATH: u8 = 0x02;
-
-// NOTE: 同等の実装が `crates/src-web/src/archive.rs` にも存在する。
-// src-web は wasm32 専用 (cdylib)、verify-archive はネイティブ CLI のため
-// 共通化先 (src-core) に置けず重複を維持している。仕様変更時は両方を更新。
-fn decode_lzh_filename(header: &delharc::LhaHeader) -> String {
-    let mut path_bytes: Vec<u8> = Vec::new();
-    let mut filename_bytes: Option<&[u8]> = None;
-
-    for hdr in header.iter_extra() {
-        match hdr {
-            [EXT_HEADER_PATH, data @ ..] => {
-                path_bytes.extend(data.iter().map(|&b| if b == 0xFF { b'/' } else { b }));
-                let needs_sep = !path_bytes.is_empty()
-                    && !path_bytes.ends_with(b"/")
-                    && !path_bytes.ends_with(b"\\");
-                if needs_sep {
-                    path_bytes.push(b'/');
-                }
-            }
-            [EXT_HEADER_FILENAME, data @ ..] => {
-                filename_bytes = Some(data);
-            }
-            _ => {}
-        }
-    }
-
-    // EXT_HEADER_FILENAME がなければ Level 0/1 の header.filename をベース名として採用。
-    // EXT_HEADER_PATH (ディレクトリ) と header.filename (ベース名) の両方を持つ
-    // アーカイブが実在するため、両者を必ず連結する。
-    let basename = filename_bytes.unwrap_or(header.filename.as_ref());
-    path_bytes.extend_from_slice(basename);
-
-    if path_bytes.is_empty() {
-        return header.parse_pathname_to_str();
-    }
-
-    let sanitized: Vec<u8> = path_bytes
-        .iter()
-        .map(|&b| if b == 0xFF { b'/' } else { b })
-        .collect();
-    let s = loader::decode_text(&sanitized);
-    s.replace('\\', "/")
 }

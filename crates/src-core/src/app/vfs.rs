@@ -95,22 +95,12 @@ impl App {
             return;
         };
         let text = lines.join("\n");
-        match basename {
-            "pilot.txt" => {
-                // 壊れた 1 レコードがあっても残りのパイロットは取り込む。
-                let (pilots, _errors) = crate::data::pilot::parse_lenient(&text);
-                self.database.extend_pilots(pilots);
-            }
-            "unit.txt" | "robot.txt" => {
-                // 壊れた 1 レコードがあっても残りのユニットは取り込む。
-                let (units, _errors) = crate::data::unit::parse_lenient(&text);
-                self.database.extend_units(units);
-            }
-            "item.txt" => {
-                let (items, _errors) = crate::data::item::parse_lenient(&text);
-                self.database.extend_items(items);
-            }
-            _ => {}
+        // 書き戻されたデータは盤面へ加法マージする (取り込み規則はシナリオ読込と共通)。
+        if matches!(
+            basename,
+            "pilot.txt" | "unit.txt" | "robot.txt" | "item.txt"
+        ) {
+            crate::scenario::ingest_data_file(self, basename, &text);
         }
     }
 

@@ -10,6 +10,7 @@
 #![forbid(unsafe_code)]
 
 pub mod app;
+pub mod archive;
 pub mod asset;
 pub mod audio;
 pub mod battle_anim;
@@ -29,6 +30,7 @@ pub mod modal;
 pub mod movement;
 pub mod necessary_skill;
 pub mod pilot_instance;
+pub mod scenario;
 pub mod scene;
 pub mod script_overlay;
 pub mod settings;
