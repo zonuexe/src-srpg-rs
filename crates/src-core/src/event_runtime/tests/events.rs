@@ -369,12 +369,13 @@ MapSize 5 5
 Place ブレイバー アリス Player 0 0
 Exit
 
-進入 アリス 2 3:
+進入 アリス 3 4:
 Set entry_coord 1
 Return
 
-# 0-based 座標 (4, 0) は右上端 → 進入 + 脱出 N + 脱出 E が連鎖発火する。
-進入 ブレイバー 4 0:
+# ラベルの座標は原典どおり 1 始まり。内部 (4, 0) = SRC (5, 1) は右上端 →
+# 進入 + 脱出 N + 脱出 E が連鎖発火する。
+進入 ブレイバー 5 1:
 Set entry_unit 1
 Return
 
@@ -390,7 +391,7 @@ Return
     let mut app = App::new();
     execute(&mut app, &stmts).unwrap();
 
-    // (2, 3) へ移動 → 進入 アリス 2 3 発火 (端ではないので脱出は無し)
+    // 内部 (2, 3) へ移動 → 進入 アリス 3 4 発火 (端ではないので脱出は無し)
     app.database_mut().unit_instances[0].x = 2;
     app.database_mut().unit_instances[0].y = 3;
     fire_entry_event_labels(&mut app, 0);
@@ -398,7 +399,7 @@ Return
     assert_eq!(app.script_var("escape_north"), "");
     assert_eq!(app.script_var("escape_east"), "");
 
-    // (4, 0) へ移動 → 右上端 → 進入 + 脱出 N + 脱出 E
+    // 内部 (4, 0) へ移動 → 右上端 → 進入 + 脱出 N + 脱出 E
     app.database_mut().unit_instances[0].x = 4;
     app.database_mut().unit_instances[0].y = 0;
     fire_entry_event_labels(&mut app, 0);

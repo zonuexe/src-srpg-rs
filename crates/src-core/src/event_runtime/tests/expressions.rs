@@ -293,8 +293,9 @@ fn position_functions() {
     let src = "Set gx X(ブレイバー)\nSet gy Y(ブレイバー)\n";
     let stmts = event::parse(src).unwrap();
     execute(&mut app, &stmts).unwrap();
-    assert_eq!(app.script_var("gx"), "1");
-    assert_eq!(app.script_var("gy"), "1");
+    // `Place` は内部座標 (1, 1)。`X()` / `Y()` は原典どおり 1 始まりで返す。
+    assert_eq!(app.script_var("gx"), "2");
+    assert_eq!(app.script_var("gy"), "2");
 }
 
 #[test]
@@ -321,7 +322,7 @@ Create 味方 C 0 pc 0 (味方レベル平均値) 5
     let stmts = event::parse(src).unwrap();
     let mut app = App::new();
     execute(&mut app, &stmts).unwrap();
-    // A,B はレベル 1 → 平均 1 (件数 2 ではない) → C は (x=1, y=5) に生成。
+    // A,B はレベル 1 → 平均 1 (件数 2 ではない) → C は SRC (1, 5) = 内部 (0, 4) に生成。
     let c = app
         .database()
         .unit_instances
@@ -330,7 +331,7 @@ Create 味方 C 0 pc 0 (味方レベル平均値) 5
         .expect("C が生成されていない");
     assert_eq!(
         (c.x, c.y),
-        (1, 5),
+        (0, 4),
         "味方レベル平均値 が座標式で解決されていない"
     );
 }

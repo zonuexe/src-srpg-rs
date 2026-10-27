@@ -380,19 +380,19 @@ fn fn_wx(app: &App, c: &FnCall) -> Option<String> {
     // `WX(unit_or_x)` / `WY(unit_or_y)` — マップウィンドウ上の表示座標。
     // 1 タイル = 32 px (本実装の `render.rs` 基準。SRC.NET は 24~32 可変
     // だが、現フロントエンドの規約 32 px に揃える)。
-    // 引数が数値ならその数値 × 32、ユニット指定ならユニット位置 × 32。
-    // SRC 仕様の「画面表示左上隅」は本実装で「タイル左上」と一致する。
-    const TILE_PX: i32 = 32;
+    // 引数が数値ならその座標 (1 始まり) のタイル左上、ユニット指定ならユニット位置の
+    // タイル左上。SRC 仕様の「画面表示左上隅」は本実装で「タイル左上」と一致する。
+    const TILE_PX: i64 = 32;
     let arg = args.first()?.to_string();
     let arg = arg.trim();
     // 数値解釈優先
-    if let Ok(n) = arg.parse::<i32>() {
-        return Some((n * TILE_PX).to_string());
+    if let Ok(n) = arg.parse::<i64>() {
+        return Some((coord::axis_from_script(n) * TILE_PX).to_string());
     }
     // ユニット参照
     if let Some(u) = find_unit(app, arg) {
-        let coord = if name == "WX" { u.x as i32 } else { u.y as i32 };
-        return Some((coord * TILE_PX).to_string());
+        let pos = if name == "WX" { u.x } else { u.y };
+        return Some((i64::from(pos) * TILE_PX).to_string());
     }
     Some("0".to_string())
 }
@@ -566,7 +566,7 @@ fn fn_x(app: &App, c: &FnCall) -> Option<String> {
     let FnCall { args, .. } = *c;
     Some(
         find_unit(app, args.first().copied().unwrap_or(""))
-            .map(|u| u.x.to_string())
+            .map(|u| coord::to_script(u.x).to_string())
             .unwrap_or_else(|| "0".to_string()),
     )
 }
@@ -575,7 +575,7 @@ fn fn_y(app: &App, c: &FnCall) -> Option<String> {
     let FnCall { args, .. } = *c;
     Some(
         find_unit(app, args.first().copied().unwrap_or(""))
-            .map(|u| u.y.to_string())
+            .map(|u| coord::to_script(u.y).to_string())
             .unwrap_or_else(|| "0".to_string()),
     )
 }

@@ -116,8 +116,9 @@ Launch リオ 2 3
     );
     let u = find_unit_named(&app, "ブレイバー").unwrap();
     assert!(!u.off_map, "Launch で off_map=false になるべき");
-    assert_eq!(u.x, 2);
-    assert_eq!(u.y, 3);
+    // SRC (2, 3) = 内部 (1, 2)。
+    assert_eq!(u.x, 1);
+    assert_eq!(u.y, 2);
 }
 
 // ============================================================
@@ -566,7 +567,8 @@ Launch リオ 7 8
     );
     let u = find_unit_named(&app, "ブレイバー").unwrap();
     assert!(!u.off_map);
-    assert_eq!((u.x, u.y), (7, 8));
+    // SRC (7, 8) = 内部 (6, 7)。
+    assert_eq!((u.x, u.y), (6, 7));
 }
 
 #[test]
@@ -582,7 +584,8 @@ Launch リオ 9 9
     let u = find_unit_named(&app, "ブレイバー").unwrap();
     assert!(!u.off_map);
     assert_eq!(u.pilot_name, "リオ");
-    assert_eq!((u.x, u.y), (9, 9));
+    // Launch の座標は 1 始まり: SRC (9, 9) = 内部 (8, 8)。
+    assert_eq!((u.x, u.y), (8, 8));
 }
 
 #[test]
@@ -940,7 +943,8 @@ UseAbility ブレイバー 召喚 ゾルダII 5 6
 "#,
     );
     let summoned = find_unit_named(&app, "ゾルダII").unwrap();
-    assert_eq!((summoned.x, summoned.y), (5, 6), "指定座標に召喚");
+    // 召喚座標も 1 始まり: SRC (5, 6) = 内部 (4, 5)。
+    assert_eq!((summoned.x, summoned.y), (4, 5), "指定座標に召喚");
 }
 
 // ============================================================

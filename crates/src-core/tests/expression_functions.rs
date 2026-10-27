@@ -592,7 +592,8 @@ fn count_item_returns_equipped_item_count() {
 
 #[test]
 fn wx_wy_return_pixel_coords() {
-    // 1 タイル = 32 px。Place ブレイバー at (1, 1) → WX = 32, WY = 32。
+    // 1 タイル = 32 px。Place ブレイバー at 内部 (1, 1) → WX = 32, WY = 32。
+    // 数値引数は SRC 座標 (1 始まり) なので WX(5) は内部 4 → 128。
     let app = run_with_unit(
         r#"
 Set wx WX(リオ)
@@ -602,7 +603,7 @@ Set wx5 WX(5)
     );
     assert_eq!(app.script_var("wx"), "32");
     assert_eq!(app.script_var("wy"), "32");
-    assert_eq!(app.script_var("wx5"), "160"); // 5 * 32
+    assert_eq!(app.script_var("wx5"), "128"); // (5 - 1) * 32
 }
 
 // ============================================================
@@ -611,16 +612,16 @@ Set wx5 WX(5)
 
 #[test]
 fn x_y_return_grid_coordinates() {
-    // X(unit) / Y(unit) はマップ上のグリッド座標を返す。
-    // run_with_unit は Place at (1,1)。
+    // X(unit) / Y(unit) はマップ上のグリッド座標を原典どおり 1 始まりで返す。
+    // run_with_unit は Place at 内部 (1,1) = SRC (2,2)。
     let app = run_with_unit(
         r#"
 Set gx X(リオ)
 Set gy Y(リオ)
 "#,
     );
-    assert_eq!(app.script_var("gx"), "1");
-    assert_eq!(app.script_var("gy"), "1");
+    assert_eq!(app.script_var("gx"), "2");
+    assert_eq!(app.script_var("gy"), "2");
 }
 
 #[test]
@@ -652,7 +653,8 @@ fn x_y_unknown_unit_returns_zero() {
 fn move_command_teleports_unit_ignoring_movement_range() {
     let app = run_with_unit("Move リオ 4 5\n");
     let u = &app.database().unit_instances[0];
-    assert_eq!((u.x, u.y), (4, 5));
+    // SRC (4, 5) = 内部 (3, 4)。
+    assert_eq!((u.x, u.y), (3, 4));
 }
 
 #[test]
@@ -831,7 +833,8 @@ fn center_command_moves_map_cursor_by_coords() {
     // マップが無いと範囲チェックでスキップされるので最低限の MapSize を持たせる
     let stmts = event::parse("MapSize 10 10\nCenter 4 5\n").unwrap();
     event_runtime::execute(&mut app, &stmts).unwrap();
-    assert_eq!(app.map_cursor(), Some((4, 5)));
+    // スクリプト座標は 1 始まり: SRC (4, 5) = 内部 (3, 4)。
+    assert_eq!(app.map_cursor(), Some((3, 4)));
 }
 
 #[test]
@@ -2024,7 +2027,8 @@ fn changeterrain_modifies_tile_terrain_id() {
     let stmts = event::parse("ChangeTerrain 3 3 海 0\n").unwrap();
     event_runtime::execute(&mut app, &stmts).unwrap();
     let map = app.database().map.as_ref().unwrap();
-    let cell = map.cell(3, 3);
+    // スクリプト座標は 1 始まり: SRC (3, 3) = 内部 (2, 2)。
+    let cell = map.cell(2, 2);
     // 海 = 4 (組込テーブル DEFAULT_TERRAINS)
     assert_eq!(cell.terrain_id, 4, "海地形 ID は 4");
 }

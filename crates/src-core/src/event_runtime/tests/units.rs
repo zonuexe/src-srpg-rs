@@ -297,18 +297,19 @@ Next
         .map(|u| u.y)
         .collect();
     ys.sort();
+    // SRC 座標 (1 始まり) の y = 1..3 は内部 0..2。
     assert_eq!(
         ys,
-        vec![1, 2, 3],
+        vec![0, 1, 2],
         "座標のループ変数が解決されていない: {ys:?}"
     );
-    // x は数値リテラルなので全て 4。
+    // x は数値リテラルなので全て SRC 4 = 内部 3。
     assert!(app
         .database()
         .unit_instances
         .iter()
         .filter(|u| u.unit_data_name == "壁")
-        .all(|u| u.x == 4));
+        .all(|u| u.x == 3));
 }
 
 #[test]
@@ -964,8 +965,8 @@ Organize 5 7 7
     execute(&mut app, &stmts).unwrap();
     let u = &app.database().unit_instances[0];
     assert!(!u.off_map, "Organize should re-deploy");
-    // (7, 7) 中心 / 同マス空きなので (7, 7) そのもの
-    assert_eq!((u.x, u.y), (7, 7));
+    // SRC (7, 7) = 内部 (6, 6) 中心 / 同マス空きなので (6, 6) そのもの
+    assert_eq!((u.x, u.y), (6, 6));
 }
 
 #[test]
@@ -986,8 +987,9 @@ Launch ガロ 9 10
     assert_eq!(app.database().unit_instances.len(), 1);
     let u = &app.database().unit_instances[0];
     assert!(!u.off_map, "Launch should reset off_map");
-    assert_eq!(u.x, 9);
-    assert_eq!(u.y, 10);
+    // Launch の座標は 1 始まり: SRC (9, 10) = 内部 (8, 9)。
+    assert_eq!(u.x, 8);
+    assert_eq!(u.y, 9);
 }
 
 #[test]

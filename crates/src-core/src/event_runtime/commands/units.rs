@@ -557,9 +557,12 @@ fn exec_launch(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         return Ok(pc + 1);
     }
     let target = &xargs[0];
-    // 座標は原典どおり `GetArgAsLong`。
-    let nx = c.long(app, 1).unwrap_or(0).max(0) as u32;
-    let ny = c.long(app, 2).unwrap_or(0).max(0) as u32;
+    // 座標は原典どおり `GetArgAsLong` で読み、盤内に丸める (1 始まり)。
+    let (nx, ny) = coord::clamp_from_script(
+        app,
+        c.long(app, 1).unwrap_or(0),
+        c.long(app, 2).unwrap_or(0),
+    );
     let uid = app
         .database()
         .unit_instances
@@ -799,8 +802,11 @@ fn exec_center(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     // 末尾の `非同期` を除いて 2 引数なら座標指定 (原典 `GetArgAsLong`)、1 引数なら unit 指定。
     let n = xargs.len() - usize::from(xargs.last().is_some_and(|s| s == "非同期"));
     if n >= 2 {
-        let x = c.long(app, 0).unwrap_or(0).max(0) as u32;
-        let y = c.long(app, 1).unwrap_or(0).max(0) as u32;
+        let (x, y) = coord::clamp_from_script(
+            app,
+            c.long(app, 0).unwrap_or(0),
+            c.long(app, 1).unwrap_or(0),
+        );
         app.set_map_cursor(x, y);
         return Ok(pc + 1);
     }
@@ -932,7 +938,8 @@ fn exec_move(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     let (Some(nx), Some(ny)) = (c.long(app, idx), c.long(app, idx + 1)) else {
         return Err(err(line, "Move 命令は最低 2 引数必要 (x y)。"));
     };
-    let (nx, ny) = (nx.max(0) as u32, ny.max(0) as u32);
+    // 原典どおり盤内に丸める (1 始まり)。
+    let (nx, ny) = coord::clamp_from_script(app, nx, ny);
     let uid = app
         .database()
         .unit_instances
@@ -1009,8 +1016,12 @@ fn exec_create(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     // 成長タイプ準拠成長とは乖離する (穴埋めロードマップ・docs/SRC_SHARP_DIVERGENCE.md)。
     // 原典はレベルを 1 以上に揃える。
     let level = eval::str_to_lng(&xargs[4]).max(1) as i32;
-    let x = eval_coord_u32(xargs, 5);
-    let y = eval_coord_u32(xargs, 6);
+    // 座標は 1 始まりで盤内に丸める (原典 `If ux < 1 Then ux = 1 ElseIf ux > MapWidth …`)。
+    let (x, y) = coord::clamp_from_script(
+        app,
+        eval::str_to_lng(&xargs[5]),
+        eval::str_to_lng(&xargs[6]),
+    );
     let mut inst = UnitInstance::new(unit_data_name, pilot.clone(), party, x, y);
     inst.upgrade_level = rank.max(0);
     inst.total_exp = crate::pilot_instance::exp_for_level(level);

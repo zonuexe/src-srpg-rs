@@ -311,8 +311,8 @@ pub fn fire_after_attack_event_labels(app: &mut App, atk: &UnitEventId, def: &Un
 /// SRC `進入 <unit> <x> <y>:` または `進入 <unit> <terrain>:`
 /// (`進入イベント.md`) の auto-fire。
 ///
-/// 移動完了時に呼び出す。`(x, y)` は本実装の 0-based 座標 (`X()`/`Y()` 関数
-/// と同じ規約)。SRC 原典は 1-based だが、本実装は内部一貫性を優先する。
+/// 移動完了時に呼び出す。ラベルの `<x> <y>` は原典どおり 1 始まり (左上隅が (1,1)、
+/// `X()` / `Y()` 関数と同じ) で、内部座標から `coord::to_script` で直して照合する。
 /// 引き続き `脱出 <unit> <direction>` をマップ端到達時にチェック・発火する
 /// (原典: "進入イベントに続いて脱出イベントが発生")。
 ///
@@ -328,7 +328,7 @@ pub fn fire_entry_event_labels(app: &mut App, idx: usize) {
     let x = u.x;
     let y = u.y;
     // (1) 進入 <unit> <x> <y>
-    let coord_suffix = format!("{x} {y}");
+    let coord_suffix = format!("{} {}", coord::to_script(x), coord::to_script(y));
     fire_unit_event_labels(
         app,
         &["進入"],
