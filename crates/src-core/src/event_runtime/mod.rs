@@ -3532,9 +3532,18 @@ fn exec_command_pc(
             return Ok(pc + 1);
         }
         "useability" => {
-            // SRC `UseAbility unit ability [target]` (`UseAbilityコマンド.md`):
-            // ユニットに指定アビリティを発動させる。本実装はアビリティ効果の
-            // フル dispatch を持たないが、SRC.NET `AbilityEffect.cs` で頻出する
+            // SRC `UseAbility [unit] ability [target]` (`UseAbilityコマンド.md`):
+            // ユニットに指定アビリティを発動させる。使用者のユニットデータに同名の
+            // アビリティがあれば、プレイヤー / AI と同じ `App::execute_ability` で
+            // 回数 / EN を消費して効果を適用する (C# `ExecuteAbility(.., is_event: true)`:
+            // 使用条件は問わず、行動消費・経験値・使用イベントなし)。
+            if let Some((caster, idx, target, name)) = resolve_data_ability(app, &xargs) {
+                app.set_script_var("直前使用アビリティ".to_string(), name);
+                app.execute_ability(&caster, idx, &target);
+                return Ok(pc + 1);
+            }
+            // 以下はユニットデータにアビリティが無いときの互換処理 (アビリティ名で
+            // 効果を決め打ちする旧実装)。SRC.NET `AbilityEffect.cs` で頻出する
             // 基本効果のいくつかをハードコードで処理する:
             //   - `修理装置` / `修理`         → 対象 unit の HP 全回復
             //   - `補給装置` / `補給`         → 対象 unit の EN 全回復 + 弾薬補給は省略
@@ -6369,6 +6378,42 @@ fn unit_alive(app: &App, key: &str) -> bool {
 /// コマンド引数のユニット位置にシステム変数 (`相手ユニットＩＤ` 等) を許すため、裸の
 /// 変数名 (生贄ルーチンの `SpecialPower 相手ユニットＩＤ みがわり 対象ユニットＩＤ`) を
 /// uid へ解決できる。実ユニット名を優先するので通常の literal 指定は壊れない。
+/// `UseAbility` の引数から (使用者 uid, アビリティ index, 対象 uid, アビリティ名) を
+/// 解決する。使用者のユニットデータに該当アビリティが無ければ `None`。
+/// 引数の解釈は C# `UseAbilityCmd` に合わせる:
+///  - 1 引数: `ability` (使用者・対象とも SelectedUnitForEvent)
+///  - 2 引数: `ability target` (SelectedUnitForEvent が ability を持つ) / `unit ability`
+///  - 3 引数: `unit ability target`
+fn resolve_data_ability(app: &App, xargs: &[String]) -> Option<(String, usize, String, String)> {
+    let uid_of = |key: &str| {
+        app.database()
+            .unit_instances
+            .iter()
+            .find(|u| matches_unit_handle(u, key))
+            .map(|u| u.uid.clone())
+    };
+    let selected = uid_of(app.selected_unit_for_event());
+    let (caster, name, target) = match xargs {
+        [] => return None,
+        [name] => {
+            let s = selected?;
+            (s.clone(), name.clone(), s)
+        }
+        [a, b] => match &selected {
+            Some(s) if app.ability_index_by_name(s, a).is_some() => {
+                (s.clone(), a.clone(), uid_of(b)?)
+            }
+            _ => {
+                let c = uid_of(a)?;
+                (c.clone(), b.clone(), c)
+            }
+        },
+        [a, b, c, ..] => (uid_of(a)?, b.clone(), uid_of(c)?),
+    };
+    let idx = app.ability_index_by_name(&caster, &name)?;
+    Some((caster, idx, target, name))
+}
+
 fn resolve_handle_var(app: &App, handle: String) -> String {
     if app
         .database()

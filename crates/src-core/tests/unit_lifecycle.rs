@@ -1051,3 +1051,54 @@ fn ride_two_arg_swaps_pilot_and_vacates_old_unit() {
         "元のブレイバーにリオが残っている (乗り換えで降りていない)"
     );
 }
+
+/// `UseAbility` はユニットデータのアビリティをプレイヤーと同じ `execute_ability`
+/// 経路で発動する: 効果はデータ (`回復Lv1` = HP 500) どおり、回数と EN を消費し、
+/// 行動は消費しない (`UseAbilityコマンド.md`)。旧実装はアビリティ名の決め打ちで、
+/// 名前が既知でないアビリティは何もしなかった。
+#[test]
+fn useability_runs_unit_data_ability() {
+    use src_core::data::unit;
+    use src_core::event_runtime::execute;
+
+    let unit_txt = "\
+天使機
+天使機,てんし,リアル系,1,4
+陸宇,5,M,3000,400
+特殊能力なし
+3500,120,1200,110
+AAAA,Angel.bmp
+バルカン砲,200,1,1,10,99
+===
+癒しの言葉, 回復Lv1, 1, 2, 50, -, -
+";
+    let units = unit::parse(unit_txt).expect("unit parse");
+    let mut app = App::new();
+    app.database_mut().extend_units(units);
+
+    let src = "\
+Pilot アリス アリス 女性 超能力者 AAAA 100 100 100 100 100 100 100
+Pilot リオ リオ 男性 超能力者 AAAA 100 100 100 100 100 100 100
+Unit ブレイバー リアル系 1 0 陸 5 M 1000 100 3500 120 1200 110 AAAA
+Place 天使機 アリス Player 0 0
+Place ブレイバー リオ Player 1 0
+Damage リオ 800
+UseAbility アリス 癒しの言葉 リオ
+";
+    let stmts = src_core::data::event::parse(src).unwrap();
+    execute(&mut app, &stmts).unwrap();
+
+    assert_eq!(
+        unit_damage(&app, "ブレイバー"),
+        300,
+        "回復Lv1 (HP 500) が適用されていない"
+    );
+    let caster = find_unit_named(&app, "天使機").unwrap();
+    assert_eq!(
+        caster.abilities[0].stock_remaining,
+        Some(1),
+        "回数が消費されていない"
+    );
+    assert_eq!(caster.en_consumed, 50, "EN が消費されていない");
+    assert!(!caster.has_acted, "イベントからの使用で行動が消費された");
+}

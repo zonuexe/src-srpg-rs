@@ -321,6 +321,13 @@ impl App {
         d.abilities.get(idx).cloned()
     }
 
+    /// `caster` のユニットデータに名前 `name` のアビリティがあればその index を返す。
+    pub(crate) fn ability_index_by_name(&self, caster_uid: &str, name: &str) -> Option<usize> {
+        let u = self.database.unit_by_uid(caster_uid)?;
+        let d = self.database.unit_by_name(&u.unit_data_name)?;
+        d.abilities.iter().position(|a| a.name == name)
+    }
+
     /// アビリティが使用可能か (回数 / EN / 気力)。`アビリティ.md` の × 判定。
     pub(super) fn ability_usable(&self, caster_uid: &str, idx: usize) -> bool {
         let Some(u) = self.database.unit_by_uid(caster_uid) else {
@@ -527,8 +534,27 @@ impl App {
     /// アビリティを発動: 回数 / EN を消費し効果を `target` に適用する。
     /// 行動消費 (has_acted) は適用前に true をセットする (`再行動` 効果が解除しうる)。
     pub(super) fn apply_ability(&mut self, caster: &str, ability_idx: usize, target: &str) {
-        let Some(ab) = self.ability_at(caster, ability_idx) else {
+        if self.ability_at(caster, ability_idx).is_none() {
             return;
+        }
+        if let Some(u) = self.database.unit_by_uid_mut(caster) {
+            u.has_acted = true;
+        }
+        self.execute_ability(caster, ability_idx, target);
+    }
+
+    /// アビリティの本体: 回数 / EN を消費し、効果と属性を `target` (マップ型なら射程内の
+    /// 全有効対象) に適用する。行動消費・経験値・使用イベントは扱わない。
+    /// プレイヤー / AI の `apply_ability` と `.eve UseAbility` (C# `ExecuteAbility(..,
+    /// is_event: true)`) の共通経路。アビリティが無ければ `false`。
+    pub(crate) fn execute_ability(
+        &mut self,
+        caster: &str,
+        ability_idx: usize,
+        target: &str,
+    ) -> bool {
+        let Some(ab) = self.ability_at(caster, ability_idx) else {
+            return false;
         };
         // 回数を消費 (有限のみ)。
         if let Some(ci) = self.database.idx_by_uid(caster) {
@@ -547,10 +573,6 @@ impl App {
                 u.en_consumed += en;
             }
         }
-        // 行動消費を先に確定 (`再行動` 効果が後で解除しうる)。
-        if let Some(u) = self.database.unit_by_uid_mut(caster) {
-            u.has_acted = true;
-        }
         if ab.is_map_type() {
             // マップ型: 射程内の全有効対象へ効果と属性を適用する。
             self.apply_ability_area(caster, &ab);
@@ -564,6 +586,7 @@ impl App {
                 .unwrap_or_default();
             self.push_message(format!("アビリティ【{}】→ {tnick}", ab.display_name()));
         }
+        true
     }
 
     /// マップ型アビリティの効果を、射程内 (`Ｍ全` は盤上全体) の全有効対象へ
