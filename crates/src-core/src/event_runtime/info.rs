@@ -534,19 +534,20 @@ pub(super) fn info_map(app: &App, info: &str, sub: &[&str]) -> String {
         "時間帯" => app.time_of_day().to_string(), // (map 存在時も統一)
         _ => {
             // `Info(マップ, X, Y, ...)` 形式: info_kind ではなく X 座標が来た場合。
-            // 第 1 sub = X, 第 2 = Y, 第 3 = attr
-            let x: u32 = match info.parse() {
+            // 第 1 sub = X, 第 2 = Y, 第 3 = attr。座標は 1 始まりで、盤外は空
+            // (原典 `If mx < 1 Or MapWidth < mx Or my < 1 Or MapHeight < my Then Exit Function`)。
+            let x: i64 = match info.parse() {
                 Ok(v) => v,
                 Err(_) => return String::new(),
             };
-            let y: u32 = match sub.first().and_then(|s| s.to_string().parse().ok()) {
+            let y: i64 = match sub.first().and_then(|s| s.to_string().parse().ok()) {
                 Some(v) => v,
                 None => return String::new(),
             };
             let attr = sub.get(1).map(|s| s.trim().trim_matches('"')).unwrap_or("");
-            if x >= map.width || y >= map.height {
+            let Some((x, y)) = coord::checked_from_script(app, x, y) else {
                 return String::new();
-            }
+            };
             let cell = map.cell(x, y);
             // 地形テーブル参照（シナリオ定義 → ビルトイン → デフォルト値）
             let db = app.database();

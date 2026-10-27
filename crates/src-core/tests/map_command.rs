@@ -55,8 +55,10 @@ fn info_map_attr_works() {
     let app = run(r#"
 MapSize 3 3
 SetTile 1 1 5
-Set t Info("マップ",1,1,"地形タイプ")
+Set t Info("マップ",2,2,"地形タイプ")
 "#);
+    // `SetTile` (本移植独自) は内部座標 (0 始まり)、`Info(マップ, X, Y, …)` は
+    // 原典どおり 1 始まり。内部 (1, 1) = SRC (2, 2)。
     assert_eq!(app.script_var("t"), "5");
 }
 
@@ -81,9 +83,10 @@ MapSize 5 5
 Pilot "リオ" リオ 男性 超能力者 AAAA 100 100 100 100 100 100 100
 Unit "ブレイバー" リアル系 1 0 陸 5 M 1000 100 3500 120 1200 110 AAAA
 Place "ブレイバー" "リオ" Player 2 3
-Set u Info("マップ",2,3,"ユニットＩＤ")
-Set e Info("マップ",0,0,"ユニットＩＤ")
+Set u Info("マップ",3,4,"ユニットＩＤ")
+Set e Info("マップ",1,1,"ユニットＩＤ")
 "#);
+    // `Place` は内部 (2, 3) = SRC (3, 4)。SRC (1, 1) は空きセル。
     assert_eq!(
         app.script_var("u"),
         "ブレイバー",
@@ -187,13 +190,14 @@ fn unit_pos(app: &App, unit: &str) -> (u32, u32) {
 #[test]
 fn move_unit_by_name_updates_position() {
     let app = run_move("Move リオ 5 7\n");
-    assert_eq!(unit_pos(&app, "ブレイバー"), (5, 7));
+    // SRC (5, 7) = 内部 (4, 6)。
+    assert_eq!(unit_pos(&app, "ブレイバー"), (4, 6));
 }
 
 #[test]
 fn move_unit_by_unit_name_updates_position() {
     let app = run_move("Move ブレイバー 3 4\n");
-    assert_eq!(unit_pos(&app, "ブレイバー"), (3, 4));
+    assert_eq!(unit_pos(&app, "ブレイバー"), (2, 3));
 }
 
 #[test]
@@ -207,7 +211,8 @@ fn move_unit_offmap_unit_becomes_on_map() {
         .find(|u| u.unit_data_name == "ブレイバー")
         .unwrap();
     assert!(!inst.off_map, "Move でマップ外ユニットが再配置される");
-    assert_eq!((inst.x, inst.y), (1, 1));
+    // SRC (1, 1) = 左上隅 = 内部 (0, 0)。
+    assert_eq!((inst.x, inst.y), (0, 0));
 }
 
 // ============================================================

@@ -289,9 +289,14 @@ impl App {
         {
             let mode = ai_mode.trim();
             let toks: Vec<&str> = mode.split_whitespace().collect();
+            // 座標モードの `"X Y"` はスクリプトの値 (1 始まり) のまま保存されている。
             let coord = match toks.as_slice() {
-                [a, b] => match (a.parse::<u32>(), b.parse::<u32>()) {
-                    (Ok(x), Ok(y)) => Some((x, y)),
+                [a, b] => match (a.parse::<i64>(), b.parse::<i64>()) {
+                    (Ok(x), Ok(y)) => {
+                        let axis =
+                            |v| crate::event_runtime::coord::axis_from_script(v).max(0) as u32;
+                        Some((axis(x), axis(y)))
+                    }
                     _ => None,
                 },
                 _ => None,

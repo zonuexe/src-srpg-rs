@@ -269,3 +269,19 @@ L6 presentation : scene/* (レイアウト, ヒットテスト, ビューモデ�
 - `db.rs` は「静的データ集約」ではない（実行時の盤面を含む）。
 - 「ui/ を src-web が実装」は誤り（どこにも実装がない）。
 - モジュール表に flow, modal, necessary_skill, command_catalog, entrypoint, test_harness, battle_anim, script_overlay が載っていない。
+
+## 7. スクリプト座標の基準（2026-10-28）
+
+原典 SRC のマップ座標は左上隅が (1,1) の 1 始まり、本実装の盤面（`MapData` / `UnitInstance.x` / `.y`）は 0 始まり。`.eve` との境界では `event_runtime::coord` を必ず通して ±1 する。
+
+- **変換するもの（原典どおり 1 始まり）**:
+  - 盤内に丸める（原典 `If ux < 1 Then ux = 1 ElseIf ux > MapWidth Then ux = MapWidth`、`coord::clamp_from_script`）: `Create` / `Launch` / `Move` / `Center` / `Organize` / `MapAttack` / `MapAbility`、`UseAbility … 召喚 … X Y`（本移植の互換処理）。
+  - 盤外を拒む（`coord::checked_from_script`）: `ChangeTerrain`（原典は範囲エラー、本実装は no-op）、`Info(マップ, X, Y, …)`（原典どおり空）、`Talk` / `AutoTalk` の `X Y`（中央表示位置。原典 `CenterUnit` どおり盤外は無視、X か Y が 0 なら座標指定とみなさない）。
+  - 丸めずに 1 ずらす（`coord::axis_from_script`）: `Explode` の表示位置、`WX` / `WY` の数値引数、`ChangeMode` の座標モード（`ai_mode` には原典どおり 1 始まりの `"X Y"` を保存し、AI が目的地にするときに直す）。
+  - 内部 → スクリプト（`coord::to_script`）: `X()` / `Y()` の戻り値、`進入 <unit> <x> <y>:` ラベルの照合。
+- **変換しないもの**:
+  - `MapSize` / `SetTile` / `Place` / `MoveUnit` と `TerrainId()`。原典に無い本移植独自のデータ定義・テスト用の書式で、内部座標（0 始まり）を直接書く。テストとフィクスチャ（`crates/src-core/tests/`）がこの前提で大量に書かれており、1 始まりにすると `Place … 0 0` と `Place … 1 0` が同じマスに丸まるため、意図して内部座標のままにした。原典コマンドと混ぜると `Place … 2 3` のユニットの `X()` は 3 になる。
+  - 描画系コマンド（`PaintString` / `PaintPicture` / `Line` / `Circle` / `ClearPicture` / `HotPoint` ほか）と `MouseX` / `MouseY` / `BaseX` / `BaseY`。マップ座標ではなくピクセル座標。
+  - `脱出 <unit> <方向>` / `接触` など、座標を受け渡さないラベル。
+- **未実装（変換以前に無いもの）**:
+  - `X(目標地点)` / `Y(目標地点)` / `WX(目標地点)`（原典 `SelectedX` / `SelectedY`。`MapAttack` やマップコマンドで選んだ地点）。本実装は選択地点を保持していないので 0 を返す。実装するときは保持値を内部座標で持ち、`coord::to_script` で返す。

@@ -34,9 +34,12 @@ fn exec_mapattack(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         return Ok(pc + 1);
     }
     let n = xa.len();
-    // 座標は原典どおり `GetArgAsLong`。
-    let cx = c.long(app, n - 2).unwrap_or(0).max(0) as u32;
-    let cy = c.long(app, n - 1).unwrap_or(0).max(0) as u32;
+    // 座標は原典どおり `GetArgAsLong` で読み、盤内に丸める (1 始まり)。
+    let (cx, cy) = coord::clamp_from_script(
+        app,
+        c.long(app, n - 2).unwrap_or(0),
+        c.long(app, n - 1).unwrap_or(0),
+    );
     let weapon_name = xa[n - 3].clone();
     let unit_key = if n >= 4 {
         Some(xa[n - 4].clone())
@@ -54,8 +57,11 @@ fn exec_mapability(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         return Ok(pc + 1);
     }
     let n = xargs.len();
-    let cx = c.long(app, n - 2).unwrap_or(0).max(0) as u32;
-    let cy = c.long(app, n - 1).unwrap_or(0).max(0) as u32;
+    let (cx, cy) = coord::clamp_from_script(
+        app,
+        c.long(app, n - 2).unwrap_or(0),
+        c.long(app, n - 1).unwrap_or(0),
+    );
     let weapon_name = xargs[n - 3].clone();
     let unit_key = if n >= 4 {
         Some(xargs[n - 4].clone())
@@ -85,8 +91,9 @@ fn exec_explode(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         _ => 24.0,
     };
     let (cx, cy) = if xargs.len() >= 3 {
-        let x = c.long(app, 1).unwrap_or(0) as f64;
-        let y = c.long(app, 2).unwrap_or(0) as f64;
+        // 座標は 1 始まり。盤外の値も丸めずに表示位置へ換算する (原典 `ExplodeAnimation`)。
+        let x = coord::axis_from_script(c.long(app, 1).unwrap_or(0)) as f64;
+        let y = coord::axis_from_script(c.long(app, 2).unwrap_or(0)) as f64;
         // タイル座標から pixel に変換 (1 タイル = 32px)
         (x * 32.0 + 16.0, y * 32.0 + 16.0)
     } else {
@@ -166,9 +173,7 @@ fn exec_attack(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
 }
 
 fn exec_useability(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
-    let Cmd {
-        xargs, line, pc, ..
-    } = *c;
+    let Cmd { xargs, pc, .. } = *c;
     // SRC `UseAbility [unit] ability [target]` (`UseAbilityコマンド.md`):
     // ユニットに指定アビリティを発動させる。使用者のユニットデータに同名の
     // アビリティがあれば、プレイヤー / AI と同じ `App::execute_ability` で
@@ -383,9 +388,11 @@ fn exec_useability(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
             };
             if let Some((parent_uid, party, px, py)) = parent_pos {
                 let (sx, sy) = if xargs.len() >= 5 {
-                    (
-                        parse_u32(xargs, 3, line).unwrap_or(px),
-                        parse_u32(xargs, 4, line).unwrap_or(py),
+                    // 座標は他のコマンドと同じく 1 始まり。
+                    coord::clamp_from_script(
+                        app,
+                        c.long(app, 3).unwrap_or(0),
+                        c.long(app, 4).unwrap_or(0),
                     )
                 } else {
                     (px, py)

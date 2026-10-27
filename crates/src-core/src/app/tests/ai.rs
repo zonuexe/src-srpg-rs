@@ -439,7 +439,7 @@ fn ai_changemode_coord_lures_unit_toward_coordinate() {
     let foe = spawn_enemy(&mut app, "FoeData", 0, 0); // AI 敵ユニット
     app.set_stage_state(crate::stage::StageState::Battle);
     let fidx = app.database().idx_by_uid(&foe).unwrap();
-    app.database_mut().unit_instances[fidx].ai_mode = "20 0".to_string(); // 右方向へ誘導
+    app.database_mut().unit_instances[fidx].ai_mode = "21 1".to_string(); // 右方向へ誘導 (SRC 座標 = 内部 (20, 0))
 
     app.ai_act_unit(fidx);
 

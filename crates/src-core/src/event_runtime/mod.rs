@@ -1688,8 +1688,9 @@ fn is_paint_option(s: &str) -> bool {
     )
 }
 
-/// 評価済みの座標/サイズ引数を `u32` として読む (原典 `CInt(GetArgAsString(i))`)。
-/// 負値は 0 にクランプ。引数が無い / 数値でなければ 0。`Create` / `SetTile` 等の座標で使う。
+/// 評価済みの座標/サイズ引数を `u32` として読む。負値は 0 にクランプ。引数が無い /
+/// 数値でなければ 0。本移植独自の `SetTile` / `Place` 用で、内部座標 (0 始まり) を
+/// そのまま受ける (原典コマンドの 1 始まりの座標は `coord` で変換する)。
 fn eval_coord_u32(args: &[String], i: usize) -> u32 {
     args.get(i).map_or(0, |s| eval::str_to_lng(s).max(0) as u32)
 }
@@ -1752,6 +1753,7 @@ fn err(line_num: usize, message: &str) -> ScriptError {
 
 mod blocks;
 mod commands;
+pub mod coord;
 mod eval;
 use eval::condition_with_calls;
 mod expression;

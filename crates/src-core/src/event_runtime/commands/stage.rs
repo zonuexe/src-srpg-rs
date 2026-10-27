@@ -271,8 +271,13 @@ fn exec_organize(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     }
     // 数・座標は原典どおり `GetArgAsLong`。
     let count = c.long(app, 0).unwrap_or(0).max(0) as usize;
-    let cx = c.long(app, 1).unwrap_or(0) as i32;
-    let cy = c.long(app, 2).unwrap_or(0) as i32;
+    // 中心は 1 始まりで盤内に丸める (原典 `ExecOrganizeCmd`)。
+    let (cx, cy) = coord::clamp_from_script(
+        app,
+        c.long(app, 1).unwrap_or(0),
+        c.long(app, 2).unwrap_or(0),
+    );
+    let (cx, cy) = (cx as i32, cy as i32);
     // 配置済 (! off_map) の Player ユニットは触らず、off_map なものから
     // 配置する。何も off_map に無い場合は no-op。
     let (mw, mh) = app
@@ -427,7 +432,8 @@ fn exec_changemode(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     } = *c;
     // SRC `ChangeMode [unit] mode` (`ChangeModeコマンド.md`): ユニットの思考モードを
     // `ai_mode` に設定する。mode が座標 `X Y` のときは原典 `ExecChangeModeCmd` どおり
-    // `GetArgAsLong` で読み、`"X Y"` として保存する (AI が目的地として使う)。
+    // `GetArgAsLong` で読み、`"X Y"` (1 始まりのまま) として保存する (AI が目的地として
+    // 使うときに内部座標へ直す)。
     // 引数 2 個は、両方が数値なら選択中ユニットの座標モード、そうでなければ `unit mode`。
     let coord = |i: usize| {
         format!(
@@ -507,10 +513,12 @@ fn exec_changeterrain(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
             "ChangeTerrain 命令は 4 引数必要 (X Y name bitmap)。",
         ));
     }
-    // 座標・ビットマップ番号は原典どおり `GetArgAsLong`。範囲外は no-op。
-    let (Ok(x), Ok(y)) = (
-        u32::try_from(c.long(app, 0).unwrap_or(0)),
-        u32::try_from(c.long(app, 1).unwrap_or(0)),
+    // 座標・ビットマップ番号は原典どおり `GetArgAsLong`。座標は 1 始まりで、
+    // 範囲外 (原典はエラー) とマップ未定義は no-op。
+    let Some((x, y)) = coord::checked_from_script(
+        app,
+        c.long(app, 0).unwrap_or(0),
+        c.long(app, 1).unwrap_or(0),
     ) else {
         return Ok(pc + 1);
     };
@@ -538,16 +546,14 @@ fn exec_changeterrain(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         return Ok(pc + 1);
     };
     if let Some(map) = app.database_mut().map.as_mut() {
-        if x < map.width && y < map.height {
-            map.set_cell(
-                x,
-                y,
-                MapCell {
-                    terrain_id: tid,
-                    bitmap_no: bitmap,
-                },
-            );
-        }
+        map.set_cell(
+            x,
+            y,
+            MapCell {
+                terrain_id: tid,
+                bitmap_no: bitmap,
+            },
+        );
     }
     Ok(pc + 1)
 }
