@@ -80,7 +80,7 @@ nix --extra-experimental-features 'nix-command flakes' develop --command just <r
 
 | モジュール | 役割 |
 |-----------|------|
-| `app/` | 上位状態機械・ゲーム全体制御 (`App`)。`mod.rs` は構造体とアクセサ、`impl App` は責務別ファイル (`stage_flow` / `battle` / `combat_rules` / `ai` / `reaction` / `spirit` / `unit_commands` / `input` / `intermission` / `dialog` / `script_flow` / `vfs` / `status_detail` / `debug`) に分割 |
+| `app/` | 上位状態機械・ゲーム全体制御 (`App`)。`mod.rs` は構造体とアクセサ、`impl App` は責務別ファイル (`stage_flow` / `battle` / `map_attack` / `combat_rules` / `ai` / `reaction` / `spirit` / `unit_commands` / `input` / `intermission` / `dialog` / `script_flow` / `vfs` / `status_detail` / `debug`) に分割 |
 | `db.rs` | 静的データ (`units` / `pilots` 等) と実行時の盤面 (`unit_instances` / `map` / 位置索引) を持つ `GameDatabase`。ユニット除去は `remove_unit*` / `remove_units_where` 経由 (位置索引の同期) |
 | `data/` | データパーサー（pilot.txt / unit.txt / map.txt 等、`necessary.rs` は `(必要技能)` 切り離し） |
 | `unit_instance.rs` | マップ上のユニット実体（位置・所属勢力・状態） |
@@ -90,10 +90,10 @@ nix --extra-experimental-features 'nix-command flakes' develop --command just <r
 | `condition.rs` | 状態異常・精神コマンド効果 |
 | `feature.rs` | ユニット特殊能力・スキル有効化判定 |
 | `item_slot.rs` | 装備スロット管理 |
-| `event_runtime/` | `.eve` イベントスクリプト実行 (`ScriptContext`, `execute()`)。各コマンドの本体は `commands/` 以下のカテゴリ別モジュール (1 コマンド 1 関数)。ほかに `library` / `labels` (自動発火) / `vars` / `expression` (式評価) / `functions` / `info` / `blocks` / `unit_effects`。ユニットへの作用はなるべく App のドメイン関数 (`set_unit_form` / `execute_ability` / `execute_spirit_by_event` / `script_attack` 等) を呼ぶ |
+| `event_runtime/` | `.eve` イベントスクリプト実行 (`ScriptContext`, `execute()`)。各コマンドの本体は `commands/` 以下のカテゴリ別モジュール (1 コマンド 1 関数)。組み込み関数は `functions/` 以下のカテゴリ別モジュール。ほかに `library` / `labels` (自動発火) / `vars` / `expression` (式評価) / `info` / `blocks` / `unit_effects`。ユニットへの作用はなるべく App のドメイン関数 (`set_unit_form` / `execute_ability` / `execute_spirit_by_event` / `script_attack` 等) を呼ぶ |
 | `util/` | App 非依存の純粋ユーティリティ (SJIS 文字列・全角変換・Like・VB 数値書式) |
 | `necessary_skill.rs` | 必要技能 / 必要条件の評価 (武器ゲート `weapon_usable_by`) |
-| `combat.rs` | 戦闘予測・実行（命中率・ダメージ計算） |
+| `combat.rs` | 戦闘予測（命中率・ダメージ計算）とマップ攻撃の効果範囲。App 側の実行は `app/battle.rs` (`strike_preview` / `resolve_strike`) と `app/map_attack.rs` |
 | `movement.rs` | 移動範囲計算（Dijkstra） |
 | `scene/` | シーン状態 (`Scene`)・レイアウト・ヒットテスト・ビューモデル型 |
 | `turn.rs` | ターン / フェーズ管理 |

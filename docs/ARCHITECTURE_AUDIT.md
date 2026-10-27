@@ -12,17 +12,18 @@
 | 3. テスト外出し | 済 | `app/tests.rs`、`event_runtime/tests.rs`（トピック別の再分割は未） |
 | 4. CLAUDE.md 修正 | 済 | §6 の記述ずれをすべて修正 |
 | 5. `impl App` 分割 | 済 | app/mod.rs 1,564 行 + 子モジュール 14 個 |
-| 6. event_runtime 分割 | 済 | 周辺関数を 8 個の子モジュールへ。`exec_command_pc` の 186 アームを 1 コマンド 1 関数にして `commands/` 以下の 10 カテゴリへ（mod.rs 約 7,000 → 1,687 行）。`eval_script_function` の分割は未 |
+| 6. event_runtime 分割 | 済 | 周辺関数を 8 個の子モジュールへ。`exec_command_pc` の 186 アームを 1 コマンド 1 関数にして `commands/` 以下の 10 カテゴリへ（mod.rs 約 7,000 → 1,687 行）。`eval_script_function` の 133 関数も `functions/` 以下の 5 カテゴリへ |
 | 7. ビューモデル・ジオメトリを scene/ へ | 未 | |
 | 8. B1〜B3 修正 | 済 | 回帰テスト 4 件を追加（すべて修正前に失敗することを確認） |
-| 9. `.eve` コマンドをドメイン経路へ | 一部 | SpecialPower / Mind → `execute_spirit_by_event`、Transform → `set_unit_form`、UseAbility → `execute_ability`、Attack → `script_attack`（`resolve_strike` を本線攻撃と共有）。`map_attack*` の combat.rs 移動は未 |
-| 10. 戦闘の一本化 | 一部 | 命中・ダメージ判定を `resolve_strike` に切り出し、本線攻撃と `.eve Attack` で共有。援護攻撃・反撃・先制反撃は未 |
+| 9. `.eve` コマンドをドメイン経路へ | 一部 | SpecialPower / Mind → `execute_spirit_by_event`、Transform → `set_unit_form`、UseAbility → `execute_ability`、Attack → `script_attack`（`resolve_strike` を本線攻撃と共有）。マップ攻撃は範囲計算を `combat::map_attack_area`、本体を `App::execute_map_attack` へ移動 |
+| 10. 戦闘の一本化 | 一部 | 予測の組み立てを `strike_preview` に一本化（本線・援護攻撃・反撃）。命中後の判定 `resolve_strike` は本線攻撃と `.eve Attack` のみ。援護攻撃・反撃はクリティカル / 切り払い / 即死を判定しない（下記、要検証）。src-web の予測表示は未 |
 | 11〜13 | 未 | |
 
 作業中に見つかった追加の課題:
 - **sp.txt の効果行**: 旧パーサは効果を `,` で区切っていたが、実データと C# `ToList` は空白区切り（`挑発 命中率低下Lv5`）。修正済。
 - **`.eve Attack`**: 旧実装は命中判定なし・基本データの簡易式で、撃破したユニットを HP 0 以下のまま盤面に残していた。修正済（`script_attack`）。
 - **`.eve UseAbility`**: 旧実装はアビリティ名で効果を決め打ちし、ユニットデータの効果を見ていなかった。データにあればそれを使うよう修正済。データに無い名前は旧処理にフォールバックする。
+- **援護攻撃・反撃の判定差**（要検証）: 本線攻撃はクリティカル・切り払い・即死を判定するが、援護攻撃（ダメージ ×0.75）と反撃は命中ロールだけで、これらを判定しない。原典では反撃も通常の攻撃処理を通るはずなので、C# oracle で確認してから `resolve_strike` に寄せる（乱数の消費列が変わる）。
 - **`.eve Transform` の変形イベント**（決定: 現状維持）: C# `TransformCmd` は変形イベントを発火しないが、本移植は `Combine` と揃えて発火する（fixture 21 で固定）。2026-10-27 にユーザ判断で確定。
 - **B7**: 援護防御の発動判定 `try_find_support_guard`（app/battle.rs）は、最大 HP に基本値（`unit_by_name(..).hp`）を使っていた。戦闘本体は実効 HP を使うので、改造機や BossRank 機では発動閾値が食い違っていた。修正済（回帰テスト 1 件）。
 
