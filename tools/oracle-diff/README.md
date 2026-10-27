@@ -67,7 +67,7 @@ paste -d'~' /tmp/p.txt /tmp/cs.txt /tmp/rs.txt | awk -F'~' '$2!=$3{print}'
 構文解析した `If <probe> Then` の真偽 (`AIfCmd.Evaluate()`) をタブ区切りで出す。
 Rust 側 [`oracle_paths`](../verify-archive/src/bin/oracle_paths.rs) は本実装の評価経路ごと
 (`Eval()` / `=` 代入 / `If` / メニュー条件 / 統一評価器の値 / 統一評価器の If) に評価して出す。
-コーパスは [`paths.txt`](paths.txt) と [`paths_ext.txt`](paths_ext.txt)。
+コーパスは [`paths.txt`](paths.txt) / [`paths_ext.txt`](paths_ext.txt) / [`paths_func.txt`](paths_func.txt) (組み込み関数の引数)。
 
 ```sh
 # C#

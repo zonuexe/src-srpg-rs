@@ -32,7 +32,8 @@
   - 意図的な差: `\` / `Mod` の非整数オペランドは VB6 どおり整数へ丸める（C# と異なる）。`Mod 0` は 0（VB6 は実行時エラー、C# は NaN）。C# は `If` の項数を記録し忘れていてパイロット名の判定が効かないが、本実装は VB6 どおり。
   - 本移植の拡張（原典ではエラーか無意味な書き方だけを救済）: クォート外の `$(...)`、`IsDead` / `IsAlive` / `Killed` / `Alive`、`Set var a b`（複数項）。
   - コマンド引数も原典 `GetArgAsString` どおり評価器で評価するよう移した（oracle `args` / `scenario_args` で C# と一致）。原典が原文のまま使う位置（`CmdData.cls` の `GetArg`: 変数名・ラベル・キーワード・ファイルハンドル）は評価しない。評価済みの値を `fn_arg_value` / `expand_vars` で再解決していた箇所を除去し、`Talk` 本文 / `Ask` 選択肢は `FormatMessage` どおり `$(...)` だけを展開する。`Print …;`（改行なし）も原典どおりにした（戦闘アニメ定義の 1 行が 3 行に割れていた）。
-  - 未対応（後続）: 組み込み関数の引数は今も `fn_arg_value` + `expand_vars`（原典は `GetValueAsString(param, is_term)`。ユーザ定義関数の引数は `eval::param_value` に移行済み）。`Switch` / `Case` の比較は `eval_binop`。数値引数の多くは評価済み文字列を各コマンドが数値化しており、原典の `GetArgAsLong`（引用符付き文字列は 0）より寛容。
+  - 組み込み関数の引数も原典 `GetValueAsString(param, is_term)` どおり評価してから渡すようにした（`eval::param_value`。`IsVarDefined` / `Count` / `IIf` は原文）。oracle `paths_func.txt` で C# と一致（本移植独自の `UCase` / `Sgn` を除く）。これで値の解決はすべて評価器を通り、`fn_arg_value` は削除した。
+  - 未対応（後続）: `Switch` / `Case` の比較は `eval_binop`。数値引数の多くは評価済み文字列を各コマンドが数値化しており、原典の `GetArgAsLong`（引用符付き文字列は 0）より寛容。`$(...)` の展開は `expand_vars`（`Talk` 本文以外の一部経路）と `eval::replace_sub_expression` の 2 実装が残る。
 - **援護攻撃・反撃の判定差**（要検証）: 本線攻撃はクリティカル・切り払い・即死を判定するが、援護攻撃（ダメージ ×0.75）と反撃は命中ロールだけで、これらを判定しない。原典では反撃も通常の攻撃処理を通るはずなので、C# oracle で確認してから `resolve_strike` に寄せる（乱数の消費列が変わる）。
 - **`.eve Transform` の変形イベント**（決定: 現状維持）: C# `TransformCmd` は変形イベントを発火しないが、本移植は `Combine` と揃えて発火する（fixture 21 で固定）。2026-10-27 にユーザ判断で確定。
 - **B7**: 援護防御の発動判定 `try_find_support_guard`（app/battle.rs）は、最大 HP に基本値（`unit_by_name(..).hp`）を使っていた。戦闘本体は実効 HP を使うので、改造機や BossRank 機では発動閾値が食い違っていた。修正済（回帰テスト 1 件）。
