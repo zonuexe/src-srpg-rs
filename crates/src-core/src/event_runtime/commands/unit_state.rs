@@ -208,6 +208,7 @@ fn exec_setskill(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         // PilotData の名前 / 通称でも探す
         let pname = app
             .database()
+            .catalog
             .pilots
             .iter()
             .find(|p| p.name == pilot_key || p.nickname == pilot_key)
@@ -322,7 +323,13 @@ fn exec_setbullet(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         .find(|u| matches_unit_handle(u, &unit_name))
         .map(|u| u.unit_data_name.clone());
     if let Some(d) = data_name {
-        if let Some(unit_data) = app.database_mut().units.iter_mut().find(|u| u.name == d) {
+        if let Some(unit_data) = app
+            .database_mut()
+            .catalog
+            .units
+            .iter_mut()
+            .find(|u| u.name == d)
+        {
             if let Some(w) = unit_data.weapons.iter_mut().find(|w| w.name == weapon_name) {
                 w.bullet = n;
             }
@@ -850,7 +857,7 @@ fn exec_recoversp(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         app.database().unit_instances.iter().position(|u| {
             matches_unit_handle(u, &pilot_key)
                 || u.pilot_name == pilot_key
-                || app.database().pilots.iter().any(|p| {
+                || app.database().catalog.pilots.iter().any(|p| {
                     (p.name == pilot_key || p.nickname == pilot_key) && u.pilot_name == p.name
                 })
         });

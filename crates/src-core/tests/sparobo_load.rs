@@ -197,7 +197,7 @@ fn sparobo_scenario_loads_without_crashing() {
     );
     // 3) 取り込んだユニット / パイロットが 0 件ではない
     assert!(
-        !app.database().pilots.is_empty() || !app.database().units.is_empty(),
+        !app.database().catalog.pilots.is_empty() || !app.database().catalog.units.is_empty(),
         "pilot / unit data が取り込まれていない"
     );
 
@@ -660,14 +660,16 @@ fn sparobo_title_drive_reaches_intermission() {
         // 武器 (射程1) を持つ UnitData を探す
         let att_unit_opt = app
             .database()
+            .catalog
             .units
             .iter()
             .find(|u| src_core::combat::best_weapon_in_range(u, 1).is_some());
         // 任意の 2 パイロット (同じでもよい)
-        let pilot_opt = app.database().pilots.first();
+        let pilot_opt = app.database().catalog.pilots.first();
         // 適当な防御側 UnitData (攻撃側と異なるものを優先、なければ同じ)
         let def_unit_opt = app
             .database()
+            .catalog
             .units
             .iter()
             .find(|u| att_unit_opt.is_some_and(|a| a.name != u.name))
@@ -877,7 +879,7 @@ fn sparobo_character_making_creates_pilot() {
     );
 
     // ---- キャラクターメイキングを駆動 ----
-    let pilots_before = app.database().pilots.len();
+    let pilots_before = app.database().catalog.pilots.len();
     let cmaking_idx = (0..app.intermission_item_count())
         .find(|i| app.intermission_item_label(*i).as_deref() == Some("キャラクターメイキング"))
         .expect("キャラクターメイキング 項目");
@@ -936,13 +938,13 @@ fn sparobo_character_making_creates_pilot() {
                 }
             }
         }
-        let pilots_now = app.database().pilots.len();
+        let pilots_now = app.database().catalog.pilots.len();
         if pilots_now > pilots_before {
             eprintln!("[cmaking step {step}] pilot 増加検出: {pilots_before} → {pilots_now}");
             break;
         }
     }
-    let pilots_after = app.database().pilots.len();
+    let pilots_after = app.database().catalog.pilots.len();
     eprintln!(
         "[cmaking] pilots: {pilots_before} → {pilots_after} / units={} / script_err={:?}",
         app.database().unit_instances.len(),

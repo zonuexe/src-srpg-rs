@@ -237,9 +237,9 @@ Message \"出撃せよ\"
     assert_eq!(map.width, 4);
     assert_eq!(map.height, 3);
     assert_eq!(map.cell(1, 1).terrain_id, 2);
-    assert_eq!(app.database().pilots.len(), 1);
-    assert_eq!(app.database().units.len(), 1);
-    assert_eq!(app.database().units[0].weapons.len(), 1);
+    assert_eq!(app.database().catalog.pilots.len(), 1);
+    assert_eq!(app.database().catalog.units.len(), 1);
+    assert_eq!(app.database().catalog.units[0].weapons.len(), 1);
     assert_eq!(app.database().unit_instances.len(), 1);
     assert_eq!(app.turn().number, 1);
     assert_eq!(app.messages(), &["出撃せよ".to_string()]);
@@ -1601,7 +1601,12 @@ fn removepilot_removes_pilot_def() {
     let src = "RemovePilot ガロ\n";
     let stmts = event::parse(src).unwrap();
     execute(&mut app, &stmts).unwrap();
-    assert!(app.database().pilots.iter().all(|p| p.name != "ガロ"));
+    assert!(app
+        .database()
+        .catalog
+        .pilots
+        .iter()
+        .all(|p| p.name != "ガロ"));
 }
 
 #[test]
@@ -1678,18 +1683,21 @@ LevelUp ブレイバー 2
 fn setup_units_with_item(app: &mut App) {
     setup_two_units(app);
     // Item を定義に追加 (Item 命令から参照される ItemData)
-    app.database_mut().items.push(crate::data::item::ItemData {
-        name: "ハイブリッドアーマー".to_string(),
-        class: "armor".to_string(),
-        part: "本体".to_string(),
-        hp_mod: 500,
-        en_mod: 50,
-        armor_mod: 100,
-        mobility_mod: 10,
-        speed_mod: 1,
-        comment: String::new(),
-        features: Vec::new(),
-    });
+    app.database_mut()
+        .catalog
+        .items
+        .push(crate::data::item::ItemData {
+            name: "ハイブリッドアーマー".to_string(),
+            class: "armor".to_string(),
+            part: "本体".to_string(),
+            hp_mod: 500,
+            en_mod: 50,
+            armor_mod: 100,
+            mobility_mod: 10,
+            speed_mod: 1,
+            comment: String::new(),
+            features: Vec::new(),
+        });
 }
 
 #[test]
@@ -1740,18 +1748,21 @@ RemoveItem ブレイバー ハイブリッドアーマー
 fn exchangeitem_swaps() {
     let mut app = App::new();
     setup_units_with_item(&mut app);
-    app.database_mut().items.push(crate::data::item::ItemData {
-        name: "メガランチャー".to_string(),
-        class: "weapon".to_string(),
-        part: "本体".to_string(),
-        hp_mod: 0,
-        en_mod: 100,
-        armor_mod: 0,
-        mobility_mod: 0,
-        speed_mod: 0,
-        comment: String::new(),
-        features: Vec::new(),
-    });
+    app.database_mut()
+        .catalog
+        .items
+        .push(crate::data::item::ItemData {
+            name: "メガランチャー".to_string(),
+            class: "weapon".to_string(),
+            part: "本体".to_string(),
+            hp_mod: 0,
+            en_mod: 100,
+            armor_mod: 0,
+            mobility_mod: 0,
+            speed_mod: 0,
+            comment: String::new(),
+            features: Vec::new(),
+        });
     let src = "\
 Item ブレイバー ハイブリッドアーマー
 ExchangeItem ブレイバー ハイブリッドアーマー メガランチャー
@@ -2061,11 +2072,12 @@ fn setbullet_updates_weapon_ammo() {
     // 簡易の weapons は無いので付与してから
     let unit_idx = app
         .database_mut()
+        .catalog
         .units
         .iter_mut()
         .position(|u| u.name == "ブレイバー")
         .unwrap();
-    app.database_mut().units[unit_idx]
+    app.database_mut().catalog.units[unit_idx]
         .weapons
         .push(crate::data::unit::WeaponData {
             name: "ビームライフル".to_string(),
@@ -3049,8 +3061,11 @@ fn feature_necessary_skill_gates_is_active() {
     };
     // ザコ (撃墜数なし) → 分身 無効、装甲 有効。
     let mut app = App::new();
-    app.database_mut().units.push(make_unit());
-    app.database_mut().pilots.push(make_pilot("ザコ", vec![]));
+    app.database_mut().catalog.units.push(make_unit());
+    app.database_mut()
+        .catalog
+        .pilots
+        .push(make_pilot("ザコ", vec![]));
     let mut zako =
         crate::unit_instance::UnitInstance::new("分身機", "ザコ", crate::Party::Player, 0, 0);
     populate_active_features(&mut zako, &app);
@@ -3064,8 +3079,9 @@ fn feature_necessary_skill_gates_is_active() {
     );
     // エース (撃墜数Lv100) → 分身 有効。
     let mut app2 = App::new();
-    app2.database_mut().units.push(make_unit());
+    app2.database_mut().catalog.units.push(make_unit());
     app2.database_mut()
+        .catalog
         .pilots
         .push(make_pilot("エース", vec![("撃墜数Lv100", "1")]));
     let mut ace =
@@ -3082,34 +3098,37 @@ fn info_returns_features_from_parsed_unit_txt() {
     // unit.txt 由来の features を Info で参照できる。
     // 直接 UnitData を database に積んで、parser を介さずに動作確認。
     let mut app = App::new();
-    app.database_mut().units.push(crate::data::unit::UnitData {
-        abilities: Vec::new(),
-        name: "マグナＺ".into(),
-        kana_name: "まぐなぜっと".into(),
-        nickname: "マグナＺ".into(),
-        class: "汎用".into(),
-        pilot_num: 1,
-        item_num: 3,
-        transportation: "陸".into(),
-        speed: 5,
-        size: Size::M,
-        value: 6000,
-        exp_value: 150,
-        hp: 4700,
-        en: 120,
-        armor: 1500,
-        mobility: 55,
-        adaption: Adaption::parse("AAAA").unwrap(),
-        bitmap: "MGZ_MagnaZ.bmp".into(),
-        weapons: Vec::new(),
-        features: vec![
-            (
-                "全身画像".into(),
-                "非表示 Anime\\Unit\\EC_MGZ.bmp 96 96".into(),
-            ),
-            ("ブースト".into(), "マジンパワー".into()),
-        ],
-    });
+    app.database_mut()
+        .catalog
+        .units
+        .push(crate::data::unit::UnitData {
+            abilities: Vec::new(),
+            name: "マグナＺ".into(),
+            kana_name: "まぐなぜっと".into(),
+            nickname: "マグナＺ".into(),
+            class: "汎用".into(),
+            pilot_num: 1,
+            item_num: 3,
+            transportation: "陸".into(),
+            speed: 5,
+            size: Size::M,
+            value: 6000,
+            exp_value: 150,
+            hp: 4700,
+            en: 120,
+            armor: 1500,
+            mobility: 55,
+            adaption: Adaption::parse("AAAA").unwrap(),
+            bitmap: "MGZ_MagnaZ.bmp".into(),
+            weapons: Vec::new(),
+            features: vec![
+                (
+                    "全身画像".into(),
+                    "非表示 Anime\\Unit\\EC_MGZ.bmp 96 96".into(),
+                ),
+                ("ブースト".into(), "マジンパワー".into()),
+            ],
+        });
     // 特殊能力データ
     assert_eq!(
         eval::value_as_string(
@@ -3622,7 +3641,7 @@ Removepilot パイロット不在
         .count();
     assert_eq!(off_map_count, 2);
     // パイロット定義は両方とも除去済み
-    assert!(app.database().pilots.is_empty());
+    assert!(app.database().catalog.pilots.is_empty());
 }
 
 #[test]
@@ -3913,6 +3932,7 @@ fn split_reads_separation_feature() {
     use crate::data::unit::{Size, UnitData};
     let mut app = App::new();
     app.database_mut()
+        .catalog
         .pilots
         .push(crate::data::pilot::PilotData {
             spirit_commands: Vec::new(),
@@ -3957,9 +3977,9 @@ fn split_reads_separation_feature() {
         weapons: Vec::new(),
         features: vec![("分離".to_string(), "非表示 ベースA ベースB".to_string())],
     };
-    app.database_mut().units.push(merged);
+    app.database_mut().catalog.units.push(merged);
     // 分離先のユニットデータ
-    app.database_mut().units.push(UnitData {
+    app.database_mut().catalog.units.push(UnitData {
         abilities: Vec::new(),
         name: "ベースA".into(),
         kana_name: "ベースA".into(),
@@ -4001,6 +4021,7 @@ fn split_fires_separation_event_label() {
     use crate::data::unit::{Size, UnitData};
     let mut app = App::new();
     app.database_mut()
+        .catalog
         .pilots
         .push(crate::data::pilot::PilotData {
             spirit_commands: Vec::new(),
@@ -4045,8 +4066,8 @@ fn split_fires_separation_event_label() {
         weapons: Vec::new(),
         features: vec![("分離".to_string(), "非表示 ベースA ベースB".to_string())],
     };
-    app.database_mut().units.push(merged);
-    app.database_mut().units.push(UnitData {
+    app.database_mut().catalog.units.push(merged);
+    app.database_mut().catalog.units.push(UnitData {
         abilities: Vec::new(),
         name: "ベースA".into(),
         kana_name: "ベースA".into(),
@@ -4189,7 +4210,7 @@ Return
     assert_eq!(app.script_var("post_pilot"), "1", "攻撃後 リオ ガロ が発火");
 
     // 撃破済 (defender 不在) は post fire しない。
-    app.database_mut().unit_instances.remove(def_idx);
+    app.database_mut().remove_unit_at(def_idx);
     app.set_script_var("post_pilot".into(), "0".into());
     fire_after_attack_event_labels(&mut app, &atk, &def);
     assert_eq!(
@@ -4441,7 +4462,7 @@ Return
         "使用後 リオ ライフル が発火"
     );
     // 使用後: attacker 撃破済なら発火しない
-    app.database_mut().unit_instances.clear();
+    app.database_mut().remove_units_where(|_| true);
     app.set_script_var("post_pilot".into(), "0".into());
     fire_after_use_event_labels(&mut app, &atk, "ライフル");
     assert_eq!(
@@ -4885,7 +4906,7 @@ Place ゾルダ ガロ 敵 5 5
     let stmts = event::parse(src).unwrap();
     let mut app = App::new();
     execute(&mut app, &stmts).unwrap();
-    app.database_mut().pilots[0].sp = Some(10);
+    app.database_mut().catalog.pilots[0].sp = Some(10);
     // 魂 (cost 60) は残り SP 10 を超えるが、イベントからは発動する。
     execute(&mut app, &event::parse("SpecialPower ガロ 魂\n").unwrap()).unwrap();
     let u = &app.database().unit_instances[0];
@@ -4945,7 +4966,7 @@ Place ゾルダ ガロ 敵 5 5
     let stmts = event::parse(src).unwrap();
     let mut app = App::new();
     execute(&mut app, &stmts).unwrap();
-    app.database_mut().pilots[0].sp = Some(60);
+    app.database_mut().catalog.pilots[0].sp = Some(60);
     app.database_mut().unit_instances[0].sp_consumed = 60;
     // RecoverSP で全回復 (SRC仕様: pilot + rate の2引数)
     execute(&mut app, &event::parse("RecoverSP ガロ 100\n").unwrap()).unwrap();
@@ -5724,21 +5745,24 @@ fn itemid_function_returns_item_name() {
     assert_eq!(app.script_var("id2"), "");
 }
 
-/// テスト用に `database().items` (アイテム DB) へ名称のみのアイテムを登録する。
+/// テスト用に `database().catalog.items` (アイテム DB) へ名称のみのアイテムを登録する。
 /// `ItemData` は Default を持たないため全フィールドを明示する。
 fn push_item_named(app: &mut App, name: &str) {
-    app.database_mut().items.push(crate::data::item::ItemData {
-        name: name.to_string(),
-        class: String::new(),
-        part: String::new(),
-        hp_mod: 0,
-        en_mod: 0,
-        armor_mod: 0,
-        mobility_mod: 0,
-        speed_mod: 0,
-        comment: String::new(),
-        features: Vec::new(),
-    });
+    app.database_mut()
+        .catalog
+        .items
+        .push(crate::data::item::ItemData {
+            name: name.to_string(),
+            class: String::new(),
+            part: String::new(),
+            hp_mod: 0,
+            en_mod: 0,
+            armor_mod: 0,
+            mobility_mod: 0,
+            speed_mod: 0,
+            comment: String::new(),
+            features: Vec::new(),
+        });
 }
 
 #[test]

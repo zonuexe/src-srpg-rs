@@ -46,6 +46,7 @@ fn exec_makepilotlist(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     let mode = xargs.first().cloned().unwrap_or_default();
     let pilot_names: Vec<String> = app
         .database()
+        .catalog
         .pilots
         .iter()
         .map(|p| p.name.clone())
@@ -1050,7 +1051,8 @@ fn exec_removepilot(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     }
     let target = xargs[0].to_string();
     let db = app.database_mut();
-    db.pilots
+    db.catalog
+        .pilots
         .retain(|p| p.name != target && p.nickname != target);
     Ok(pc + 1)
 }

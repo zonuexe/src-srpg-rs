@@ -528,6 +528,7 @@ RemovePilot リオ
     event_runtime::execute(&mut app, &stmts).expect("execute");
     let names: Vec<&str> = app
         .database()
+        .catalog
         .pilots
         .iter()
         .map(|p| p.name.as_str())
@@ -547,7 +548,7 @@ RemovePilot 存在しない
     )
     .expect("parse");
     event_runtime::execute(&mut app, &stmts).expect("execute");
-    assert_eq!(app.database().pilots.len(), 1);
+    assert_eq!(app.database().catalog.pilots.len(), 1);
 }
 
 // ============================================================
@@ -745,7 +746,12 @@ fn unit_short_form_does_not_break_data_definition() {
     // 14+ 引数の `Unit` データ定義形式は従来通り UnitData を登録する
     // (短い形式の追加で誤って instance 化されないこと)。
     let app = run_setup(r#"Unit "テスト機" リアル系 1 0 陸 5 M 1000 100 2000 80 800 70 AAAA"#);
-    assert!(app.database().units.iter().any(|u| u.name == "テスト機"));
+    assert!(app
+        .database()
+        .catalog
+        .units
+        .iter()
+        .any(|u| u.name == "テスト機"));
     assert!(
         !app.database()
             .unit_instances

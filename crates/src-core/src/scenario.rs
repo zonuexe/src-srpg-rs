@@ -133,7 +133,7 @@ pub fn ingest_data_file(app: &mut App, name: &str, text: &str) -> Option<DataIng
         }
         DataKind::Animation => {
             db.merge_animation_data(text);
-            (db.animation.entries.len(), Vec::new())
+            (db.catalog.animation.entries.len(), Vec::new())
         }
         DataKind::Map => match mapdata::parse(text) {
             // `ChangeMap` で参照されるので basename で保存する。

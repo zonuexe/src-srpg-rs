@@ -49,8 +49,7 @@ fn check_victory_defers_clear_but_fires_defeat() {
     app.stage_state = crate::stage::StageState::Battle;
     // 味方 1 + 敵対する中立 1 (敵ユニットは既に全滅)。
     app.database
-        .unit_instances
-        .push(crate::unit_instance::UnitInstance::new(
+        .register_unit(crate::unit_instance::UnitInstance::new(
             "U_P",
             "P",
             crate::Party::Player,
@@ -58,8 +57,7 @@ fn check_victory_defers_clear_but_fires_defeat() {
             1,
         ));
     app.database
-        .unit_instances
-        .push(crate::unit_instance::UnitInstance::new(
+        .register_unit(crate::unit_instance::UnitInstance::new(
             "U_N",
             "N",
             crate::Party::Neutral,
@@ -76,8 +74,7 @@ fn check_victory_defers_clear_but_fires_defeat() {
 
     // 味方を全滅させると組込み敗北が確実に発火する。
     app.database
-        .unit_instances
-        .retain(|u| u.party != crate::Party::Player);
+        .remove_units_where(|u| u.party == crate::Party::Player);
     app.check_victory();
     assert_eq!(
         app.stage_state,
@@ -98,8 +95,7 @@ fn enemy_wipe_with_only_kuria_label_fires_kuria_and_clears() {
     app.stage_state = crate::stage::StageState::Battle;
     // 味方 1 のみ (敵・中立は全滅済み)。
     app.database
-        .unit_instances
-        .push(crate::unit_instance::UnitInstance::new(
+        .register_unit(crate::unit_instance::UnitInstance::new(
             "U_P",
             "P",
             crate::Party::Player,
@@ -169,8 +165,7 @@ fn enemy_wipe_with_unresolving_zenmetsu_falls_back_to_game_clear() {
     app.current_stage_file = "stage.eve".to_string();
     app.stage_state = StageState::Battle;
     app.database
-        .unit_instances
-        .push(crate::unit_instance::UnitInstance::new(
+        .register_unit(crate::unit_instance::UnitInstance::new(
             "U_P",
             "P",
             crate::Party::Player,
@@ -562,8 +557,8 @@ fn place_player_unit(app: &mut App, name: &str, x: u32, y: u32) {
         weapons: Vec::new(),
         features: Vec::new(),
     };
-    app.database_mut().pilots.push(pilot);
-    app.database_mut().units.push(unit_data);
+    app.database_mut().catalog.pilots.push(pilot);
+    app.database_mut().catalog.units.push(unit_data);
     app.database_mut()
         .register_unit(UnitInstance::new(name, "PILOT", Party::Player, x, y));
 }
@@ -575,7 +570,7 @@ fn push_pilot_with_features(app: &mut App, name: &str, features: Vec<(String, St
     if app.database().pilot_by_name(name).is_some() {
         return;
     }
-    app.database_mut().pilots.push(PilotData {
+    app.database_mut().catalog.pilots.push(PilotData {
         spirit_commands: Vec::new(),
         name: name.into(),
         nickname: name.into(),
@@ -620,6 +615,7 @@ fn give_spirit_commands(
 ) -> String {
     let p = app
         .database_mut()
+        .catalog
         .pilots
         .iter_mut()
         .find(|p| p.name == "PILOT")
@@ -1295,7 +1291,7 @@ fn transform_single_form_switches_unit_immediately() {
     // 変形先 FormB の UnitData を用意 (FormA を複製してリネーム)。
     let mut b = app.database().unit_by_name("FormA").cloned().unwrap();
     b.name = "FormB".into();
-    app.database_mut().units.push(b);
+    app.database_mut().catalog.units.push(b);
     app.set_stage_state(crate::stage::StageState::Battle);
     let caster = first_player_uid(&app);
     app.database_mut()
@@ -1332,7 +1328,7 @@ fn transform_multi_form_opens_submenu_and_switches() {
     for n in ["FormB", "FormC"] {
         let mut d = app.database().unit_by_name("FormA").cloned().unwrap();
         d.name = n.into();
-        app.database_mut().units.push(d);
+        app.database_mut().catalog.units.push(d);
     }
     app.set_stage_state(crate::stage::StageState::Battle);
     let caster = first_player_uid(&app);
@@ -1370,7 +1366,7 @@ fn transform_submenu_cancel_keeps_form() {
     for n in ["FormB", "FormC"] {
         let mut d = app.database().unit_by_name("FormA").cloned().unwrap();
         d.name = n.into();
-        app.database_mut().units.push(d);
+        app.database_mut().catalog.units.push(d);
     }
     app.set_stage_state(crate::stage::StageState::Battle);
     let caster = first_player_uid(&app);
@@ -1400,7 +1396,7 @@ fn transform_hidden_post_move_or_without_feature() {
     place_player_unit(&mut app, "FormA", 2, 6);
     let mut b = app.database().unit_by_name("FormA").cloned().unwrap();
     b.name = "FormB".into();
-    app.database_mut().units.push(b);
+    app.database_mut().catalog.units.push(b);
     app.set_stage_state(crate::stage::StageState::Battle);
     let caster = first_player_uid(&app);
 
@@ -1440,6 +1436,7 @@ fn charge_command_sets_flag_and_ends_action() {
     {
         let d = app
             .database_mut()
+            .catalog
             .units
             .iter_mut()
             .find(|d| d.name == "Charger")
@@ -2038,6 +2035,7 @@ fn zombie_blocks_active_recovery() {
 fn give_ability(app: &mut App, unit_name: &str, uid: &str, ab: crate::data::unit::AbilityData) {
     let d = app
         .database_mut()
+        .catalog
         .units
         .iter_mut()
         .find(|d| d.name == unit_name)
@@ -2268,6 +2266,7 @@ fn ability_sp_restore_effect_reduces_consumed() {
     let uid = first_player_uid(&app);
     // PILOT に最大SP 50 を与え 30 消費した状態に (PilotInstance 無し → sp_consumed 経路)。
     app.database_mut()
+        .catalog
         .pilots
         .iter_mut()
         .find(|p| p.name == "PILOT")
@@ -2294,7 +2293,7 @@ fn ability_henshin_effect_changes_form() {
     // 変身先 Dragon の UnitData を用意。
     let mut d = app.database().unit_by_name("Human").cloned().unwrap();
     d.name = "Dragon".into();
-    app.database_mut().units.push(d);
+    app.database_mut().catalog.units.push(d);
     let uid = first_player_uid(&app);
     app.apply_ability_effects(&uid, &uid, "変身Lv3=Dragon");
     assert_eq!(
@@ -2313,7 +2312,7 @@ fn ability_summon_effect_creates_units() {
     // 召喚先 Drone の UnitData (Summoner を複製)。
     let mut d = app.database().unit_by_name("Summoner").cloned().unwrap();
     d.name = "Drone".into();
-    app.database_mut().units.push(d);
+    app.database_mut().catalog.units.push(d);
     let uid = first_player_uid(&app);
     app.apply_ability_effects(&uid, &uid, "召喚Lv2=Drone");
 
@@ -2392,7 +2391,7 @@ fn ability_nouryoku_copy_transforms_caster_with_size_limit() {
     let mut big = app.database().unit_by_name("Model").cloned().unwrap();
     big.name = "BigModel".into();
     big.size = Size::XL;
-    app.database_mut().units.push(big);
+    app.database_mut().catalog.units.push(big);
     app.database_mut()
         .unit_by_uid_mut(&model)
         .unwrap()
@@ -2659,7 +2658,7 @@ fn setup_combine(app: &mut App) -> (String, String) {
     // 合体形態 GetterRobo の UnitData (GetterEagle を複製)。
     let mut g = app.database().unit_by_name("GetterEagle").cloned().unwrap();
     g.name = "GetterRobo".into();
-    app.database_mut().units.push(g);
+    app.database_mut().catalog.units.push(g);
     app.set_stage_state(crate::stage::StageState::Battle);
     let host = app
         .database()
@@ -2752,6 +2751,7 @@ fn combine_respects_form_necessary_skill() {
     let (host, _partner) = setup_combine(&mut app);
     // 合体形態 GetterRobo に 必要技能=念力Lv3 を付与。
     app.database_mut()
+        .catalog
         .units
         .iter_mut()
         .find(|d| d.name == "GetterRobo")
@@ -3029,7 +3029,7 @@ fn separate_from_initial_combined_form_spawns_components() {
             .cloned()
             .unwrap();
         ud.name = form.into();
-        app.database_mut().units.push(ud);
+        app.database_mut().catalog.units.push(ud);
     }
     app.set_stage_state(crate::stage::StageState::Battle);
     let host = first_player_uid(&app);
@@ -3217,6 +3217,7 @@ fn kill_morale_skips_mecha_pilots() {
     place_player_unit(&mut app, "Hero", 2, 6);
     place_player_unit(&mut app, "Ally", 4, 6);
     app.database_mut()
+        .catalog
         .pilots
         .iter_mut()
         .find(|p| p.name == "PILOT")
@@ -3246,12 +3247,14 @@ fn kill_morale_victim_faction_changes_by_personality() {
     push_pilot_with_features(&mut app, "BRAVE", Vec::new());
     push_pilot_with_features(&mut app, "TIMID", Vec::new());
     app.database_mut()
+        .catalog
         .pilots
         .iter_mut()
         .find(|p| p.name == "BRAVE")
         .unwrap()
         .personality = Some("超強気".into());
     app.database_mut()
+        .catalog
         .pilots
         .iter_mut()
         .find(|p| p.name == "TIMID")
@@ -3349,7 +3352,7 @@ fn intermission_equip_swap_changes_unit_form() {
     let mut alt = app.database().unit_by_name("Base").cloned().unwrap();
     alt.name = "砲撃装備".into();
     alt.nickname = "砲撃装備".into();
-    app.database_mut().units.push(alt);
+    app.database_mut().catalog.units.push(alt);
     let uid = first_player_uid(&app);
     app.database_mut()
         .unit_by_uid_mut(&uid)
@@ -3700,8 +3703,8 @@ fn build_status_detail_reflects_effective_values() {
         ],
         features: Vec::new(),
     };
-    app.database_mut().pilots.push(pilot);
-    app.database_mut().units.push(unit_data);
+    app.database_mut().catalog.pilots.push(pilot);
+    app.database_mut().catalog.units.push(unit_data);
 
     let mut inst = UnitInstance::new("エヴァ", "アスカ", Party::Player, 0, 0);
     inst.upgrade_level = 3;
@@ -3773,7 +3776,7 @@ fn status_detail_marks_necessary_skill_gated_weapons() {
     };
     let mut app = App::new();
     // 念力 技能を持たないパイロット。
-    app.database_mut().pilots.push(PilotData {
+    app.database_mut().catalog.pilots.push(PilotData {
         spirit_commands: Vec::new(),
         name: "P".into(),
         nickname: "P".into(),
@@ -3794,7 +3797,7 @@ fn status_detail_marks_necessary_skill_gated_weapons() {
         bitmap: None,
         features: Vec::new(),
     });
-    app.database_mut().units.push(UnitData {
+    app.database_mut().catalog.units.push(UnitData {
         abilities: Vec::new(),
         name: "機".into(),
         kana_name: String::new(),
@@ -3978,6 +3981,7 @@ fn shield_defense_halves_damage_with_high_sdefense() {
     // PILOT に Ｓ防御Lv16 を付与 (必ず発動)。
     if let Some(pd) = app
         .database_mut()
+        .catalog
         .pilots
         .iter_mut()
         .find(|p| p.name == "PILOT")
@@ -4035,6 +4039,7 @@ fn small_shield_reduces_damage_to_two_thirds() {
     place_player_unit(&mut app, "Hero", 2, 6);
     if let Some(pd) = app
         .database_mut()
+        .catalog
         .pilots
         .iter_mut()
         .find(|p| p.name == "PILOT")
@@ -4286,6 +4291,7 @@ fn active_field_absorbs_when_sdefense_high() {
     // PILOT に Ｓ防御Lv16 (必発)。
     if let Some(pd) = app
         .database_mut()
+        .catalog
         .pilots
         .iter_mut()
         .find(|p| p.name == "PILOT")
@@ -4819,6 +4825,7 @@ fn ai_uses_offensive_spirit_before_attacking() {
     place_player_unit(&mut app, "Hero", 5, 5); // 攻撃対象 (味方)
                                                // Hero unit_data に隣接武器を持たせる (敵もこの機体を使う)。
     app.database_mut()
+        .catalog
         .units
         .iter_mut()
         .find(|d| d.name == "Hero")
@@ -4849,6 +4856,7 @@ fn ai_uses_offensive_spirit_before_attacking() {
     {
         let p = app
             .database_mut()
+            .catalog
             .pilots
             .iter_mut()
             .find(|p| p.name == "PILOT")
@@ -4899,6 +4907,7 @@ fn ai_uses_support_spirit_on_wounded_ally() {
     {
         let p = app
             .database_mut()
+            .catalog
             .pilots
             .iter_mut()
             .find(|p| p.name == "PILOT")
@@ -4934,6 +4943,7 @@ fn guts_skill_boosts_hit_and_dodge_at_low_hp() {
     place_player_unit(&mut app, "Guts", 2, 6);
     // PILOT に 底力 技能を付与。
     app.database_mut()
+        .catalog
         .pilots
         .iter_mut()
         .find(|p| p.name == "PILOT")
@@ -4970,6 +4980,7 @@ fn super_guts_gives_larger_bonus_than_guts() {
     enter_mapview_with_demo_map(&mut app);
     place_player_unit(&mut app, "SuperGuts", 2, 6);
     app.database_mut()
+        .catalog
         .pilots
         .iter_mut()
         .find(|p| p.name == "PILOT")
@@ -5269,6 +5280,7 @@ fn ai_uses_map_weapon_on_multiple_enemies() {
     enter_mapview_with_demo_map(&mut app);
     place_player_unit(&mut app, "Bomber", 9, 0); // Bomber unit_data + PILOT
     app.database_mut()
+        .catalog
         .units
         .iter_mut()
         .find(|d| d.name == "Bomber")
@@ -5393,6 +5405,7 @@ fn weapon_copy_transforms_attacker_with_size_limit() {
         .unwrap()
         .unit_data_name = "Mimic".into();
     app.database_mut()
+        .catalog
         .units
         .iter_mut()
         .find(|d| d.name == "Model")
@@ -5426,6 +5439,7 @@ fn learning_weapon_teaches_skill_on_crit() {
     place_player_unit(&mut app, "Master", 4, 6);
     // Master の UnitData に「ラーニング可能技」を付与。
     app.database_mut()
+        .catalog
         .units
         .iter_mut()
         .find(|d| d.name == "Master")
@@ -5487,6 +5501,7 @@ fn form_necessary_skill_gates_transform() {
     place_player_unit(&mut app, "SuperForm", 4, 6); // UnitData 用途
                                                     // SuperForm に 必要技能=念力Lv3、Forbidden に 不必要技能=機械 を付与。
     app.database_mut()
+        .catalog
         .units
         .iter_mut()
         .find(|d| d.name == "SuperForm")
@@ -5524,6 +5539,7 @@ fn ride_change_respects_form_necessary_skill() {
     place_player_unit(&mut app, "Normal", 2, 6);
     place_player_unit(&mut app, "Psychic", 3, 6); // 必要技能=念力Lv3
     app.database_mut()
+        .catalog
         .units
         .iter_mut()
         .find(|d| d.name == "Psychic")
@@ -5903,6 +5919,7 @@ fn counterattack_can_be_critical() {
     enter_mapview_with_demo_map(&mut app);
     place_player_unit(&mut app, "Hero", 2, 6);
     app.database_mut()
+        .catalog
         .units
         .iter_mut()
         .find(|d| d.name == "Hero")
@@ -5924,7 +5941,7 @@ fn counterattack_can_be_critical() {
         class: String::new(),
         extras: Vec::new(),
     }];
-    app.database_mut().units.push(ebot);
+    app.database_mut().catalog.units.push(ebot);
     let enemy = app.database_mut().register_unit(crate::UnitInstance::new(
         "EnemyBot",
         "PILOT",
@@ -5970,7 +5987,7 @@ fn counterattack_procs_weapon_special_effect() {
         class: "痺".into(),
         extras: Vec::new(),
     }];
-    app.database_mut().units.push(ebot);
+    app.database_mut().catalog.units.push(ebot);
     let hero = first_player_uid(&app);
     let enemy = app.database_mut().register_unit(crate::UnitInstance::new(
         "EnemyBot",
@@ -6019,7 +6036,7 @@ fn taking_a_hit_and_surviving_raises_morale() {
         class: String::new(),
         extras: Vec::new(),
     }];
-    app.database_mut().units.push(ebot);
+    app.database_mut().catalog.units.push(ebot);
     let hero = first_player_uid(&app);
     let enemy = app.database_mut().register_unit(crate::UnitInstance::new(
         "EnemyBot",
@@ -6050,6 +6067,7 @@ fn damage_morale_skill_adds_on_top_of_base_hit_gain() {
     enter_mapview_with_demo_map(&mut app);
     place_player_unit(&mut app, "Hero", 2, 6); // 被弾側 (生存)
     app.database_mut()
+        .catalog
         .pilots
         .iter_mut()
         .find(|p| p.name == "PILOT")
@@ -6072,7 +6090,7 @@ fn damage_morale_skill_adds_on_top_of_base_hit_gain() {
         class: String::new(),
         extras: Vec::new(),
     }];
-    app.database_mut().units.push(ebot);
+    app.database_mut().catalog.units.push(ebot);
     let hero = first_player_uid(&app);
     let enemy = app.database_mut().register_unit(crate::UnitInstance::new(
         "EnemyBot",
@@ -6118,7 +6136,7 @@ fn firing_a_weapon_consumes_en_and_ammo() {
         class: String::new(),
         extras: Vec::new(),
     }];
-    app.database_mut().units.push(gunner);
+    app.database_mut().catalog.units.push(gunner);
     let shooter = app.database_mut().register_unit(crate::UnitInstance::new(
         "Gunner",
         "PILOT",
@@ -6161,7 +6179,7 @@ fn empty_weapon_is_not_auto_selected() {
         class: String::new(),
         extras: Vec::new(),
     }];
-    app.database_mut().units.push(gunner);
+    app.database_mut().catalog.units.push(gunner);
     let shooter = app.database_mut().register_unit(crate::UnitInstance::new(
         "Gunner",
         "PILOT",
@@ -6189,6 +6207,7 @@ fn support_attack_procs_weapon_special_effect() {
     place_player_unit(&mut app, "Supporter", 3, 6); // Hero に隣接した援護役
                                                     // Supporter に 痺 武器 (critical 100)。
     app.database_mut()
+        .catalog
         .units
         .iter_mut()
         .find(|d| d.name == "Supporter")
@@ -6259,6 +6278,7 @@ fn support_attack_damage_follows_original_rules() {
         place_player_unit(&mut app, "Hero", 2, 6);
         place_player_unit(&mut app, "Supporter", 3, 6);
         app.database_mut()
+            .catalog
             .units
             .iter_mut()
             .find(|d| d.name == "Supporter")
@@ -6300,6 +6320,7 @@ fn support_attack_damage_follows_original_rules() {
         }
         // 防御側 (Hero データ) は撃破されない HP にする。
         app.database_mut()
+            .catalog
             .units
             .iter_mut()
             .find(|d| d.name == "Hero")
@@ -6598,6 +6619,7 @@ fn status_panel_view_uses_core_rules() {
     add_weapon(&mut app, "Hero", 300, 1);
     // 2 本目は EN 9999 を要する (使用不可)。
     app.database_mut()
+        .catalog
         .units
         .iter_mut()
         .find(|u| u.name == "Hero")
@@ -6618,6 +6640,7 @@ fn status_panel_view_uses_core_rules() {
 
 fn add_weapon(app: &mut App, unit_name: &str, power: i64, max_range: i32) {
     app.database_mut()
+        .catalog
         .units
         .iter_mut()
         .find(|u| u.name == unit_name)
@@ -7112,6 +7135,7 @@ fn counter_skill_strikes_pre_emptively() {
         if with_counter {
             if let Some(pd) = app
                 .database_mut()
+                .catalog
                 .pilots
                 .iter_mut()
                 .find(|p| p.name == "PILOT")
@@ -7169,6 +7193,7 @@ fn reattack_skill_strikes_twice() {
             // 攻撃側パイロット "PILOT" (pilot_by_name は先頭を返す) に 再攻撃Lv50 を付与。
             if let Some(pd) = app
                 .database_mut()
+                .catalog
                 .pilots
                 .iter_mut()
                 .find(|p| p.name == "PILOT")
@@ -8766,6 +8791,7 @@ fn give_crit_weapon(app: &mut App, unit_name: &str, power: i64, critical: i32) {
         extras: Vec::new(),
     };
     app.database_mut()
+        .catalog
         .units
         .iter_mut()
         .find(|u| u.name == unit_name)
@@ -8858,6 +8884,7 @@ fn special_effect_weapon_does_not_crit_but_procs() {
     place_player_unit(&mut app, "Hero", 5, 6);
     // 痺 + critical 100 の武器を Hero に持たせ、必中で命中を確定。
     app.database_mut()
+        .catalog
         .units
         .iter_mut()
         .find(|u| u.name == "Hero")
@@ -8887,6 +8914,7 @@ fn special_effect_weapon_does_not_crit_but_procs() {
     let euid = spawn_party(&mut app, "Foe", crate::Party::Enemy, 6, 6);
     // Foe は高 HP で生存させる (撃破時は proc しないため)。
     app.database_mut()
+        .catalog
         .units
         .iter_mut()
         .find(|u| u.name == "Foe")
@@ -9131,7 +9159,7 @@ fn support_attack_fires_when_adjacent_supporter_has_status() {
         .add_condition(crate::Condition::new("サポートアタック", -1));
     app.set_stage_state(crate::stage::StageState::Battle);
     // Player ユニット (Hero) に攻撃用武器を持たせる
-    app.database_mut().units[0]
+    app.database_mut().catalog.units[0]
         .weapons
         .push(crate::data::unit::WeaponData {
             name: "ビーム".to_string(),
@@ -9203,6 +9231,7 @@ fn support_guard_fires_during_enemy_phase() {
     ));
     // 敵に武器を持たせる (power=50, range=1, precision=100)
     app.database_mut()
+        .catalog
         .units
         .iter_mut()
         .find(|u| u.name == "Target")
@@ -9278,6 +9307,7 @@ fn chokugeki_disables_support_guard() {
         6,
     ));
     app.database_mut()
+        .catalog
         .units
         .iter_mut()
         .find(|u| u.name == "Target")
@@ -9355,7 +9385,7 @@ fn sutemi_does_not_apply_on_counterattack() {
             class: String::new(),
             extras: Vec::new(),
         }];
-        app.database_mut().units.push(ebot);
+        app.database_mut().catalog.units.push(ebot);
         let hero = first_player_uid(&app);
         let enemy = app.database_mut().register_unit(crate::UnitInstance::new(
             "Counter",
@@ -9396,7 +9426,7 @@ fn parry_nullifies_melee_for_skilled_defender() {
         p.name = "Brute".into();
         p.nickname = "Brute".into();
         p.features = vec![];
-        app.database_mut().pilots.push(p);
+        app.database_mut().catalog.pilots.push(p);
     }
     let attacker = app.database_mut().register_unit(crate::UnitInstance::new(
         "Swordsman",
@@ -9409,6 +9439,7 @@ fn parry_nullifies_melee_for_skilled_defender() {
     {
         let p = app
             .database_mut()
+            .catalog
             .pilots
             .iter_mut()
             .find(|p| p.name == "PILOT")
@@ -9443,7 +9474,7 @@ fn foresight_guarantees_parry() {
         p.name = "Master".into();
         p.nickname = "Master".into();
         p.features = vec![("切り払いLv16".into(), String::new())];
-        app.database_mut().pilots.push(p);
+        app.database_mut().catalog.pilots.push(p);
     }
     let attacker = app.database_mut().register_unit(crate::UnitInstance::new(
         "Swordsman",
@@ -9456,6 +9487,7 @@ fn foresight_guarantees_parry() {
     {
         let p = app
             .database_mut()
+            .catalog
             .pilots
             .iter_mut()
             .find(|p| p.name == "PILOT")
@@ -9531,6 +9563,7 @@ fn mapattack_applies_defense_attributes() {
     {
         let ud = app
             .database_mut()
+            .catalog
             .units
             .iter_mut()
             .find(|d| d.name == "Attacker")
@@ -10028,7 +10061,7 @@ fn ai_prefers_defensive_terrain_among_attack_tiles() {
     let mut foe_ud = app.database().unit_by_name("Hero").cloned().unwrap();
     foe_ud.name = "Foe".into();
     foe_ud.speed = 5;
-    app.database_mut().units.push(foe_ud);
+    app.database_mut().catalog.units.push(foe_ud);
     add_weapon(&mut app, "Foe", 60, 1);
     let foe = spawn_party(&mut app, "Foe", crate::Party::Enemy, 0, 1);
 
@@ -10061,6 +10094,7 @@ fn ai_uses_revive_spirit_when_critical() {
     {
         let p = app
             .database_mut()
+            .catalog
             .pilots
             .iter_mut()
             .find(|p| p.name == "PILOT")
@@ -10099,6 +10133,7 @@ fn ai_keeps_revive_spirit_when_healthy() {
     {
         let p = app
             .database_mut()
+            .catalog
             .pilots
             .iter_mut()
             .find(|p| p.name == "PILOT")
@@ -10139,6 +10174,7 @@ fn ai_spreads_to_avoid_enemy_map_weapon() {
     {
         let h = app
             .database_mut()
+            .catalog
             .units
             .iter_mut()
             .find(|u| u.name == "Hero")
@@ -10163,7 +10199,7 @@ fn ai_spreads_to_avoid_enemy_map_weapon() {
     foe_ud.name = "Foe".into();
     foe_ud.speed = 8;
     foe_ud.weapons.clear(); // マップ兵器は引き継がない
-    app.database_mut().units.push(foe_ud);
+    app.database_mut().catalog.units.push(foe_ud);
     add_weapon(&mut app, "Foe", 60, 1);
     let foe = spawn_party(&mut app, "Foe", crate::Party::Enemy, 0, 1);
     // 同陣営の僚機を (5,0) に固定配置 → (5,1) が密集マスになる。

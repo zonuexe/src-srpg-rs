@@ -19,7 +19,7 @@
 | 10. 戦闘の一本化 | 済 | 予測の組み立てを `strike_preview`、命中後の判定（クリティカル / 即死 / 切り払い / 防御特性）を `resolve_strike` に一本化（本線攻撃・援護攻撃・反撃・先制反撃・`.eve Attack`。攻撃の種類は `StrikeKind`）。表示用の予測は `forecast_strike`（本線攻撃と同じ組み立て）に一本化し、反撃ウィンドウ・武器選択窓・src-web のステータスパネル（`App::status_panel_view`）がこれを使う。src-web は戦闘ルールを持たない |
 | 11. シナリオ取り込みの一本化 | 済 | 展開を `src_core::archive`（zip / delharc を src-core の依存に）、取り込みと起動を `src_core::scenario`（`load_scenario` = `register_scenario` → `run_entry` → `boot_after_load`、データ 1 件は `ingest_data_file`）へ。src-web は画像・音声の登録だけ。verify-archive の smoke・oracle のデータ読込・VFS の書き戻し・統合テストも同じ関数を通す（4 重の unzip、3 重の unlzh、約 9 か所のデータ振り分けを解消。verify-archive の smoke はブラウザと違い IntermissionCommand で止まらず Continue チェインも進めていなかった） |
 | 12. 式評価器の統一 | 済 | 原典 `EvalExpr` / `EvalTerm` を移植した `event_runtime/eval.rs` に一本化。If / ElseIf / Do / Loop / IIf / Eval / メニュー条件 / Set・`=` 代入 / 数値引数 / 括弧算術 / 配列添字が同じ評価器を通る。旧評価器 (条件用・数値用) は削除。C# oracle の `paths` モードで経路ごとに突合 (下記) |
-| 13. GameDatabase の分割 | 未 | |
+| 13. GameDatabase の分割 | 済 | 静的データを `Catalog`（`db.catalog`）に分け、`#[serde(flatten)]` でセーブの形を保つ（互換テスト付き）。`unit_instances` を `UnitList`（スライスへの Deref のみ）にして、ユニットの追加・削除を `register_unit` / `remove_unit*` / `replace_unit_instances` 以外ではコンパイルエラーにした（B2 の位置索引の不変条件を型で守る。本番コードの違反は 0 件、テストの 7 か所を API 経由に直した）。`map` / `pilot_instances` などは `pub` のまま |
 
 作業中に見つかった追加の課題:
 - **sp.txt の効果行**: 旧パーサは効果を `,` で区切っていたが、実データと C# `ToList` は空白区切り（`挑発 命中率低下Lv5`）。修正済。

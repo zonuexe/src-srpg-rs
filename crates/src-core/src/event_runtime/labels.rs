@@ -343,6 +343,7 @@ pub fn fire_entry_event_labels(app: &mut App, idx: usize) {
         let terrain_id = map.map(|m| m.cell(x, y).terrain_id);
         terrain_id.and_then(|tid| {
             app.database()
+                .catalog
                 .terrains
                 .iter()
                 .find(|t| t.id == tid)

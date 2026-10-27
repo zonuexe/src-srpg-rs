@@ -302,7 +302,7 @@ impl App {
         }
         // ユニット/パイロット定義がなければ素材パック (ライブラリ .eve のみ収録)
         // であり、シナリオとしてブートストラップする必要がない。
-        if self.database.units.is_empty() && self.database.pilots.is_empty() {
+        if self.database.catalog.units.is_empty() && self.database.catalog.pilots.is_empty() {
             return;
         }
         if self.current_stage_file.is_empty() && !entry_file.is_empty() {

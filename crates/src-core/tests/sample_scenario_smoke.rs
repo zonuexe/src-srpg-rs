@@ -655,6 +655,7 @@ fn kessen_chapter2_forced_loss_when_monster_enters_town() {
     let terrain_name = |app: &App, x: u32, y: u32| -> Option<String> {
         let tid = app.database().map.as_ref().unwrap().cell(x, y).terrain_id;
         app.database()
+            .catalog
             .terrains
             .iter()
             .find(|t| t.id == tid)

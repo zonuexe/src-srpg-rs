@@ -275,8 +275,8 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
     println!("  stage_state:     {:?}", app.stage_state());
     println!("  turn.number:     {}", app.turn().number);
     println!("  turn.phase:      {:?}", app.turn().phase);
-    println!("  pilots in DB:    {}", app.database().pilots.len());
-    println!("  units in DB:     {}", app.database().units.len());
+    println!("  pilots in DB:    {}", app.database().catalog.pilots.len());
+    println!("  units in DB:     {}", app.database().catalog.units.len());
     println!("  messages:        {}", app.messages().len());
     for m in app.messages().iter().take(8) {
         println!("    | {m}");
@@ -391,6 +391,7 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
         if cmaking_exit_drive {
             let pilot = app
                 .database()
+                .catalog
                 .pilots
                 .first()
                 .map(|p| p.name.clone())

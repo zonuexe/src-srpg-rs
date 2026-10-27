@@ -522,6 +522,7 @@ fn exec_changeterrain(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     // name → terrain_id 解決。scenario terrains → built-in の順。
     let terrain_id = app
         .database()
+        .catalog
         .terrains
         .iter()
         .find(|t| t.name == name)

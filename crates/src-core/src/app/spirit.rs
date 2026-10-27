@@ -59,6 +59,7 @@ impl App {
         }
         if let Some(sp) = self
             .database
+            .catalog
             .special_powers
             .iter()
             .find(|sp| sp.name == name)
@@ -203,7 +204,13 @@ impl App {
 
     /// 精神コマンド `name` の対象種別を解決する。sp.txt の `TargetType` を優先。
     pub(super) fn spirit_target_kind(&self, name: &str) -> SpiritTargetKind {
-        if let Some(sp) = self.database.special_powers.iter().find(|s| s.name == name) {
+        if let Some(sp) = self
+            .database
+            .catalog
+            .special_powers
+            .iter()
+            .find(|s| s.name == name)
+        {
             match sp.target_type.as_str() {
                 "自分" | "自分のみ" => return SpiritTargetKind::SelfOnly,
                 // SRC `SpecialPowerData.cls` Execute 準拠: `全味方`/`全体` のみ全体、
@@ -308,7 +315,13 @@ impl App {
 
     /// 精神コマンド `name` が効果種別 `effect` を持つか。sp.txt 未定義なら名前で判定する。
     pub(super) fn spirit_has_effect(&self, name: &str, effect: &str) -> bool {
-        match self.database.special_powers.iter().find(|s| s.name == name) {
+        match self
+            .database
+            .catalog
+            .special_powers
+            .iter()
+            .find(|s| s.name == name)
+        {
             Some(sp) => sp.effects.iter().any(|(e, _)| e == effect),
             None => name == effect,
         }
@@ -469,6 +482,7 @@ impl App {
     /// (自作SP `生贄`→`生贄ルーチン`)。SRC `SpecialPowerData.cls` Execute の "イベント"。
     pub(super) fn spirit_event_routine(&self, name: &str) -> Option<String> {
         self.database
+            .catalog
             .special_powers
             .iter()
             .find(|s| s.name == name)

@@ -32,6 +32,7 @@ fn fn_nickname(app: &App, c: &FnCall) -> Option<String> {
     let n = n.trim().trim_matches('"');
     if let Some(p) = app
         .database()
+        .catalog
         .pilots
         .iter()
         .find(|p| p.name == n || p.nickname == n)
@@ -236,6 +237,7 @@ fn fn_skill(app: &App, c: &FnCall) -> Option<String> {
     // 2) PilotData.features (静的データ)
     let pd = app
         .database()
+        .catalog
         .pilots
         .iter()
         .find(|p| p.name == pilot_key || p.nickname == pilot_key)
@@ -246,6 +248,7 @@ fn fn_skill(app: &App, c: &FnCall) -> Option<String> {
                 .iter()
                 .find(|u| matches_unit_handle(u, pilot_key))?;
             app.database()
+                .catalog
                 .pilots
                 .iter()
                 .find(|p| p.name == inst.pilot_name || p.nickname == inst.pilot_name)

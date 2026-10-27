@@ -847,6 +847,7 @@ fn setskill_overrides_static_pilot_data() {
 
 fn bullet_in_unit_data(app: &App, unit_name: &str, weapon_name: &str) -> Option<i32> {
     app.database()
+        .catalog
         .units
         .iter()
         .find(|u| u.name == unit_name)?

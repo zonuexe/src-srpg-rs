@@ -158,7 +158,7 @@ fn eval_move(app: &App, map: Option<&MapData>, placed: &[PlacedUnit], name: &str
     // current_area=空 (transportation から推定)、active_features=空、地形適応=空。
     // app.rs:4496-4528 の組み立てを fresh-unit 向けに簡約したもの。
     let cost_fn = src_core::movement::make_unit_cost_fn(
-        db.terrains.clone(),
+        db.catalog.terrains.clone(),
         unit_data.transportation.clone(),
         unit_data.adaption.0,
         String::new(),
@@ -214,11 +214,11 @@ fn load_data_directory(app: &mut App, dir: &Path) {
 
     eprintln!(
         "loaded: pilots={} units={} items={} sp={} terrains={}",
-        app.database().pilots.len(),
-        app.database().units.len(),
-        app.database().items.len(),
-        app.database().special_powers.len(),
-        app.database().terrains.len(),
+        app.database().catalog.pilots.len(),
+        app.database().catalog.units.len(),
+        app.database().catalog.items.len(),
+        app.database().catalog.special_powers.len(),
+        app.database().catalog.terrains.len(),
     );
 }
 

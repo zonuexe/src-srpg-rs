@@ -316,11 +316,11 @@ fn load_data_directory(app: &mut App, dir: &Path) {
 
     eprintln!(
         "loaded: pilots={} units={} items={} sp={} terrains={}",
-        app.database().pilots.len(),
-        app.database().units.len(),
-        app.database().items.len(),
-        app.database().special_powers.len(),
-        app.database().terrains.len(),
+        app.database().catalog.pilots.len(),
+        app.database().catalog.units.len(),
+        app.database().catalog.items.len(),
+        app.database().catalog.special_powers.len(),
+        app.database().catalog.terrains.len(),
     );
 }
 

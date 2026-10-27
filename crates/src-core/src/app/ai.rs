@@ -321,7 +321,7 @@ impl App {
 
         // 移動範囲を Dijkstra で計算 (地形適応・特殊能力を考慮)。
         let move_cost_fn = {
-            let terrain_table = self.database.terrains.clone();
+            let terrain_table = self.database.catalog.terrains.clone();
             let transportation = unit_data.transportation.clone();
             let adaption = unit_data.adaption.0;
             let current_area = self.database.unit_instances[idx].current_area.clone();

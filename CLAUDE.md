@@ -81,7 +81,7 @@ nix --extra-experimental-features 'nix-command flakes' develop --command just <r
 | モジュール | 役割 |
 |-----------|------|
 | `app/` | 上位状態機械・ゲーム全体制御 (`App`)。`mod.rs` は構造体とアクセサ、`impl App` は責務別ファイル (`stage_flow` / `battle` / `map_attack` / `combat_rules` / `ai` / `reaction` / `spirit` / `unit_commands` / `input` / `intermission` / `dialog` / `script_flow` / `vfs` / `debug`) に分割 |
-| `db.rs` | 静的データ (`units` / `pilots` 等) と実行時の盤面 (`unit_instances` / `map` / 位置索引) を持つ `GameDatabase`。ユニット除去は `remove_unit*` / `remove_units_where` 経由 (位置索引の同期) |
+| `db.rs` | `GameDatabase` = 静的データ `catalog: Catalog` (`pilots` / `units` / `items` / `special_powers` / `terrains` / `maps` / `animation`) + 実行時の盤面 (`map` / `unit_instances` / `pilot_instances` / 位置索引)。`unit_instances` は `UnitList` (スライスとして参照・要素変更のみ。追加・削除は `register_unit` / `remove_unit*` / `replace_unit_instances`、位置の変更は `move_unit` / `set_off_map` で位置索引と同期)。セーブは `#[serde(flatten)]` で分割前と同じ形 |
 | `data/` | データパーサー（pilot.txt / unit.txt / map.txt 等、`necessary.rs` は `(必要技能)` 切り離し） |
 | `unit_instance.rs` | マップ上のユニット実体（位置・所属勢力・状態） |
 | `pilot_instance.rs` | パイロット実体（level, exp, sp, morale, plana, skills） |

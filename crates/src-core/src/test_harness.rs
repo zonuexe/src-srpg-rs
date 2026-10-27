@@ -469,6 +469,7 @@ fn format_snapshot(app: &App) -> String {
     for (i, u) in app.database().unit_instances.iter().enumerate() {
         let unit_data = app
             .database()
+            .catalog
             .units
             .iter()
             .find(|d| d.name == u.unit_data_name);

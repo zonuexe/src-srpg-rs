@@ -140,21 +140,21 @@ fn super_hero_zip_opens_and_starts_scenario() {
 
     // データベースに pilot/unit/item が取り込まれていること。
     assert!(
-        app.database().pilots.len() >= 200,
+        app.database().catalog.pilots.len() >= 200,
         "pilots が少なすぎ ({})",
-        app.database().pilots.len()
+        app.database().catalog.pilots.len()
     );
     assert!(
-        app.database().units.len() >= 180,
+        app.database().catalog.units.len() >= 180,
         "units が少なすぎ ({})",
-        app.database().units.len()
+        app.database().catalog.units.len()
     );
 
     eprintln!(
         "OK: entries={}, pilots={}, units={}, .eve={}, scene={:?}, stage_state={:?}",
         entries.len(),
-        app.database().pilots.len(),
-        app.database().units.len(),
+        app.database().catalog.pilots.len(),
+        app.database().catalog.units.len(),
         eve_entries.len(),
         app.scene(),
         app.stage_state()

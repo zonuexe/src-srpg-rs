@@ -1047,7 +1047,7 @@ fn exec_command_pc(
                     bitmap: None,
                     features: Vec::new(),
                 };
-                app.database_mut().pilots.push(pilot);
+                app.database_mut().catalog.pilots.push(pilot);
                 return Ok(pc + 1);
             }
             // インスタンス書式: Pilot name level [ID]
@@ -1060,6 +1060,7 @@ fn exec_command_pc(
             // データ名 / 通称から PilotData を解決して runtime インスタンスを作成。
             let data_name = app
                 .database()
+                .catalog
                 .pilots
                 .iter()
                 .find(|p| p.name == name || p.nickname == name)
@@ -1133,7 +1134,7 @@ fn exec_command_pc(
                 weapons: Vec::new(),
                 features: Vec::new(),
             };
-            app.database_mut().units.push(unit);
+            app.database_mut().catalog.units.push(unit);
         }
         "Weapon" => {
             // Weapon UnitName WeaponName Power MinRange MaxRange Precision Bullet
@@ -1157,11 +1158,12 @@ fn exec_command_pc(
             let unit_name = &xargs[0];
             let pos = app
                 .database()
+                .catalog
                 .units
                 .iter()
                 .position(|u| u.name == *unit_name)
                 .ok_or_else(|| err(line, "Weapon: 対象 Unit が未定義。"))?;
-            app.database_mut().units[pos].weapons.push(wd);
+            app.database_mut().catalog.units[pos].weapons.push(wd);
         }
         "Place" => {
             // Place UnitName PilotName Party X Y

@@ -65,11 +65,12 @@ impl App {
     /// 「piloted な味方が実マップで戦闘成立するか」を検証するための affordance。乗せた機数を返す。
     /// 通常プレイ経路からは呼ばれない。
     pub fn debug_seat_db_pilot(&mut self) -> usize {
-        let Some(pilot) = self.database.pilots.first().map(|p| p.name.clone()) else {
+        let Some(pilot) = self.database.catalog.pilots.first().map(|p| p.name.clone()) else {
             return 0;
         };
         let valid: std::collections::HashSet<String> = self
             .database
+            .catalog
             .pilots
             .iter()
             .map(|p| p.name.clone())

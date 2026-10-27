@@ -469,7 +469,7 @@ fn fn_item_id(app: &App, c: &FnCall) -> Option<String> {
 // 引数のアイテム名 (または `Item(...)` 等のネスト式) を解決し、アイテム
 // データベース上の 1-indexed 連番を返す。引数が既に数値ならそのまま返す
 // (SRC の numeric passthrough 挙動)。本移植では真化前後・入手済みを区別する
-// 別テーブルを持たないため、3 系統とも同一のアイテム DB (`database().items`)
+// 別テーブルを持たないため、3 系統とも同一のアイテム DB (`database().catalog.items`)
 // を引く。未登録名なら "0" を返す。
 fn fn_item_index(app: &App, c: &FnCall) -> Option<String> {
     let FnCall { args, .. } = *c;
@@ -481,6 +481,7 @@ fn fn_item_index(app: &App, c: &FnCall) -> Option<String> {
     }
     let idx = app
         .database()
+        .catalog
         .items
         .iter()
         .position(|it| it.name == name)
@@ -600,6 +601,7 @@ fn fn_area(app: &App, c: &FnCall) -> Option<String> {
     let terrain_id = map.cell(u.x, u.y).terrain_id;
     let raw_class = app
         .database()
+        .catalog
         .terrains
         .iter()
         .find(|t| t.id == terrain_id)
@@ -723,6 +725,7 @@ fn fn_is_available(app: &App, c: &FnCall) -> Option<String> {
             } else {
                 // 2) static UnitData.features にある場合も true
                 app.database()
+                    .catalog
                     .units
                     .iter()
                     .find(|u| u.name == inst.unit_data_name)
@@ -749,6 +752,7 @@ fn fn_is_defined(app: &App, c: &FnCall) -> Option<String> {
     });
     let is_pilot = || {
         app.database()
+            .catalog
             .pilots
             .iter()
             .any(|p| p.name == pname || p.nickname == pname)
@@ -764,7 +768,7 @@ fn fn_is_defined(app: &App, c: &FnCall) -> Option<String> {
             .iter()
             .any(|u| matches_unit_handle(u, pname) && !u.off_map)
     };
-    let is_item = || app.database().items.iter().any(|i| i.name == pname);
+    let is_item = || app.database().catalog.items.iter().any(|i| i.name == pname);
     let found = match kind.as_deref() {
         Some("パイロット") => is_pilot(),
         Some("ユニット") => is_unit(),

@@ -2260,7 +2260,7 @@ fn draw_pilot_list(ctx: &CanvasRenderingContext2d, database: &GameDatabase, asse
     ctx.set_text_align("left");
     ctx.set_text_baseline("middle");
     let _ = ctx.fill_text(
-        &format!("パイロット一覧 ({} 件)", database.pilots.len()),
+        &format!("パイロット一覧 ({} 件)", database.catalog.pilots.len()),
         ox as f64 + 8.0,
         oy as f64 + 12.0,
     );
@@ -2303,7 +2303,7 @@ fn draw_pilot_list(ctx: &CanvasRenderingContext2d, database: &GameDatabase, asse
     // 行
     ctx.set_font(&format!("11px {JP_SANS}"));
     let max = plist::max_rows();
-    for (row_idx, pilot) in database.pilots.iter().take(max).enumerate() {
+    for (row_idx, pilot) in database.catalog.pilots.iter().take(max).enumerate() {
         let row_y = header_y + i64::from(ROW_HEIGHT) + (row_idx as i64) * i64::from(ROW_HEIGHT);
         // ストライプ
         if row_idx % 2 == 1 {
@@ -2930,7 +2930,7 @@ fn draw_unit_list(ctx: &CanvasRenderingContext2d, database: &GameDatabase, asset
     ctx.set_text_align("left");
     ctx.set_text_baseline("middle");
     let _ = ctx.fill_text(
-        &format!("ユニット一覧 ({} 件)", database.units.len()),
+        &format!("ユニット一覧 ({} 件)", database.catalog.units.len()),
         ox as f64 + 8.0,
         oy as f64 + 12.0,
     );
@@ -2970,7 +2970,7 @@ fn draw_unit_list(ctx: &CanvasRenderingContext2d, database: &GameDatabase, asset
     // 行
     ctx.set_font(&format!("11px {JP_SANS}"));
     let max = ulist::max_rows();
-    for (row_idx, u) in database.units.iter().take(max).enumerate() {
+    for (row_idx, u) in database.catalog.units.iter().take(max).enumerate() {
         let row_y =
             header_y + i64::from(UL_ROW_HEIGHT) + (row_idx as i64) * i64::from(UL_ROW_HEIGHT);
         if row_idx % 2 == 1 {

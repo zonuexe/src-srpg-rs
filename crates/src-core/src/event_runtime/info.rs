@@ -81,16 +81,17 @@ pub(super) fn detect_info_kind(app: &App, name: &str) -> InfoKind {
     }
     if app
         .database()
+        .catalog
         .pilots
         .iter()
         .any(|p| p.name == n || p.nickname == n)
     {
         return InfoKind::PilotData;
     }
-    if app.database().units.iter().any(|u| u.name == n) {
+    if app.database().catalog.units.iter().any(|u| u.name == n) {
         return InfoKind::UnitData;
     }
-    if app.database().items.iter().any(|i| i.name == n) {
+    if app.database().catalog.items.iter().any(|i| i.name == n) {
         return InfoKind::Item;
     }
     InfoKind::UnitData
@@ -376,6 +377,7 @@ pub(super) fn info_pilot(
     let data = resolve(n).or_else(|| {
         let real_name = app
             .database()
+            .catalog
             .pilots
             .iter()
             .find(|p| p.nickname == n)
@@ -499,6 +501,7 @@ pub(super) fn info_special_power(app: &App, name: &str, info: &str) -> String {
     // SRC は名称で引くが、シナリオでは短縮名/読み仮名が使われることもあるため寛容に照合。
     let Some(sp) = app
         .database()
+        .catalog
         .special_powers
         .iter()
         .find(|s| s.name == n || s.short_name == n || s.kana_name == n)

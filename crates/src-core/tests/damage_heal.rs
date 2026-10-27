@@ -232,6 +232,7 @@ fn make_app_with_sp(max_sp: i32, extra_script: &str) -> App {
     // PilotData.sp は Pilot 命令では設定されないため直接注入する。
     if let Some(p) = app
         .database_mut()
+        .catalog
         .pilots
         .iter_mut()
         .find(|p| p.name == "リオ")
