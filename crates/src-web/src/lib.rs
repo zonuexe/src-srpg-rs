@@ -340,6 +340,18 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, JsValue> {
     if !resp.ok() {
         return Err(JsValue::from_str(&format!("HTTP {}", resp.status())));
     }
+    // 開発サーバ (trunk serve) は存在しないパスに index.html を返す (SPA フォールバック)。
+    // HTML 以外を要求して HTML が返ったら「無い」とみなす (ページをデータとして読まない)。
+    let is_html = resp
+        .headers()
+        .get("content-type")
+        .ok()
+        .flatten()
+        .is_some_and(|t| t.starts_with("text/html"));
+    let wants_html = url.ends_with(".html") || url.ends_with(".htm");
+    if is_html && !wants_html {
+        return Err(JsValue::from_str("not found (HTML fallback)"));
+    }
     let buf = JsFuture::from(resp.array_buffer()?).await?;
     let arr = js_sys::Uint8Array::new(&buf);
     let mut bytes = vec![0u8; arr.length() as usize];
