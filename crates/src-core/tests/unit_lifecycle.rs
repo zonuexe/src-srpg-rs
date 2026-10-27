@@ -446,6 +446,47 @@ Set after IsAvailable(リオ, 飛行)
     assert_eq!(app.script_var("after"), "1", "変形後は飛行あり");
 }
 
+/// B5: Transform は新形態のアビリティを作り直す (プレイヤーの変形と同じ
+/// `set_unit_form` 経路)。旧実装は active_features だけ更新し、旧形態の
+/// アビリティが残っていた。
+#[test]
+fn transform_rebuilds_abilities() {
+    use src_core::data::unit;
+    use src_core::event_runtime::execute;
+
+    let unit_txt = "\
+天使機
+天使機,てんし,リアル系,1,4
+陸宇,5,M,3000,400
+特殊能力なし
+3500,120,1200,110
+AAAA,Angel.bmp
+バルカン砲,200,1,1,10,99
+===
+修理装置, 回復Lv3, 1, 5, -, -, -
+";
+    let units = unit::parse(unit_txt).expect("unit parse");
+    let mut app = App::new();
+    app.database_mut().extend_units(units);
+
+    let src = "\
+Pilot リオ リオ 男性 超能力者 AAAA 100 100 100 100 100 100 100
+Unit ブレイバー リアル系 1 0 陸 5 M 1000 100 3500 120 1200 110 AAAA
+Place ブレイバー リオ Player 0 0
+Transform リオ 天使機
+";
+    let stmts = src_core::data::event::parse(src).unwrap();
+    execute(&mut app, &stmts).unwrap();
+
+    let u = find_unit_named(&app, "天使機").expect("変形後のユニット");
+    let names: Vec<&str> = u.abilities.iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["修理装置"],
+        "変形後のアビリティが新形態のものでない"
+    );
+}
+
 // ============================================================
 //  RemoveUnit / RemovePilot (追加 edge cases)
 // ============================================================
@@ -487,6 +528,7 @@ RemovePilot リオ
     event_runtime::execute(&mut app, &stmts).expect("execute");
     let names: Vec<&str> = app
         .database()
+        .catalog
         .pilots
         .iter()
         .map(|p| p.name.as_str())
@@ -506,7 +548,7 @@ RemovePilot 存在しない
     )
     .expect("parse");
     event_runtime::execute(&mut app, &stmts).expect("execute");
-    assert_eq!(app.database().pilots.len(), 1);
+    assert_eq!(app.database().catalog.pilots.len(), 1);
 }
 
 // ============================================================
@@ -704,7 +746,12 @@ fn unit_short_form_does_not_break_data_definition() {
     // 14+ 引数の `Unit` データ定義形式は従来通り UnitData を登録する
     // (短い形式の追加で誤って instance 化されないこと)。
     let app = run_setup(r#"Unit "テスト機" リアル系 1 0 陸 5 M 1000 100 2000 80 800 70 AAAA"#);
-    assert!(app.database().units.iter().any(|u| u.name == "テスト機"));
+    assert!(app
+        .database()
+        .catalog
+        .units
+        .iter()
+        .any(|u| u.name == "テスト機"));
     assert!(
         !app.database()
             .unit_instances
@@ -1009,4 +1056,55 @@ fn ride_two_arg_swaps_pilot_and_vacates_old_unit() {
         braver.pilot_name, "リオ",
         "元のブレイバーにリオが残っている (乗り換えで降りていない)"
     );
+}
+
+/// `UseAbility` はユニットデータのアビリティをプレイヤーと同じ `execute_ability`
+/// 経路で発動する: 効果はデータ (`回復Lv1` = HP 500) どおり、回数と EN を消費し、
+/// 行動は消費しない (`UseAbilityコマンド.md`)。旧実装はアビリティ名の決め打ちで、
+/// 名前が既知でないアビリティは何もしなかった。
+#[test]
+fn useability_runs_unit_data_ability() {
+    use src_core::data::unit;
+    use src_core::event_runtime::execute;
+
+    let unit_txt = "\
+天使機
+天使機,てんし,リアル系,1,4
+陸宇,5,M,3000,400
+特殊能力なし
+3500,120,1200,110
+AAAA,Angel.bmp
+バルカン砲,200,1,1,10,99
+===
+癒しの言葉, 回復Lv1, 1, 2, 50, -, -
+";
+    let units = unit::parse(unit_txt).expect("unit parse");
+    let mut app = App::new();
+    app.database_mut().extend_units(units);
+
+    let src = "\
+Pilot アリス アリス 女性 超能力者 AAAA 100 100 100 100 100 100 100
+Pilot リオ リオ 男性 超能力者 AAAA 100 100 100 100 100 100 100
+Unit ブレイバー リアル系 1 0 陸 5 M 1000 100 3500 120 1200 110 AAAA
+Place 天使機 アリス Player 0 0
+Place ブレイバー リオ Player 1 0
+Damage リオ 800
+UseAbility アリス 癒しの言葉 リオ
+";
+    let stmts = src_core::data::event::parse(src).unwrap();
+    execute(&mut app, &stmts).unwrap();
+
+    assert_eq!(
+        unit_damage(&app, "ブレイバー"),
+        300,
+        "回復Lv1 (HP 500) が適用されていない"
+    );
+    let caster = find_unit_named(&app, "天使機").unwrap();
+    assert_eq!(
+        caster.abilities[0].stock_remaining,
+        Some(1),
+        "回数が消費されていない"
+    );
+    assert_eq!(caster.en_consumed, 50, "EN が消費されていない");
+    assert!(!caster.has_acted, "イベントからの使用で行動が消費された");
 }

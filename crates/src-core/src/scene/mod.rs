@@ -8,7 +8,9 @@
 //! (`frmTitle` → `frmMain`). Here we model scenes as an enum so the
 //! frontend can render based on the current variant.
 
+pub mod command_menu;
 pub mod configuration;
+pub mod dialog;
 pub mod intermission;
 pub mod title;
 

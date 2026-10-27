@@ -1767,19 +1767,21 @@ Weapon "ブレイバー" "ライフル" 2500 2 5 15 -1
 Unit ゾルダ Mass 1 0 陸 5 M 1000 100 2500 110 800 100 BBBC
 Place ブレイバー リオ Player 1 1
 Place ゾルダ ガロ Enemy 5 5
+SpecialPower リオ 必中
 Attack リオ ライフル ガロ 無抵抗
 "#;
     let mut app = App::new();
     let stmts = event::parse(src).unwrap();
     event_runtime::execute(&mut app, &stmts).unwrap();
-    // SRC式: weapon.power(2500) * shooting(100)/100 * morale(100)/100 - armor(800) * morale(100)/100 = 1700
+    // 命中・ダメージはプレイヤーの攻撃と同じ判定 (App::resolve_strike)。命中は 必中 で確定させる
+    // (`Attackコマンド.md` は結果の制御に SpecialPower を使うよう案内している)。
     let zolda = app
         .database()
         .unit_instances
         .iter()
         .find(|u| u.unit_data_name == "ゾルダ")
         .unwrap();
-    assert_eq!(zolda.damage, 1700, "Attack コマンドのダメージが適用される");
+    assert_eq!(zolda.damage, 1725, "Attack コマンドのダメージが適用される");
     // ブレイバーは無抵抗なので damage は 0
     let braver = app
         .database()
@@ -1801,6 +1803,7 @@ Weapon "G" "強撃" 99999 1 5 100 -1
 Unit Z Mass 1 0 陸 5 M 1000 100 100 110 0 100 BBBC
 Place G リオ Player 1 1
 Place Z ガロ Enemy 5 5
+SpecialPower リオ 必中
 Attack リオ 強撃 ガロ 無抵抗
 Exit
 
@@ -1811,8 +1814,15 @@ Return
     let mut app = App::new();
     let stmts = event::parse(src).unwrap();
     event_runtime::execute(&mut app, &stmts).unwrap();
-    // SRC 仕様: Attack 命令経由では Destruction は発火しない
+    // SRC 仕様: Attack 命令経由では Destruction は発火しないが、ユニットは破壊される
     assert_eq!(app.script_var("destroyed"), "");
+    assert!(
+        app.database()
+            .unit_instances
+            .iter()
+            .all(|u| u.unit_data_name != "Z"),
+        "撃破されたユニットが盤面に残っている"
+    );
 }
 
 #[test]

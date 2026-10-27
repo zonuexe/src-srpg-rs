@@ -1,0 +1,60 @@
+# コマンド列モード: コマンド引数の評価 (原典 GetArgAsString / GetArgAsLong) を、
+# 変数への作用が観測できるコマンドで突合する。逐次実行のみ (制御フロー無し)。
+Set n 10
+Set m 3
+Set name "n"
+Set s "a,b,c"
+Incr n (m + 1)
+Incr m m
+Set k 0
+Incr k "5"
+Array arr s ","
+Array arr2 "p q r" リスト
+Set x 1
+Set y 2
+Swap x y
+Global g1 g2
+Set g1 (n * 2)
+Set t "$(name)!"
+Set u name
+Set v (s & "-" & m)
+Set w Len(s)
+Set z (未定義)
+Set q "(m)"
+Set r `$(m)`
+Unset y
+Set h 3.5
+Set j 0
+Incr j h
+Set j2 0
+Incr j2 "2.5"
+Set j3 1
+Incr j3 (h * 2)
+Set j4 0
+Incr j4 Len(s)
+Money 100
+Money "50"
+Money (h * 2)
+Money (5 / 2)
+===PROBES===
+n
+m
+k
+arr[1]
+arr[3]
+arr2[2]
+x
+y
+g1
+t
+u
+v
+w
+z
+q
+r
+j
+j2
+j3
+j4
+資金

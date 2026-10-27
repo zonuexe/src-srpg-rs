@@ -101,6 +101,9 @@ pub enum DrawCmd {
     },
     /// `Polygon x1 y1 x2 y2 …` — 頂点列を結ぶ多角形 (閉path)。色は現在の線色のみ。
     Polygon { points: Vec<(f64, f64)> },
+    /// `ClearPicture x1 y1 x2 y2` — それまでの描画のうち矩形 (両端含む) の内側を消す
+    /// (原典 `ClearPicture2`。下のマップが見えるようになる)。後続の描画は消さない。
+    ClearRect { x1: f64, y1: f64, x2: f64, y2: f64 },
     /// `Arc x y r start end [color]` — 中心 (cx,cy)・半径 r の円弧。
     /// 角度は度数法・右向き=0・反時計回りに増加 (上向き=90)。
     Arc {

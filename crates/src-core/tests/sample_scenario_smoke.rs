@@ -14,9 +14,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use src_core::data::{
-    event, item, loader, map as mapdata, pilot, special_power, terrain_file, unit,
-};
+use src_core::data::{event, loader, map as mapdata, terrain_file};
 use src_core::dialog::PendingDialog;
 use src_core::stage::StageState;
 use src_core::test_harness::{Harness, Step};
@@ -89,19 +87,9 @@ fn load_sample(root: &Path, active_map_base: &str) -> App {
         let Ok(bytes) = fs::read(p) else { continue };
         let txt = loader::decode_text(&bytes);
         let name = rel_name(root, p);
-        let r: Result<(), String> = match basename_lower(p).as_str() {
-            "pilot.txt" => pilot::parse(&txt)
-                .map(|v| app.database_mut().extend_pilots(v))
-                .map_err(|e| e.to_string()),
-            "robot.txt" | "unit.txt" => unit::parse(&txt)
-                .map(|v| app.database_mut().extend_units(v))
-                .map_err(|e| e.to_string()),
-            "item.txt" => item::parse(&txt)
-                .map(|v| app.database_mut().extend_items(v))
-                .map_err(|e| e.to_string()),
-            "sp.txt" | "mind.txt" => special_power::parse(&txt)
-                .map(|v| app.database_mut().extend_special_powers(v))
-                .map_err(|e| e.to_string()),
+        // 取り込み規則はブラウザのシナリオ読込と共通 (`scenario::ingest_data_file`)。
+        let r = match src_core::scenario::ingest_data_file(&mut app, &name, &txt) {
+            Some(r) if !r.errors.is_empty() => Err(r.errors[0].clone()),
             _ => Ok(()),
         };
         if let Err(e) = r {
@@ -667,6 +655,7 @@ fn kessen_chapter2_forced_loss_when_monster_enters_town() {
     let terrain_name = |app: &App, x: u32, y: u32| -> Option<String> {
         let tid = app.database().map.as_ref().unwrap().cell(x, y).terrain_id;
         app.database()
+            .catalog
             .terrains
             .iter()
             .find(|t| t.id == tid)

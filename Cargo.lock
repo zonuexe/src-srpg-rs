@@ -424,6 +424,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 name = "src-core"
 version = "0.1.0"
 dependencies = [
+ "delharc",
  "encoding_rs",
  "log",
  "regex",
@@ -437,14 +438,12 @@ name = "src-web"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
- "delharc",
  "js-sys",
  "log",
  "src-core",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "zip",
 ]
 
 [[package]]

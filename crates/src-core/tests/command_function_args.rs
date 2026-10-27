@@ -132,7 +132,9 @@ fn moveunit_coords_from_functions() {
 
 #[test]
 fn money_delta_from_function() {
-    let app = run("Money +Max(100, 250)\n");
+    // 引数は 1 項として評価する (原典 GetArgAsString)。`+Max(…)` のように先頭に `+` を
+    // 付けると原典では 1 つの名前になるので、関数はそのまま書く。
+    let app = run("Money Max(100, 250)\n");
     assert_eq!(app.money(), 250);
 }
 
@@ -231,9 +233,13 @@ fn parenthesized_concat_ampersand_inside_quotes_is_literal() {
 }
 
 #[test]
-fn parenthesized_concat_without_surrounding_spaces() {
-    // `&` の前後に空白が無い形でも畳む。
+fn parenthesized_concat_without_surrounding_spaces_is_one_term() {
+    // 演算子は空白で区切られた項のときだけ認識する (原典 ListSplit / EvalExpr)。
+    // `"a"&"b"&"c"` は `"` で始まり `"` で終わる 1 項の文字列になる (C# oracle で確認)。
     let app = run(r#"Set p ("a"&"b"&"c")"#);
+    assert_eq!(app.script_var("p"), r#"a"&"b"&"c"#);
+    // 空白で区切れば連結される。
+    let app = run(r#"Set p ("a" & "b" & "c")"#);
     assert_eq!(app.script_var("p"), "abc");
 }
 

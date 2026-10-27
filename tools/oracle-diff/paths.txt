@@ -1,0 +1,101 @@
+# 評価経路モード (paths) の probe コーパス。上段のコマンドで変数を用意し、
+# ===PROBES=== 以下の式を C# (GetValueAsString / If の真偽) と Rust の各評価経路
+# (Eval / 代入 / If / メニュー条件) に通して突合する。
+Set n 10
+Set m 3
+Set s "abc"
+Set t "abd"
+Set e ""
+Set zero 0
+Set neg -5
+Set numstr "12"
+Set fl 2.5
+Money 500
+===PROBES===
+# --- 数値変数の算術 ---
+n + 1
+n * m
+n / 4
+n \ 4
+n Mod 3
+n ^ 2
+-n
+neg * 2
+(n + m) * 2
+n - m - 2
+n + -1
+2 * -3
+fl * 2
+fl + 0.5
+n+1
+n*m+1
+# --- 比較 ---
+n > m
+n = 10
+n <> 10
+n >= 10
+n < m
+n = m + 7
+n + 1 > m * 3
+n>m
+fl = 2.5
+1 = 1.0
+0.1 + 0.2 = 0.3
+# --- 論理 ---
+n >= 10 And m < 5
+n > 100 Or m = 3
+n > 100 And m = 3 Or n = 10
+Not n = 10
+Not (n = 10)
+Not n > 100
+(n > 5) And (m > 5)
+# --- 文字列 ---
+s = "abc"
+s = "abd"
+s <> t
+s < t
+s > t
+s Like "a*"
+s Like "?bc"
+s Like "x*"
+s & t
+s & n
+"x" & "y"
+s="abc"
+s = abc
+# --- 空・未定義・ゼロ ---
+e = ""
+e
+zero
+n
+s
+undefined_var
+undefined_var + 1
+undefined_var = 0
+undefined_var = ""
+undefined_var * 3
+# --- 数値文字列 ---
+numstr + 1
+numstr = 12
+numstr > 9
+"12" = 12
+"10" > "9"
+# --- システム変数 ---
+資金
+資金 + 100
+資金 > 100
+資金 * 2 = 1000
+# --- 関数との組合せ ---
+Len(s)
+Len(s) = 3
+Len(s) + n
+InStr(s, "b") > 0
+IIf(n > 5, 1, 2)
+IIf(n > 5, 1, 2) + 1
+Mid(s, 2, 1) = "b"
+Abs(neg) = 5
+Max(n, m) * 2
+# --- 括弧 ---
+(n)
+((n + 1) * 2) = 22
+(s)

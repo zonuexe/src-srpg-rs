@@ -17,7 +17,6 @@
 use serde::{Deserialize, Serialize};
 
 use super::loader::{read_data_lines, split_records, SourceLine};
-use crate::settings::Settings;
 
 /// 性別 / Pilot sex. 元 `.Sex` フィールド。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -460,15 +459,6 @@ fn err(line_num: usize, message: &str) -> ParseError {
         line_num,
         message: message.to_string(),
     }
-}
-
-/// Settings 由来の補助情報（将来用フック）/ Placeholder for future settings-driven hooks.
-///
-/// 元 SRC ではメッセージ速度などが load 時には参照されないが、上位 API で
-/// `parse_with` パターンを取れるよう将来差し込めるようにしておく。
-#[doc(hidden)]
-pub fn parse_with(src: &str, _settings: &Settings) -> Result<Vec<PilotData>, ParseError> {
-    parse(src)
 }
 
 #[cfg(test)]

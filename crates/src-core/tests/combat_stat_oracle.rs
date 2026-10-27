@@ -132,7 +132,7 @@ fn upgrade_weapon_power_matches_src_additive_rule() {
     };
 
     let mut app = App::new();
-    app.database_mut().pilots.push(PilotData {
+    app.database_mut().catalog.pilots.push(PilotData {
         spirit_commands: Vec::new(),
         name: "P".into(),
         nickname: "P".into(),
@@ -153,7 +153,7 @@ fn upgrade_weapon_power_matches_src_additive_rule() {
         bitmap: None,
         features: Vec::new(),
     });
-    app.database_mut().units.push(UnitData {
+    app.database_mut().catalog.units.push(UnitData {
         abilities: Vec::new(),
         name: "改造機".into(),
         kana_name: String::new(),

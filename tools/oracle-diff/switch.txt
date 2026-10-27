@@ -1,0 +1,176 @@
+# switch モード: Switch ～ EndSw の各ブロックで飛び込む Case の行 (0 始まり、無ければ end)。
+# 上段はセットアップ、===PROBES=== 以降がブロック列。ブロック内の Case 本体は置かない。
+Set x 5
+Set 名前 リオ
+Set n 5
+Set s "05"
+Set half 1.5
+Set 空 ""
+Set 配列[1] alpha
+Set 配列[2] beta
+Set idx 2
+===PROBES===
+# 数値の値
+Switch x
+Case 4
+Case 5
+EndSw
+Switch x
+Case 5.0
+Case 05
+Case "5"
+EndSw
+Switch x
+Case 05
+EndSw
+Switch x
+Case "5"
+EndSw
+Switch x
+Case (2 + 3)
+EndSw
+Switch x
+Case 4 5 6
+EndSw
+Switch x
+Case n
+EndSw
+Switch x
+Case $(n)
+EndSw
+Switch x
+Case "$(n)"
+EndSw
+Switch (x Mod 4)
+Case 0
+Case 1
+EndSw
+Switch (x + 0.5)
+Case 5.5
+EndSw
+Switch (x / 2)
+Case 2.5
+EndSw
+Switch 1.50
+Case 1.5
+Case 1.50
+EndSw
+Switch half
+Case 1.5
+EndSw
+Switch s
+Case 5
+Case 05
+EndSw
+Switch 1+1
+Case 2
+Case 1+1
+EndSw
+# 文字列の値
+Switch 名前
+Case ガロ
+Case リオ
+EndSw
+Switch 名前
+Case "リオ"
+EndSw
+Switch 名前
+Case `リオ`
+EndSw
+Switch 名前
+Case 名前
+EndSw
+Switch $(名前)
+Case リオ
+EndSw
+Switch "$(名前)"
+Case リオ
+EndSw
+Switch abc
+Case ABC
+Case abc
+EndSw
+Switch "a b"
+Case "a b"
+EndSw
+Switch "a b"
+Case a b
+EndSw
+# 未定義・空
+Switch 未定義
+Case ""
+Case 未定義
+EndSw
+Switch 配列[9]
+Case 配列[9]
+Case ""
+EndSw
+Switch 配列[idx]
+Case alpha
+Case beta
+EndSw
+Switch 配列[1]
+Case 配列[1]
+EndSw
+Switch 空
+Case 空
+Case ""
+EndSw
+# 関数
+Switch x
+Case Len(abcde)
+EndSw
+Switch Mid(abcdef, 2, 2)
+Case bc
+EndSw
+Switch x
+Case Max(3, 5)
+EndSw
+Switch x
+Case IIf(x > 3, 5, 0)
+EndSw
+# Case Else
+Switch x
+Case 1
+Case Else
+EndSw
+Switch x
+Case 1
+Case else
+EndSw
+Switch x
+Case 1
+CaseElse
+EndSw
+Switch x
+Case Else 5
+Case 5
+EndSw
+Switch Else
+Case Else 5
+EndSw
+# 原典に無い書式 (範囲・比較・カンマ)
+Switch x
+Case 1 To 10
+Case Else
+EndSw
+Switch x
+Case Is < 10
+Case Else
+EndSw
+Switch x
+Case 4, 5
+EndSw
+Switch x
+Case 5, 6
+EndSw
+Switch To
+Case 1 To 10
+EndSw
+# 該当なし
+Switch x
+Case 1
+Case 2
+EndSw
+Switch x
+EndSw

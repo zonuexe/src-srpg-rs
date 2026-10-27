@@ -10,6 +10,7 @@
 #![forbid(unsafe_code)]
 
 pub mod app;
+pub mod archive;
 pub mod asset;
 pub mod audio;
 pub mod battle_anim;
@@ -29,6 +30,7 @@ pub mod modal;
 pub mod movement;
 pub mod necessary_skill;
 pub mod pilot_instance;
+pub mod scenario;
 pub mod scene;
 pub mod script_overlay;
 pub mod settings;
@@ -36,10 +38,10 @@ pub mod stage;
 pub mod test_harness;
 pub mod time_util;
 pub mod turn;
-pub mod ui;
 pub mod unit_ability;
 pub mod unit_instance;
 pub mod unit_weapon;
+pub mod util;
 
 pub use app::{App, Direction, Input, IntermissionCommandEntry};
 pub use audio::AudioRequest;

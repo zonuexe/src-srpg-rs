@@ -123,15 +123,16 @@ fn parse_record(record: &[SourceLine]) -> Result<SpecialPowerData, ParseError> {
 
 /// 効果行を `(effect_type, level)` のリストへ分解する。
 ///
-/// 元: `SpecialPowerData.SetEffect` (`SpecialPowerData.cs`)。複数効果は `,`
-/// 区切り、各効果は `Lv` の左を type、右の数値を level とする
+/// 元: `SpecialPowerData.SetEffect` (`SpecialPowerData.cs`)。効果は
+/// `GeneralLib.ToList` と同じく空白区切り (例: 挑発 の `挑発 命中率低下Lv5`)。
+/// 旧形式との互換で `,` も区切りとして扱い、`"` で囲んだ部分は分割しない。
+/// 各効果は `Lv` の左を type、右の数値を level とする
 /// (例: `ダメージ増加Lv10` → `("ダメージ増加", 10.0)`)。`Lv` を含まない効果は
 /// レベルを既定 0.0 とする (本移植が数値で参照するのは `Lv` 付き効果のみ)。
-/// 値指定 (`=...`) を伴う複雑な効果はここでは扱わない (移植スコープ外)。
+/// 値指定 (`=...`) を伴う効果は `イベント=生贄ルーチン` のように 1 要素のまま保持する。
 fn parse_effects(line: &str) -> Vec<(String, f64)> {
-    line.split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
+    split_effect_list(line)
+        .into_iter()
         .map(|item| match item.find("Lv") {
             Some(idx) => {
                 let etype = item[..idx].trim().to_string();
@@ -141,9 +142,34 @@ fn parse_effects(line: &str) -> Vec<(String, f64)> {
                     .unwrap_or(0.0);
                 (etype, level)
             }
-            None => (item.to_string(), 0.0),
+            None => (item, 0.0),
         })
         .collect()
+}
+
+/// 空白 / `,` 区切りで効果リストを分割する (`"` 内は区切らない)。
+fn split_effect_list(line: &str) -> Vec<String> {
+    let mut items = Vec::new();
+    let mut cur = String::new();
+    let mut quoted = false;
+    for c in line.chars() {
+        match c {
+            '"' => {
+                quoted = !quoted;
+                cur.push(c);
+            }
+            c if !quoted && (c.is_whitespace() || c == ',') => {
+                if !cur.is_empty() {
+                    items.push(std::mem::take(&mut cur));
+                }
+            }
+            c => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        items.push(cur);
+    }
+    items
 }
 
 fn err(line_num: usize, message: &str) -> ParseError {
@@ -210,6 +236,28 @@ mod tests {
         assert_eq!(v[1].effects, vec![("ダメージ増加".to_string(), 10.0)]);
         assert_eq!(v[2].name, "魂");
         assert_eq!(v[2].effects, vec![("ダメージ増加".to_string(), 15.0)]);
+    }
+
+    #[test]
+    fn effect_line_is_whitespace_separated() {
+        // 実 sp.txt (srcall Data/System/sp.txt) の 挑発 / みがわり。
+        let src = "\
+挑発, ちょうはつ
+挑, 35, 敵, 攻撃, -, -, 挑発
+挑発 命中率低下Lv5
+指定したユニットの攻撃を自分に引き付ける
+
+みがわり
+身, 10, 味方, みがわり, -, -, みがわり
+みがわり
+指定したユニットが受けた攻撃を一度だけ代わりに受ける
+";
+        let v = parse(src).unwrap();
+        assert_eq!(
+            v[0].effects,
+            vec![("挑発".to_string(), 0.0), ("命中率低下".to_string(), 5.0)]
+        );
+        assert_eq!(v[1].effects, vec![("みがわり".to_string(), 0.0)]);
     }
 
     #[test]

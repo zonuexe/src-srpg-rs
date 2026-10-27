@@ -49,8 +49,8 @@ nix --extra-experimental-features 'nix-command flakes' develop --command just <r
 
 | クレート | パス | 役割 |
 |---------|------|------|
-| `src-core` | `crates/src-core` | ゲームロジック（no_std 互換、純粋 Rust） |
-| `src-web` | `crates/src-web` | WASM フロントエンド（Yew + wasm-bindgen） |
+| `src-core` | `crates/src-core` | ゲームロジック（プラットフォーム非依存の純粋 Rust、std 使用） |
+| `src-web` | `crates/src-web` | WASM フロントエンド（wasm-bindgen + web-sys / Canvas 2D） |
 | `verify-archive` | `tools/verify-archive` | アーカイブ検証ツール |
 
 ## ツールチェーン
@@ -67,21 +67,22 @@ nix --extra-experimental-features 'nix-command flakes' develop --command just <r
 
 **`src-core`** — プラットフォーム非依存のゲームロジック
 - `#![forbid(unsafe_code)]`
-- WASM 互換: `std::fs` を使わず VFS、スレッド非使用、時刻は `instant` クレート
+- WASM 互換: `std::fs` を使わず VFS、スレッド非使用、時刻はフロントエンドが注入する
+  (`App::set_wall_clock_ms`。暦計算は `time_util.rs`)
 - 元 VB5 の `.bas` / `.cls` を 1 モジュール（または型）単位で移植
 
 **`src-web`** — WASM フロントエンド（wasm-bindgen + Canvas 2D）
-- Archive（ZIP展開）/ Assets / Audio / Render モジュール
+- Archive（画像・音声の Assets 登録。展開と取り込みは src-core）/ Assets / Audio / Render モジュール
 - Canvas API 呼び出しとイベント処理（キーボード・マウス・ファイル選択）
-- 描画エントリポイント: `src-core::render::draw_scene()`
+- 描画エントリポイント: `src-web/src/render.rs` の `draw_scene()`
 
 ### 主要モジュール（src-core）
 
 | モジュール | 役割 |
 |-----------|------|
-| `app.rs` | 上位状態機械・シーン管理・ゲーム全体制御 (`App`, `Scene`) |
-| `db.rs` | 静的データ集約 (`GameDatabase`) |
-| `data/` | データパーサー（pilot.txt / unit.txt / map.txt 等） |
+| `app/` | 上位状態機械・ゲーム全体制御 (`App`)。`mod.rs` は構造体とアクセサ、`impl App` は責務別ファイル (`stage_flow` / `battle` / `map_attack` / `combat_rules` / `ai` / `reaction` / `spirit` / `unit_commands` / `input` / `intermission` / `dialog` / `script_flow` / `vfs` / `debug`) に分割 |
+| `db.rs` | `GameDatabase` = 静的データ `catalog: Catalog` (`pilots` / `units` / `items` / `special_powers` / `terrains` / `maps` / `animation`) + 実行時の盤面 (`map` / `unit_instances` / `pilot_instances` / 位置索引)。`unit_instances` は `UnitList` (スライスとして参照・要素変更のみ。追加・削除は `register_unit` / `remove_unit*` / `replace_unit_instances`、位置の変更は `move_unit` / `set_off_map` で位置索引と同期)。セーブは `#[serde(flatten)]` で分割前と同じ形 |
+| `data/` | データパーサー（pilot.txt / unit.txt / map.txt 等、`necessary.rs` は `(必要技能)` 切り離し） |
 | `unit_instance.rs` | マップ上のユニット実体（位置・所属勢力・状態） |
 | `pilot_instance.rs` | パイロット実体（level, exp, sp, morale, plana, skills） |
 | `unit_weapon.rs` | 武器の実行時状態（残弾・EN消費） |
@@ -89,16 +90,22 @@ nix --extra-experimental-features 'nix-command flakes' develop --command just <r
 | `condition.rs` | 状態異常・精神コマンド効果 |
 | `feature.rs` | ユニット特殊能力・スキル有効化判定 |
 | `item_slot.rs` | 装備スロット管理 |
-| `event_runtime.rs` | `.eve` イベントスクリプト実行 (`ScriptContext`, `execute()`) |
-| `expression/` | 式評価器（演算子・関数・変数解決） |
-| `combat.rs` | 戦闘予測・実行（命中率・ダメージ計算） |
+| `event_runtime/` | `.eve` イベントスクリプト実行 (`ScriptContext`, `execute()`)。各コマンドの本体は `commands/` 以下のカテゴリ別モジュール (1 コマンド 1 関数)。組み込み関数は `functions/` 以下のカテゴリ別モジュール。式の評価は `eval` (原典 `EvalExpr` / `EvalTerm` の移植、唯一の評価器。条件・代入・数値引数はすべてここを通す)。コマンド引数は `exec_command_pc` が原典 `GetArgAsString` どおり評価して `Cmd::xargs` に渡す (変数名・ラベル等の位置は `raw_arg_position` で原文のまま)。数値引数は `Cmd::long` / `Cmd::double` (原典 `GetArgAsLong` / `GetArgAsDouble`) で読み、`GetArgAsString` の値を数値化する箇所は `eval::str_to_lng`。組み込み関数の引数も `eval_script_function` が評価してから渡す (`IsVarDefined` / `Count` / `IIf` だけ原文)。コマンド・関数の中で値をもう一度評価・展開しないこと。ほかに `library` / `labels` (自動発火) / `vars` (代入先・システム変数・数値の読み取り) / `expression` (`If` の項分割と数値ヘルパ) / `info` / `blocks` / `unit_effects`。ユニットへの作用はなるべく App のドメイン関数 (`set_unit_form` / `execute_ability` / `execute_spirit_by_event` / `script_attack` 等) を呼ぶ |
+| `util/` | App 非依存の純粋ユーティリティ (SJIS 文字列・全角変換・Like・VB 数値書式) |
+| `necessary_skill.rs` | 必要技能 / 必要条件の評価 (武器ゲート `weapon_usable_by`) |
+| `combat.rs` | 戦闘予測（命中率・ダメージ計算）とマップ攻撃の効果範囲。App 側の実行は `app/battle.rs` (`strike_preview` / `resolve_strike`) と `app/map_attack.rs` |
 | `movement.rs` | 移動範囲計算（Dijkstra） |
-| `scene/` | シーン実装（Title / MapView / UnitList 等） |
-| `ui/` | UI 抽象 trait 層（src-web が実装） |
+| `scene/` | シーン状態 (`Scene`)・レイアウト・ヒットテスト・ビューモデル (型と、盤面から組み立てる `build_status_detail` / `reaction_window_data` / `weapon_select_window_data`)。src-web はこれを描くだけ |
 | `turn.rs` | ターン / フェーズ管理 |
 | `stage.rs` | ステージ進行状態（Briefing / Sortie / Battle / Victory） |
 | `dialog.rs` | 対話 UI（Talk / Confirm / Input / Menu） |
 | `command_menu.rs` | コマンドメニュー（ユニット・マップ） |
+| `command_catalog.rs` | `.eve` コマンドの単一カタログ (配線不足の検出・verify-archive のカバレッジ計測) |
+| `flow.rs` / `modal.rs` | スクリプト完了後の継続 (`FlowCont`) / スクリプトを止めるモーダル (対話・タイマー) の型付きビュー |
+| `battle_anim.rs` / `script_overlay.rs` | 戦闘・移動アニメ状態 / スクリプト描画 (`Paint*` 等) の命令列 |
+| `archive.rs` / `scenario.rs` | アーカイブ展開 (`.zip` / `.lzh`) と、シナリオの取り込み・起動 (`load_scenario`: データファイル → DB、`.ini` / `.eve` 登録、エントリ実行、Continue チェイン / ブートストラップ)。src-web・verify-archive・テストが共有する |
+| `entrypoint.rs` | アーカイブ内のシナリオ開始ファイル推定 |
+| `test_harness.rs` | `.eve` E2E テスト用ドライバ (統合テストから使用) |
 
 ### 静的データ → 実行時インスタンスの対応
 
@@ -117,7 +124,7 @@ PilotInstance (runtime)   UnitInstance (runtime)    Tile (x,y,terrain_id)
 
 - テストランナー: `cargo test -p src-core`（ネイティブのみ、WASM 不可）
 - 統合テスト: `crates/src-core/tests/` 以下に配置
-- ユニットテスト: 各ファイル末尾の `#[cfg(test)]` ブロック
+- ユニットテスト: 各ファイル末尾の `#[cfg(test)]` ブロック。`app` と `event_runtime` は `app/tests/` / `event_runtime/tests/` にトピック別 (共通ヘルパは `mod.rs`)
 
 主要テストファイル例:
 - `pilot_function.rs` — `Pilot()` 関数の文法テスト
@@ -155,7 +162,7 @@ PilotInstance (runtime)   UnitInstance (runtime)    Tile (x,y,terrain_id)
 ### ファイル I/O
 
 - VFS（Virtual FileSystem）ベース、物理ファイルアクセスは禁止
-- `src-web/archive.rs` が ZIP 展開 → `App.database` / Assets に蓄積
+- `src_core::archive` が展開し、`src_core::scenario::load_scenario` が `App.database` / スクリプトライブラリに取り込む。src-web (`archive.rs`) は画像・音声を Assets に登録するだけ
 - `.eve` 内の `Open / Read / Write` は VFS 操作
 
 ---

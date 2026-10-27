@@ -83,37 +83,10 @@ fn sparobo_scenario_loads_without_crashing() {
     for p in &data_paths {
         let Ok(bytes) = fs::read(p) else { continue };
         let txt = loader::decode_text(&bytes);
-        let base = basename_lower(p);
-        let result: Result<(), String> = match base.as_str() {
-            "pilot.txt" => pilot::parse(&txt)
-                .map(|v| {
-                    app.database_mut().extend_pilots(v);
-                })
-                .map_err(|e| e.to_string()),
-            "unit.txt" | "robot.txt" => unit::parse(&txt)
-                .map(|v| {
-                    app.database_mut().extend_units(v);
-                })
-                .map_err(|e| e.to_string()),
-            "item.txt" => item::parse(&txt)
-                .map(|v| {
-                    app.database_mut().extend_items(v);
-                })
-                .map_err(|e| e.to_string()),
-            "sp.txt" | "mind.txt" => special_power::parse(&txt)
-                .map(|v| {
-                    app.database_mut().extend_special_powers(v);
-                })
-                .map_err(|e| e.to_string()),
-            "terrain.txt" => terrain_file::parse(&txt)
-                .map(|v| {
-                    app.database_mut().extend_terrains(v);
-                })
-                .map_err(|e| e.to_string()),
-            "non_pilot.txt" => Ok(()), // 一旦スキップ (フォーマット最小)
-            _ if p.extension().and_then(|s| s.to_str()) == Some("map") => mapdata::parse(&txt)
-                .map(|m| app.database_mut().store_map(base, m))
-                .map_err(|e| e.to_string()),
+        let name = p.to_string_lossy();
+        // 取り込み規則はブラウザのシナリオ読込と共通 (`scenario::ingest_data_file`)。
+        let result = match src_core::scenario::ingest_data_file(&mut app, &name, &txt) {
+            Some(r) if !r.errors.is_empty() => Err(r.errors[0].clone()),
             _ => Ok(()),
         };
         if result.is_ok() {
@@ -224,7 +197,7 @@ fn sparobo_scenario_loads_without_crashing() {
     );
     // 3) 取り込んだユニット / パイロットが 0 件ではない
     assert!(
-        !app.database().pilots.is_empty() || !app.database().units.is_empty(),
+        !app.database().catalog.pilots.is_empty() || !app.database().catalog.units.is_empty(),
         "pilot / unit data が取り込まれていない"
     );
 
@@ -446,39 +419,7 @@ fn sparobo_title_drive_reaches_intermission() {
     for p in &data_paths {
         let Ok(bytes) = fs::read(p) else { continue };
         let txt = loader::decode_text(&bytes);
-        match basename_lower(p).as_str() {
-            "pilot.txt" => {
-                if let Ok(v) = pilot::parse(&txt) {
-                    app.database_mut().extend_pilots(v);
-                }
-            }
-            "unit.txt" | "robot.txt" => {
-                if let Ok(v) = unit::parse(&txt) {
-                    app.database_mut().extend_units(v);
-                }
-            }
-            "item.txt" => {
-                if let Ok(v) = item::parse(&txt) {
-                    app.database_mut().extend_items(v);
-                }
-            }
-            "sp.txt" | "mind.txt" => {
-                if let Ok(v) = special_power::parse(&txt) {
-                    app.database_mut().extend_special_powers(v);
-                }
-            }
-            "terrain.txt" => {
-                if let Ok(v) = terrain_file::parse(&txt) {
-                    app.database_mut().extend_terrains(v);
-                }
-            }
-            _ if p.extension().and_then(|s| s.to_str()) == Some("map") => {
-                if let Ok(m) = mapdata::parse(&txt) {
-                    app.database_mut().store_map(basename_lower(p), m);
-                }
-            }
-            _ => {}
-        }
+        src_core::scenario::ingest_data_file(&mut app, &p.to_string_lossy(), &txt);
     }
 
     let mut eves: Vec<PathBuf> = Vec::new();
@@ -719,14 +660,16 @@ fn sparobo_title_drive_reaches_intermission() {
         // 武器 (射程1) を持つ UnitData を探す
         let att_unit_opt = app
             .database()
+            .catalog
             .units
             .iter()
             .find(|u| src_core::combat::best_weapon_in_range(u, 1).is_some());
         // 任意の 2 パイロット (同じでもよい)
-        let pilot_opt = app.database().pilots.first();
+        let pilot_opt = app.database().catalog.pilots.first();
         // 適当な防御側 UnitData (攻撃側と異なるものを優先、なければ同じ)
         let def_unit_opt = app
             .database()
+            .catalog
             .units
             .iter()
             .find(|u| att_unit_opt.is_some_and(|a| a.name != u.name))
@@ -936,7 +879,7 @@ fn sparobo_character_making_creates_pilot() {
     );
 
     // ---- キャラクターメイキングを駆動 ----
-    let pilots_before = app.database().pilots.len();
+    let pilots_before = app.database().catalog.pilots.len();
     let cmaking_idx = (0..app.intermission_item_count())
         .find(|i| app.intermission_item_label(*i).as_deref() == Some("キャラクターメイキング"))
         .expect("キャラクターメイキング 項目");
@@ -995,13 +938,13 @@ fn sparobo_character_making_creates_pilot() {
                 }
             }
         }
-        let pilots_now = app.database().pilots.len();
+        let pilots_now = app.database().catalog.pilots.len();
         if pilots_now > pilots_before {
             eprintln!("[cmaking step {step}] pilot 増加検出: {pilots_before} → {pilots_now}");
             break;
         }
     }
-    let pilots_after = app.database().pilots.len();
+    let pilots_after = app.database().catalog.pilots.len();
     eprintln!(
         "[cmaking] pilots: {pilots_before} → {pilots_after} / units={} / script_err={:?}",
         app.database().unit_instances.len(),

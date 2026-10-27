@@ -8,6 +8,7 @@ using SRCCore.Filesystem;
 using SRCCore.Models;
 using SRCCore.TestLib;
 using SRCCore.Units;
+using SRCCore.VB;
 
 namespace OracleDiff
 {
@@ -28,7 +29,19 @@ namespace OracleDiff
         {
             if (args.Length > 0 && args[0] == "scenario")
             {
-                return RunScenario();
+                return RunScenario(false);
+            }
+            if (args.Length > 0 && args[0] == "paths")
+            {
+                return RunScenario(true);
+            }
+            if (args.Length > 0 && args[0] == "args")
+            {
+                return RunArgs();
+            }
+            if (args.Length > 0 && args[0] == "switch")
+            {
+                return RunSwitch();
             }
             if (args.Length > 1 && args[0] == "loaddata")
             {
@@ -65,7 +78,10 @@ namespace OracleDiff
             return 0;
         }
 
-        private static int RunScenario()
+        // paths モード (withCond=true): probe ごとに `GetValueAsString` の値と、`If <probe> Then`
+        // を実際に構文解析した AIfCmd.Evaluate() の真偽 (1/0) をタブ区切りで出力する。
+        // Rust 側 `oracle_paths` が本実装の各評価経路 (Eval / 代入 / If / メニュー条件) と突合する。
+        private static int RunScenario(bool withCond)
         {
             var src = new SRC { GUI = new MockGUI() };
             src.Event.EventData = new List<EventDataLine>();
@@ -112,9 +128,173 @@ namespace OracleDiff
 
             foreach (var p in probes)
             {
-                Console.WriteLine(Eval(src.Expression, p));
+                if (withCond)
+                {
+                    Console.WriteLine(Eval(src.Expression, p) + "\t" + IfTruth(src, parser, p));
+                }
+                else
+                {
+                    Console.WriteLine(Eval(src.Expression, p));
+                }
             }
             return 0;
+        }
+
+        // args モード: 上段のコマンド列を実行したあと、下段の各行をコマンドとして構文解析し、
+        // 引数ごとの `GetArgAsString(i)|GetArgAsLong(i)` をタブ区切りで出力する
+        // (コマンド引数の評価規則の突合。Rust 側は `oracle_args`)。
+        private static int RunArgs()
+        {
+            var src = new SRC { GUI = new MockGUI() };
+            src.Event.EventData = new List<EventDataLine>();
+            src.Event.EventCmd = new List<CmdData>();
+            src.Event.EventFileNames = new List<string>();
+            src.Event.AdditionalEventFileNames = new List<string>();
+            src.Event.EventQue = new Queue<string>();
+            var parser = new CmdParser();
+            var inProbes = false;
+            var id = 0;
+            string line;
+            while ((line = Console.In.ReadLine()) != null)
+            {
+                if (line == "===PROBES===")
+                {
+                    inProbes = true;
+                    continue;
+                }
+                if (line.Length == 0 || line[0] == '#')
+                {
+                    continue;
+                }
+                try
+                {
+                    var dl = new EventDataLine(id, EventDataSource.Scenario, "test", id, line);
+                    src.Event.EventData.Add(dl);
+                    var cmd = parser.Parse(src, dl);
+                    src.Event.EventCmd.Add(cmd);
+                    if (!inProbes)
+                    {
+                        cmd.Exec();
+                    }
+                    else
+                    {
+                        var outs = new List<string>();
+                        for (var i = 2; i <= cmd.ArgNum; i++)
+                        {
+                            string sv, lv, dv;
+                            try { sv = cmd.GetArgAsString(i); } catch (Exception e) { sv = "<ERR:" + e.GetType().Name + ">"; }
+                            try { lv = cmd.GetArgAsLong(i).ToString(); } catch (Exception e) { lv = "<ERR:" + e.GetType().Name + ">"; }
+                            try { dv = SrcFormatter.Format(cmd.GetArgAsDouble(i)); } catch (Exception e) { dv = "<ERR:" + e.GetType().Name + ">"; }
+                            outs.Add(sv + "|" + lv + "|" + dv);
+                        }
+                        Console.WriteLine(string.Join("\t", outs));
+                    }
+                }
+                catch (Exception e)
+                {
+                    if (inProbes)
+                    {
+                        Console.WriteLine("<ERR:" + e.GetType().Name + ">");
+                    }
+                    else
+                    {
+                        Console.Error.WriteLine("cmd err [" + line + "]: " + e.Message);
+                    }
+                }
+                id++;
+            }
+            return 0;
+        }
+
+        // switch モード: 上段のコマンド列を実行したあと、下段の `Switch` ～ `EndSw` の各ブロックで
+        // SwitchCmd を実行し、飛び先の行 (ブロック内 0 始まりの行番号。EndSw の次なら `end`) を
+        // 出力する (Case の評価・比較規則の突合。Rust 側は `oracle_switch`)。
+        private static int RunSwitch()
+        {
+            var src = new SRC { GUI = new MockGUI() };
+            src.Event.EventData = new List<EventDataLine>();
+            src.Event.EventCmd = new List<CmdData>();
+            src.Event.EventFileNames = new List<string>();
+            src.Event.AdditionalEventFileNames = new List<string>();
+            src.Event.EventQue = new Queue<string>();
+            var parser = new CmdParser();
+            var inProbes = false;
+            var id = 0;
+            var block = new List<string>();
+            string line;
+            while ((line = Console.In.ReadLine()) != null)
+            {
+                if (line == "===PROBES===")
+                {
+                    inProbes = true;
+                    continue;
+                }
+                if (line.Length == 0 || line[0] == '#')
+                {
+                    continue;
+                }
+                if (inProbes)
+                {
+                    block.Add(line);
+                    if (line.Trim().ToLower() != "endsw")
+                    {
+                        continue;
+                    }
+                    var start = id;
+                    foreach (var b in block)
+                    {
+                        var bl = new EventDataLine(id, EventDataSource.Scenario, "test", id, b);
+                        src.Event.EventData.Add(bl);
+                        src.Event.EventCmd.Add(parser.Parse(src, bl));
+                        id++;
+                    }
+                    string outv;
+                    try
+                    {
+                        var r = src.Event.EventCmd[start].Exec();
+                        outv = r < 0 ? "<ERR>" : (r - 1 - start == block.Count - 1 ? "end" : (r - 1 - start).ToString());
+                    }
+                    catch (Exception e)
+                    {
+                        outv = "<ERR:" + e.GetType().Name + ">";
+                    }
+                    Console.WriteLine(outv);
+                    block.Clear();
+                    continue;
+                }
+                try
+                {
+                    var dl = new EventDataLine(id, EventDataSource.Scenario, "test", id, line);
+                    src.Event.EventData.Add(dl);
+                    var cmd = parser.Parse(src, dl);
+                    src.Event.EventCmd.Add(cmd);
+                    cmd.Exec();
+                }
+                catch (Exception e)
+                {
+                    Console.Error.WriteLine("cmd err [" + line + "]: " + e.Message);
+                }
+                id++;
+            }
+            return 0;
+        }
+
+        private static string IfTruth(SRC src, CmdParser parser, string expr)
+        {
+            try
+            {
+                var dl = new EventDataLine(0, EventDataSource.Scenario, "probe", 0, "If " + expr + " Then");
+                var cmd = parser.Parse(src, dl) as SRCCore.CmdDatas.Commands.AIfCmd;
+                if (cmd == null)
+                {
+                    return "<ERR:NotIf>";
+                }
+                return cmd.Evaluate() ? "1" : "0";
+            }
+            catch (Exception e)
+            {
+                return "<ERR:" + e.GetType().Name + ">";
+            }
         }
 
         // データロード検証モード: pilot.txt/unit.txt をロードし、標準入力の probe を評価。

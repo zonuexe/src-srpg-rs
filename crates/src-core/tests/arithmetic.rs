@@ -342,36 +342,41 @@ fn logical_not_false_returns_one() {
 }
 
 // ============================================================
-//  GetValueAsLong の切り捨て挙動
-//  SRC.Sharp `ExpressionGetValueAsLongTests` 準拠:
-//  `(int)double` はゼロ方向への切り捨て。
+//  GetValueAsLong の丸め
+//  VB6 原典は `GetValueAsLong = num` (Double を Long へ代入) なので VB の型変換どおり
+//  偶数丸めになる。C# 移植 (`(int)num`) はゼロ方向への切り捨てで、原典と異なる。
 // ============================================================
 
 #[test]
-fn for_loop_end_value_truncated_not_rounded() {
-    // For i = 1 To (7/2) → To 3 (切り捨て), not 4 (四捨五入)
-    // SRC.Sharp `ExpressionGetValueAsLongTests.GetValueAsLong_PositiveDecimal_TruncatesTowardZero`
-    // に対応。`eval_int_expr` が `.trunc()` を使うことを検証する。
+fn for_loop_end_value_rounds_like_vb() {
+    // For i = 1 To (7 / 2) → 3.5 は偶数丸めで 4。演算子は空白で区切る
+    // (原典は `7/2` を 1 項として扱う)。
     let app = run(r#"
 Set count 0
-For i = 1 To (7/2)
+For i = 1 To (7 / 2)
   Incr count
 Next
 "#);
-    assert_eq!(app.script_var("count"), "3");
+    assert_eq!(app.script_var("count"), "4");
+    // 2.5 は偶数丸めで 2。
+    let app = run(r#"
+Set count 0
+For i = 1 To (5 / 2)
+  Incr count
+Next
+"#);
+    assert_eq!(app.script_var("count"), "2");
 }
 
 #[test]
-fn for_loop_end_value_negative_decimal_truncated() {
-    // `-3.9 → -3` (ゼロ方向切り捨て)。For の終端値が負の小数でも正しく動く。
-    // ループ自体は start=0 > end=-3 で実行しないが、end値の解釈が正しいか確認。
+fn for_loop_end_value_negative_decimal_rounded() {
+    // 終端 -3.5 → -4。start=0 > end なのでループしない。
     let app = run(r#"
 Set count 99
-For i = 0 To (-7/2)
+For i = 0 To (-7 / 2)
   Set count 0
 Next
 "#);
-    // start(0) > end(-3) なので loop しない → count = 99 のまま
     assert_eq!(app.script_var("count"), "99");
 }
 

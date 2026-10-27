@@ -1,6 +1,6 @@
 //! 必要技能 / 必要条件ゲートの end-to-end テスト。
 //!
-//! `(念力Lv3)` 形式の括弧条件をパーサ→評価器→`is_weapon_available` 経由で検証する。
+//! `(念力Lv3)` 形式の括弧条件をパーサ→評価器→`necessary_skill::weapon_usable_by` (App の武器ゲートと同じ経路) で検証する。
 //! パイロットは静的 `PilotData.features` 経由 (pilot_ids 空時のフォールバック) で解決。
 
 use src_core::data::pilot::{Adaption, PilotData, Sex};
@@ -76,6 +76,15 @@ fn unit_data_with_gated_weapon(necessary_skill: &str) -> UnitData {
     }
 }
 
+/// App の武器使用資格ゲート (`App::weapon_skill_ok`) と同じ判定を 0 番武器に適用する。
+fn gate_ok(unit: &UnitInstance, db: &GameDatabase) -> bool {
+    let wd = &db
+        .unit_by_name(&unit.unit_data_name)
+        .expect("unit data")
+        .weapons[0];
+    necessary_skill::weapon_usable_by(wd, unit, db)
+}
+
 fn setup(necessary_skill: &str, pilot: PilotData) -> (GameDatabase, UnitInstance) {
     let mut db = GameDatabase::new();
     db.extend_units(vec![unit_data_with_gated_weapon(necessary_skill)]);
@@ -96,7 +105,7 @@ fn weapon_sealed_when_pilot_lacks_required_skill() {
     // 念力Lv3 を要求する武器。パイロットは念力を持たない → 封印。
     let (db, unit) = setup("念力Lv3", pilot_with_features("無能力者", vec![]));
     assert!(
-        !unit.is_weapon_available(0, &db),
+        !gate_ok(&unit, &db),
         "念力を持たないパイロットの武器が使用可能になっている"
     );
 }
@@ -109,7 +118,7 @@ fn weapon_available_when_pilot_has_required_skill() {
         pilot_with_features("超能力者", vec![("念力Lv3", "1")]),
     );
     assert!(
-        unit.is_weapon_available(0, &db),
+        gate_ok(&unit, &db),
         "念力Lv3 を持つパイロットの武器が封印されている"
     );
 }
@@ -121,7 +130,7 @@ fn weapon_sealed_when_skill_level_insufficient() {
         "念力Lv3",
         pilot_with_features("見習い", vec![("念力Lv2", "1")]),
     );
-    assert!(!unit.is_weapon_available(0, &db));
+    assert!(!gate_ok(&unit, &db));
 }
 
 #[test]
@@ -131,14 +140,11 @@ fn kill_count_gate_via_static_feature() {
         "撃墜数Lv20",
         pilot_with_features("エース", vec![("撃墜数Lv100", "1")]),
     );
-    assert!(
-        ace.is_weapon_available(0, &db_ace),
-        "エースの撃墜数武器が封印されている"
-    );
+    assert!(gate_ok(&ace, &db_ace), "エースの撃墜数武器が封印されている");
 
     let (db_mob, mob) = setup("撃墜数Lv20", pilot_with_features("ザコ", vec![]));
     assert!(
-        !mob.is_weapon_available(0, &db_mob),
+        !gate_ok(&mob, &db_mob),
         "撃墜数 0 のザコが撃墜数Lv20 武器を使えてしまう"
     );
 }
@@ -148,15 +154,9 @@ fn morale_gate() {
     // 気力Lv3 = 気力 130 以上で使用可能。
     let (db, mut unit) = setup("気力Lv3", pilot_with_features("熱血漢", vec![]));
     unit.morale = 120;
-    assert!(
-        !unit.is_weapon_available(0, &db),
-        "気力120 で気力Lv3 武器が使える"
-    );
+    assert!(!gate_ok(&unit, &db), "気力120 で気力Lv3 武器が使える");
     unit.morale = 130;
-    assert!(
-        unit.is_weapon_available(0, &db),
-        "気力130 で気力Lv3 武器が封印される"
-    );
+    assert!(gate_ok(&unit, &db), "気力130 で気力Lv3 武器が封印される");
 }
 
 #[test]
@@ -164,13 +164,10 @@ fn negation_gate() {
     // !瀕死 = 瀕死でないとき使用可能。
     let (db, mut unit) = setup("!瀕死", pilot_with_features("剣士", vec![]));
     // 満タン (瀕死でない) → 使用可能。
-    assert!(unit.is_weapon_available(0, &db));
+    assert!(gate_ok(&unit, &db));
     // 瀕死 (HP <= 1/4) にする。max_hp=5000 → 1/4=1250。damage=4000 → hp=1000。
     unit.damage = 4000;
-    assert!(
-        !unit.is_weapon_available(0, &db),
-        "瀕死なのに !瀕死 武器が使用可能"
-    );
+    assert!(!gate_ok(&unit, &db), "瀕死なのに !瀕死 武器が使用可能");
 }
 
 #[test]
@@ -180,19 +177,13 @@ fn or_grouping() {
         "念力Lv3 or 剣術Lv1",
         pilot_with_features("剣士", vec![("剣術Lv1", "1")]),
     );
-    assert!(
-        ua.is_weapon_available(0, &db_a),
-        "剣術を持つのに OR 条件で封印"
-    );
+    assert!(gate_ok(&ua, &db_a), "剣術を持つのに OR 条件で封印");
 
     let (db_b, ub) = setup(
         "念力Lv3 or 剣術Lv1",
         pilot_with_features("無能力者", vec![]),
     );
-    assert!(
-        !ub.is_weapon_available(0, &db_b),
-        "どちらも持たないのに OR 条件で解禁"
-    );
+    assert!(!gate_ok(&ub, &db_b), "どちらも持たないのに OR 条件で解禁");
 }
 
 #[test]
@@ -200,16 +191,13 @@ fn and_grouping() {
     // 念力Lv3 剣術Lv1: 両方必要。
     let pilot_both = pilot_with_features("達人", vec![("念力Lv3", "1"), ("剣術Lv1", "1")]);
     let (db, unit) = setup("念力Lv3 剣術Lv1", pilot_both);
-    assert!(unit.is_weapon_available(0, &db));
+    assert!(gate_ok(&unit, &db));
 
     let (db2, unit2) = setup(
         "念力Lv3 剣術Lv1",
         pilot_with_features("片手落ち", vec![("念力Lv3", "1")]),
     );
-    assert!(
-        !unit2.is_weapon_available(0, &db2),
-        "剣術が無いのに AND 条件で解禁"
-    );
+    assert!(!gate_ok(&unit2, &db2), "剣術が無いのに AND 条件で解禁");
 }
 
 #[test]
@@ -217,7 +205,7 @@ fn unmodeled_condition_fails_open() {
     // 同調率系はモデル化していない → fail-open (誤封印しない)。
     let (db, unit) = setup("同調率Lv5", pilot_with_features("操縦士", vec![]));
     assert!(
-        unit.is_weapon_available(0, &db),
+        gate_ok(&unit, &db),
         "未モデル条件で武器が誤封印されている (fail-open であるべき)"
     );
 }

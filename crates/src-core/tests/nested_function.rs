@@ -104,14 +104,15 @@ Set v Abs($(x))
 #[test]
 fn nested_args_via_implicit_call() {
     // implicit Call + $(Args(N)) で `Lindex(List(a,b,c), N)` を渡しても
-    // 正しく解決できる
+    // 正しく解決できる。引数の `List(…)` は呼び出し時に評価される (クォートで囲むと
+    // 原典どおり文字列リテラルとして渡り、関数は評価されない)。
     let app = run(r#"
 Goto run
 helper:
   Set result Lindex($(Args(1)),$(Args(2)))
   Return
 run:
-helper "List(alpha,beta,gamma)" 2
+helper List(alpha,beta,gamma) 2
 "#);
     // Lindex は 1-indexed なので 2 つ目 = beta
     assert_eq!(app.script_var("result"), "beta");

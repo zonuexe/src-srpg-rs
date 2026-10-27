@@ -1,4 +1,4 @@
-//! ゲーム全体のデータベース / Aggregated game-wide static data.
+//! ゲーム全体のデータベース: 静的データ (`Catalog`) と実行時の盤面。
 //!
 //! 元 SRC の `SRC.bas` で `Public PDList As New PilotDataList` のように
 //! グローバル変数として持っていた各種データリストの集約。Rust 移植では
@@ -17,21 +17,51 @@ use crate::data::unit::UnitData;
 use crate::pilot_instance::PilotInstance;
 use crate::unit_instance::UnitInstance;
 
-/// シナリオロード時に蓄積される全データ。
-/// Aggregate of every static record loaded from the scenario's `Data/*.txt`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GameDatabase {
+/// 盤面に置かれたユニット実体の並び。スライスとして参照・要素の変更はできるが、追加・
+/// 削除は [`GameDatabase`] のメソッド (`register_unit` / `remove_unit*` /
+/// `replace_unit_instances`) だけが行う。位置索引 (`pos_index`) を常に同期させるための型。
+/// 位置 (`x` / `y` / `off_map`) の変更も `move_unit` / `set_off_map` を通すこと。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct UnitList(Vec<UnitInstance>);
+
+impl std::ops::Deref for UnitList {
+    type Target = [UnitInstance];
+    fn deref(&self) -> &[UnitInstance] {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for UnitList {
+    fn deref_mut(&mut self) -> &mut [UnitInstance] {
+        &mut self.0
+    }
+}
+
+impl<'a> IntoIterator for &'a UnitList {
+    type Item = &'a UnitInstance;
+    type IntoIter = std::slice::Iter<'a, UnitInstance>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut UnitList {
+    type Item = &'a mut UnitInstance;
+    type IntoIter = std::slice::IterMut<'a, UnitInstance>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter_mut()
+    }
+}
+
+/// シナリオのデータファイル (`Data/*.txt` / `.map`) から読み込む静的データ。ゲーム中は
+/// 変化しない (例外は `VFS` に書き戻されたデータの加法マージ)。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Catalog {
     /// 元: `SRC.bas::PDList` (`PilotDataList`)
     pub pilots: Vec<PilotData>,
     /// 元: `SRC.bas::UDList` (`UnitDataList`)
     pub units: Vec<UnitData>,
-    /// 元: `Map.bas::MapData`
-    pub map: Option<MapData>,
-    /// 元: `SRC.bas::UList` (`Units`) — マップ上に配置されたユニット実体。
-    pub unit_instances: Vec<UnitInstance>,
-    /// Runtime pilot instances — mutable state for pilots assigned to units.
-    #[serde(default)]
-    pub pilot_instances: Vec<PilotInstance>,
     /// 元: `SRC.bas::IDList` (`ItemDataList`)
     pub items: Vec<ItemData>,
     /// 元: `SRC.bas::SPDList` (`SpecialPowerDataList`)
@@ -47,6 +77,23 @@ pub struct GameDatabase {
     /// サブルーチン名の解決に使う。SRC `MessageDataList`(animation) 相当。
     #[serde(default)]
     pub animation: crate::data::animation::AnimationData,
+}
+
+/// ゲーム全体のデータ: 静的データ ([`Catalog`]) と、実行時の盤面 (マップ・ユニット実体・
+/// パイロット実体・未装備アイテム・位置索引)。セーブデータでは両者を同じ階層に並べる
+/// (`#[serde(flatten)]`。分割前のセーブと互換)。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GameDatabase {
+    /// 静的データ。
+    #[serde(flatten)]
+    pub catalog: Catalog,
+    /// 元: `Map.bas::MapData`
+    pub map: Option<MapData>,
+    /// 元: `SRC.bas::UList` (`Units`) — マップ上に配置されたユニット実体。
+    pub unit_instances: UnitList,
+    /// Runtime pilot instances — mutable state for pilots assigned to units.
+    #[serde(default)]
+    pub pilot_instances: Vec<PilotInstance>,
     /// どのユニットにも装備されていない「未装備」アイテムの在庫
     /// (アイテム名のリスト)。`RemoveItem unit` (item 省略 = 取り外し) で
     /// ここへ移り、`Item`/`Equip` で在庫から取り出される。
@@ -80,18 +127,20 @@ impl Default for GameDatabase {
 impl GameDatabase {
     pub const fn new() -> Self {
         Self {
-            pilots: Vec::new(),
-            units: Vec::new(),
-            map: None,
-            unit_instances: Vec::new(),
-            pilot_instances: Vec::new(),
-            items: Vec::new(),
-            special_powers: Vec::new(),
-            terrains: Vec::new(),
-            maps: BTreeMap::new(),
-            animation: crate::data::animation::AnimationData {
-                entries: BTreeMap::new(),
+            catalog: Catalog {
+                pilots: Vec::new(),
+                units: Vec::new(),
+                items: Vec::new(),
+                special_powers: Vec::new(),
+                terrains: Vec::new(),
+                maps: BTreeMap::new(),
+                animation: crate::data::animation::AnimationData {
+                    entries: BTreeMap::new(),
+                },
             },
+            map: None,
+            unit_instances: UnitList(Vec::new()),
+            pilot_instances: Vec::new(),
             spare_items: Vec::new(),
             next_uid: 1,
             pos_index: BTreeMap::new(),
@@ -101,7 +150,7 @@ impl GameDatabase {
     /// 戦闘アニメデータ (`animation.txt` / `ext_animation.txt`) をパースして取り込む。
     /// 既存定義は保持し、同一対象には追記する (SRC `is_effect` 挙動)。
     pub fn merge_animation_data(&mut self, src: &str) {
-        self.animation.merge_from_str(src);
+        self.catalog.animation.merge_from_str(src);
     }
 
     /// 武器使用時の戦闘アニメを解決する (`unit_data_name` のユニットが `weapon` を
@@ -114,14 +163,14 @@ impl GameDatabase {
         situation_label: &str,
         phase: crate::data::animation::WeaponPhase,
     ) -> Vec<crate::data::animation::ResolvedAnim> {
-        if self.animation.is_empty() {
+        if self.catalog.animation.is_empty() {
             return Vec::new();
         }
         let (nickname, class) = self
             .unit_by_name(unit_data_name)
             .map(|u| (u.nickname.clone(), u.class.clone()))
             .unwrap_or_default();
-        self.animation.resolve_weapon(
+        self.catalog.animation.resolve_weapon(
             unit_data_name,
             &nickname,
             &class,
@@ -149,7 +198,7 @@ impl GameDatabase {
         if !inst.off_map {
             self.pos_index.insert((inst.x, inst.y), uid.clone());
         }
-        self.unit_instances.push(inst);
+        self.unit_instances.0.push(inst);
         uid
     }
 
@@ -226,7 +275,7 @@ impl GameDatabase {
     /// インデックス指定でユニットを除去し `pos_index` を同期する。
     /// 戦闘の撃破処理など、既存の index ベース経路から呼ぶ橋渡し。
     pub fn remove_unit_at(&mut self, idx: usize) -> UnitInstance {
-        let inst = self.unit_instances.remove(idx);
+        let inst = self.unit_instances.0.remove(idx);
         if self.uid_at(inst.x, inst.y) == Some(inst.uid.as_str()) {
             self.pos_index.remove(&(inst.x, inst.y));
         }
@@ -237,6 +286,21 @@ impl GameDatabase {
     pub fn remove_unit(&mut self, uid: &str) -> Option<UnitInstance> {
         let i = self.idx_by_uid(uid)?;
         Some(self.remove_unit_at(i))
+    }
+
+    /// `pred` を満たすユニットを一括除去し `pos_index` を同期する。除去したユニットを
+    /// 元の並び順で返す。スクリプトの `Kill` / `RemoveUnit` 等、名前で複数体を
+    /// 消す経路用 (`unit_instances.retain` を直接呼ぶと索引が古いまま残る)。
+    pub fn remove_units_where(
+        &mut self,
+        mut pred: impl FnMut(&UnitInstance) -> bool,
+    ) -> Vec<UnitInstance> {
+        let (removed, kept) = std::mem::take(&mut self.unit_instances.0)
+            .into_iter()
+            .partition(|u| pred(u));
+        self.unit_instances = UnitList(kept);
+        self.rebuild_pos_index();
+        removed
     }
 
     /// `pos_index` が `unit_instances` と整合しているか検査する (テスト用)。
@@ -254,7 +318,7 @@ impl GameDatabase {
 
     /// 事前ロードされた `.map` の登録。キーは basename (lowercase)。
     pub fn store_map(&mut self, name: String, map: MapData) {
-        self.maps.insert(name, map);
+        self.catalog.maps.insert(name, map);
     }
 
     /// `ChangeMap "path"` 用のルックアップ。basename 部分のみで照合し、
@@ -264,17 +328,17 @@ impl GameDatabase {
         let slash = lname.rfind('/').map(|i| i + 1).unwrap_or(0);
         let bslash = lname.rfind('\\').map(|i| i + 1).unwrap_or(0);
         let base = &lname[slash.max(bslash)..];
-        self.maps.get(base)
+        self.catalog.maps.get(base)
     }
 
     /// 地形定義を加法的に取り込む。複数の terrain.txt をマージできる。
     /// 同 id は後勝ち。
     pub fn extend_terrains(&mut self, terrains: Vec<TerrainEntry>) {
         for t in terrains {
-            if let Some(slot) = self.terrains.iter_mut().find(|e| e.id == t.id) {
+            if let Some(slot) = self.catalog.terrains.iter_mut().find(|e| e.id == t.id) {
                 *slot = t;
             } else {
-                self.terrains.push(t);
+                self.catalog.terrains.push(t);
             }
         }
     }
@@ -282,7 +346,7 @@ impl GameDatabase {
     /// 地形 id から `TerrainEntry`（シナリオ定義）を引く。
     /// 見つからなければ `None`（呼び出し側でビルトインカタログにフォールバック）。
     pub fn terrain_by_id(&self, id: u32) -> Option<&TerrainEntry> {
-        self.terrains.iter().find(|t| t.id == id)
+        self.catalog.terrains.iter().find(|t| t.id == id)
     }
 
     /// 地形 id から移動コストを引く。シナリオ定義優先、無ければビルトイン、それも無ければ 1。
@@ -351,10 +415,10 @@ impl GameDatabase {
     /// アイテム定義を加法的に取り込む。同名は後勝ち。
     pub fn extend_items(&mut self, items: Vec<ItemData>) {
         for i in items {
-            if let Some(slot) = self.items.iter_mut().find(|e| e.name == i.name) {
+            if let Some(slot) = self.catalog.items.iter_mut().find(|e| e.name == i.name) {
                 *slot = i;
             } else {
-                self.items.push(i);
+                self.catalog.items.push(i);
             }
         }
     }
@@ -362,10 +426,15 @@ impl GameDatabase {
     /// 特殊能力定義を加法的に取り込む。同名は後勝ち。
     pub fn extend_special_powers(&mut self, sps: Vec<SpecialPowerData>) {
         for s in sps {
-            if let Some(slot) = self.special_powers.iter_mut().find(|e| e.name == s.name) {
+            if let Some(slot) = self
+                .catalog
+                .special_powers
+                .iter_mut()
+                .find(|e| e.name == s.name)
+            {
                 *slot = s;
             } else {
-                self.special_powers.push(s);
+                self.catalog.special_powers.push(s);
             }
         }
     }
@@ -375,7 +444,7 @@ impl GameDatabase {
     /// (`Unit.sp.cs`) ＝ 影響下の各スペシャルパワーの効果レベルの最大値
     /// (異なる精神間で加算はせず最大値勝ち)。
     ///
-    /// 各精神名は `self.special_powers` から引き、その `effects` 内の `effect_type`
+    /// 各精神名は `self.catalog.special_powers` から引き、その `effects` 内の `effect_type`
     /// レベルを参照する。ロード済み DB に存在しない精神名 (sp.txt 未読込の合成テスト
     /// 経路等) は既定テーブル ([`combat::default_sp_effect_level_single`]) でフォールバック
     /// する。該当効果が一つも無ければ 0.0。
@@ -386,7 +455,7 @@ impl GameDatabase {
     pub fn sp_effect_level(&self, active: &[String], effect_type: &str) -> f64 {
         let mut max_lv = 0.0f64;
         for name in active {
-            let lv = match self.special_powers.iter().find(|s| &s.name == name) {
+            let lv = match self.catalog.special_powers.iter().find(|s| &s.name == name) {
                 Some(spd) => spd
                     .effects
                     .iter()
@@ -424,10 +493,10 @@ impl GameDatabase {
     /// マージできる。同名は後勝ち。
     pub fn extend_pilots(&mut self, pilots: Vec<PilotData>) {
         for p in pilots {
-            if let Some(slot) = self.pilots.iter_mut().find(|e| e.name == p.name) {
+            if let Some(slot) = self.catalog.pilots.iter_mut().find(|e| e.name == p.name) {
                 *slot = p;
             } else {
-                self.pilots.push(p);
+                self.catalog.pilots.push(p);
             }
         }
     }
@@ -436,10 +505,10 @@ impl GameDatabase {
     /// unit.txt をマージできる。同名は後勝ち。
     pub fn extend_units(&mut self, units: Vec<UnitData>) {
         for u in units {
-            if let Some(slot) = self.units.iter_mut().find(|e| e.name == u.name) {
+            if let Some(slot) = self.catalog.units.iter_mut().find(|e| e.name == u.name) {
                 *slot = u;
             } else {
-                self.units.push(u);
+                self.catalog.units.push(u);
             }
         }
     }
@@ -451,7 +520,7 @@ impl GameDatabase {
 
     /// マップ上のユニット実体を差し替え。元 `UList` リセット相当。
     pub fn replace_unit_instances(&mut self, instances: Vec<UnitInstance>) {
-        self.unit_instances = instances;
+        self.unit_instances = UnitList(instances);
         self.rebuild_pos_index();
     }
 
@@ -501,7 +570,7 @@ impl GameDatabase {
             })
             .collect();
         let cost_fn = crate::movement::make_unit_cost_fn(
-            self.terrains.clone(),
+            self.catalog.terrains.clone(),
             def.transportation.clone(),
             def.adaption.0,
             u.current_area.clone(),
@@ -525,10 +594,11 @@ impl GameDatabase {
     /// パイロットの正式名 (例: "パチュリー・ノーレッジ") とは一致しないため、
     /// 顔グラ等の解決で愛称フォールバックが要る。
     pub fn pilot_by_name(&self, name: &str) -> Option<&PilotData> {
-        self.pilots
+        self.catalog
+            .pilots
             .iter()
             .find(|p| p.name == name)
-            .or_else(|| self.pilots.iter().find(|p| p.nickname == name))
+            .or_else(|| self.catalog.pilots.iter().find(|p| p.nickname == name))
     }
 
     /// Find a pilot instance by ID.
@@ -600,12 +670,12 @@ impl GameDatabase {
     }
 
     pub fn unit_by_name(&self, name: &str) -> Option<&UnitData> {
-        self.units.iter().find(|u| u.name == name)
+        self.catalog.units.iter().find(|u| u.name == name)
     }
 
     /// アイテム名から `ItemData` を引く。
     pub fn item_by_name(&self, name: &str) -> Option<&ItemData> {
-        self.items.iter().find(|i| i.name == name)
+        self.catalog.items.iter().find(|i| i.name == name)
     }
 
     /// 装備品の総合計を引数 closure で集計。`base` に対し各装備品 `ItemData` が
@@ -676,11 +746,11 @@ impl GameDatabase {
         let lv = pi.level.min(100);
         let seichou = pilot_static_skill_level(&pd.features, "霊力成長");
         let growth: i64 = if seichou > 0 {
-            crate::event_runtime::round_half_to_even(1.5 * f64::from(lv) * f64::from(10 + seichou))
+            crate::util::number::round_half_to_even(1.5 * f64::from(lv) * f64::from(10 + seichou))
                 as i64
                 / 10
         } else {
-            crate::event_runtime::round_half_to_even(1.5 * f64::from(lv)) as i64
+            crate::util::number::round_half_to_even(1.5 * f64::from(lv)) as i64
         };
         reiryoku + growth as i32
     }
@@ -1040,5 +1110,27 @@ pub fn grown_pilot(base: &PilotData, total_exp: i32) -> PilotData {
         intuition: base.intuition + lv,
         technique: base.technique + lv,
         ..base.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 静的データを `Catalog` に分けても、セーブデータの形 (各リストが最上位に並ぶ) は
+    /// 変わらない。分割前の形の JSON もそのまま読める。
+    #[test]
+    fn catalog_split_keeps_save_format() {
+        let mut db = GameDatabase::new();
+        db.register_unit(UnitInstance::new("U", "P", crate::Party::Player, 1, 1));
+        let v = serde_json::to_value(&db).unwrap();
+        assert!(v.get("pilots").is_some() && v.get("units").is_some());
+        assert!(v.get("catalog").is_none());
+        assert_eq!(v["unit_instances"].as_array().map(Vec::len), Some(1));
+
+        let old = r#"{"pilots":[],"units":[],"map":null,"unit_instances":[],
+            "items":[],"special_powers":[],"terrains":[]}"#;
+        let back: GameDatabase = serde_json::from_str(old).unwrap();
+        assert!(back.catalog.pilots.is_empty() && back.unit_instances.is_empty());
     }
 }

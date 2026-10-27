@@ -20,7 +20,7 @@
 //! 使い方:
 //!   cargo run -q -p verify-archive --bin oracle_loaddata -- <data_dir> < probes.txt
 
-use src_core::data::{item, loader, pilot, special_power, terrain_file, unit};
+use src_core::data::loader;
 use src_core::{event_runtime, App};
 use std::io::{self, BufRead, Write};
 use std::path::Path;
@@ -290,43 +290,37 @@ fn load_data_directory(app: &mut App, dir: &Path) {
         .or_else(|| read_data(&system_dir, "mind.txt"))
         .or_else(|| read_data(&system_dir, "sp.txt"))
     {
-        let (sps, _) = special_power::parse_lenient(&txt);
-        app.database_mut().extend_special_powers(sps);
+        src_core::scenario::ingest_data_file(app, "sp.txt", &txt);
     }
     // pilot.txt
     if let Some(txt) = read_data(dir, "pilot.txt") {
-        let (pilots, _) = pilot::parse_lenient(&txt);
-        app.database_mut().extend_pilots(pilots);
+        src_core::scenario::ingest_data_file(app, "pilot.txt", &txt);
     }
     // robot.txt / unit.txt (どちらも UDList へ。両方あれば両方ロード)
     if let Some(txt) = read_data(dir, "robot.txt") {
-        let (units, _) = unit::parse_lenient(&txt);
-        app.database_mut().extend_units(units);
+        src_core::scenario::ingest_data_file(app, "unit.txt", &txt);
     }
     if let Some(txt) = read_data(dir, "unit.txt") {
-        let (units, _) = unit::parse_lenient(&txt);
-        app.database_mut().extend_units(units);
+        src_core::scenario::ingest_data_file(app, "unit.txt", &txt);
     }
     // item.txt
     if let Some(txt) = read_data(dir, "item.txt") {
-        let (items, _) = item::parse_lenient(&txt);
-        app.database_mut().extend_items(items);
+        src_core::scenario::ingest_data_file(app, "item.txt", &txt);
     }
     // terrain.txt は C# 同様シナリオ data dir には無く `<dir>/../system/terrain.txt` に置かれる。
     // C# は LoadDataDirectory では読まず `TDList.Load(<System>/terrain.txt)` で別途ロードする。
     // Rust も同パスを直接読み `extend_terrains` でデータベースへ取り込む。
     if let Some(txt) = read_data(&dir.join("..").join("system"), "terrain.txt") {
-        let (terrains, _) = terrain_file::parse_lenient(&txt);
-        app.database_mut().extend_terrains(terrains);
+        src_core::scenario::ingest_data_file(app, "terrain.txt", &txt);
     }
 
     eprintln!(
         "loaded: pilots={} units={} items={} sp={} terrains={}",
-        app.database().pilots.len(),
-        app.database().units.len(),
-        app.database().items.len(),
-        app.database().special_powers.len(),
-        app.database().terrains.len(),
+        app.database().catalog.pilots.len(),
+        app.database().catalog.units.len(),
+        app.database().catalog.items.len(),
+        app.database().catalog.special_powers.len(),
+        app.database().catalog.terrains.len(),
     );
 }
 

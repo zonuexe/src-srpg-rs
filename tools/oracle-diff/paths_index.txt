@@ -1,0 +1,45 @@
+# paths モード: 添字付き変数の添字評価 (原典 GetVariable: 添字は GetValueAsString、
+# 多次元は各添字を GetValueAsString(添字, is_term)) と Set Eval(...) の左辺。
+Set 配列[1] alpha
+Set 配列[2] beta
+Set 配列[R-1] hyphen
+Set 配列[a b] spaced
+Set idx 2
+Set i 1
+Set j 2
+Set m[1,2] one-two
+Set m[2,2] two-two
+Set ref 参照先
+Set Eval(ref) 7
+Set Eval("t" & "2") 8
+Set Eval(配列[1]) 9
+===PROBES===
+配列[1]
+配列[idx]
+配列[idx - 1]
+配列[(idx - 1)]
+配列["1"]
+配列[01]
+配列[1.0]
+配列[$(idx)]
+配列["$(idx)"]
+配列[未定義]
+配列[R-1]
+配列[a b]
+配列[3]
+m[1,2]
+m[i,j]
+m[i, j]
+m[i + 1,j]
+m[(i + 1),j]
+m[idx,idx]
+"配列[1]"
+$(配列[idx])
+Eval(配列[idx])
+IsVarDefined(配列[idx])
+IsVarDefined(配列[3])
+Len(配列[idx])
+参照先
+t2
+alpha
+配列[1] & 配列[2]

@@ -92,22 +92,6 @@ pub fn scatter_damage_mult(weapon_class: &str, distance: u32) -> f64 {
     1.0 - 0.05 * steps as f64
 }
 
-/// 防御側の選択した防御モード / Defender's chosen defense mode for this attack.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum DefenseMode {
-    /// 通常防御 — 特別ボーナスなし。
-    #[default]
-    Normal,
-    /// 回避 (dodge) — 命中率が防御側の回避 stat / 5 だけ低下する。
-    Dodge,
-    /// 防御 (defend) — ダメージが半減する。
-    Defend,
-    /// バリア (barrier) — barrier_strength 分だけダメージを吸収する。
-    Barrier { strength: i64 },
-    /// シールド (shield) — chance% の確率でダメージを完全無効化する。
-    Shield { chance: i32 },
-}
-
 /// 精神コマンドによる与/被ダメージ修正のレベル束 (C# `UnitWeapon.cs` の up/down-mod 用)。
 ///
 /// 各フィールドは対応する効果タイプの **最大値** レベル (C# `Unit.SpecialPowerEffectLevel`
@@ -166,12 +150,6 @@ pub fn default_sp_effect_level(statuses: &[String], effect_type: &str) -> f64 {
         .iter()
         .map(|s| default_sp_effect_level_single(s, effect_type))
         .fold(0.0f64, f64::max)
-}
-
-/// 精神名スライスから `ダメージ増加` 効果レベルの最大値を既定テーブルで解決する
-/// (後方互換ラッパ)。[`default_sp_effect_level`] に `"ダメージ増加"` を渡すのと同じ。
-pub fn default_damage_boost_level(statuses: &[String]) -> f64 {
-    default_sp_effect_level(statuses, "ダメージ増加")
 }
 
 /// 攻撃側 `atk_statuses` / 防御側 `def_statuses` の精神名スライスから既定テーブルで
@@ -660,7 +638,7 @@ pub fn predict_with_status_terrain(
     }
     // バリア: 攻撃側 `直撃` で無効化 (シールド防御の無効化)。`バリア中和` 状態
     // (特殊効果攻撃属性 中) の防御側はバリア / フィールドが無効化される。
-    // 注: バリア は強度吸収型のシールド防御 (DefenseMode::Barrier) であり sp.txt の
+    // 注: バリア は強度吸収型のシールド防御であり sp.txt の
     // 被ダメージ低下 効果ではないため、down-mod とは別経路 (÷2 近似) で扱う。
     if has(def_statuses, "バリア") && !has(atk_statuses, "直撃") && !has(def_statuses, "バリア中和")
     {
@@ -900,272 +878,6 @@ fn split_attr_level(tok: &str) -> (String, Option<i32>) {
     }
 }
 
-/// `predict_with_status` に防御モードを適用した版.
-#[allow(clippy::too_many_arguments)]
-pub fn predict_with_defense(
-    atk_pilot: &PilotData,
-    atk_unit: &UnitData,
-    weapon: &WeaponData,
-    def_pilot: &PilotData,
-    def_unit: &UnitData,
-    def_terrain_hit_mod: i32,
-    def_terrain_damage_mod: i32,
-    atk_morale: i32,
-    def_morale: i32,
-    atk_statuses: &[String],
-    def_statuses: &[String],
-    defense_mode: DefenseMode,
-) -> CombatPreview {
-    let base = predict_with_status(
-        atk_pilot,
-        atk_unit,
-        weapon,
-        def_pilot,
-        def_unit,
-        def_terrain_hit_mod,
-        def_terrain_damage_mod,
-        atk_morale,
-        def_morale,
-        atk_statuses,
-        def_statuses,
-    );
-
-    match defense_mode {
-        DefenseMode::Normal => base,
-        DefenseMode::Dodge => {
-            let dodge_penalty = def_pilot.dodge / 5;
-            CombatPreview {
-                hit_chance: base.hit_chance.saturating_sub(dodge_penalty),
-                damage: base.damage,
-                critical_chance: base.critical_chance,
-            }
-        }
-        DefenseMode::Defend => CombatPreview {
-            hit_chance: base.hit_chance,
-            damage: base.damage / 2,
-            critical_chance: base.critical_chance,
-        },
-        DefenseMode::Barrier { strength } => {
-            let absorbed = strength.min(base.damage);
-            let remaining = base.damage - absorbed;
-            CombatPreview {
-                hit_chance: base.hit_chance,
-                damage: remaining,
-                critical_chance: base.critical_chance,
-            }
-        }
-        DefenseMode::Shield { chance } => {
-            let expected_damage = base.damage * (100 - chance) as i64 / 100;
-            CombatPreview {
-                hit_chance: base.hit_chance,
-                damage: expected_damage,
-                critical_chance: base.critical_chance,
-            }
-        }
-    }
-}
-
-/// Map attack shape / 範囲攻撃の形状.
-///
-/// SRC weapons can have map attack types specified in their class or name field.
-/// The shape determines which units are hit around the target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MapAttackShape {
-    /// 単体攻撃 (single target) — only the target is hit.
-    Single,
-    /// Ｍ全 (all) — hits all units in the weapon's range.
-    All,
-    /// Ｍ投L<n> (throw) — hits units within <n> cells of the target.
-    Throw { radius: u32 },
-    /// Ｍ直 (straight) — hits units in a line from attacker through target.
-    Straight,
-    /// Ｍ拡 (spread) — hits target and adjacent cells (cross pattern).
-    Spread,
-    /// Ｍ扇 (fan) — hits扇形 (fan-shaped) area from attacker.
-    Fan,
-    /// Ｍ線 (line) — hits all units on the line between two points.
-    Line,
-}
-
-impl MapAttackShape {
-    /// Parse map attack shape from a weapon's class or name field.
-    /// SRC uses patterns like "Ｍ全", "Ｍ投L3", "Ｍ直", "Ｍ拡", "Ｍ扇", "Ｍ線".
-    pub fn from_weapon_class(class: &str) -> Self {
-        if class.contains("Ｍ全") {
-            Self::All
-        } else if let Some(rest) = class.strip_prefix("Ｍ投L") {
-            if let Ok(n) = rest.parse::<u32>() {
-                Self::Throw { radius: n }
-            } else {
-                Self::Throw { radius: 1 }
-            }
-        } else if class.contains("Ｍ直") {
-            Self::Straight
-        } else if class.contains("Ｍ拡") {
-            Self::Spread
-        } else if class.contains("Ｍ扇") {
-            Self::Fan
-        } else if class.contains("Ｍ線") {
-            Self::Line
-        } else {
-            Self::Single
-        }
-    }
-
-    /// Determine which cells are hit by this map attack.
-    ///
-    /// `attacker_pos`: (x, y) of the attacker
-    /// `target_pos`: (x, y) of the primary target
-    /// `max_range`: weapon's max range
-    ///
-    /// Returns a list of (x, y) cells that are hit.
-    pub fn affected_cells(
-        &self,
-        attacker_pos: (u32, u32),
-        target_pos: (u32, u32),
-        max_range: i32,
-    ) -> Vec<(u32, u32)> {
-        match self {
-            Self::Single => vec![target_pos],
-            Self::All => {
-                // All units within weapon range of attacker
-                let range = max_range as u32;
-                let mut cells = Vec::new();
-                for dx in 0..=range {
-                    for dy in 0..=range {
-                        if dx + dy <= range {
-                            cells.push((
-                                attacker_pos.0.wrapping_add(dx),
-                                attacker_pos.1.wrapping_add(dy),
-                            ));
-                            if dx > 0 {
-                                cells.push((
-                                    attacker_pos.0.wrapping_sub(dx),
-                                    attacker_pos.1.wrapping_add(dy),
-                                ));
-                            }
-                            if dy > 0 {
-                                cells.push((
-                                    attacker_pos.0.wrapping_add(dx),
-                                    attacker_pos.1.wrapping_sub(dy),
-                                ));
-                            }
-                            if dx > 0 && dy > 0 {
-                                cells.push((
-                                    attacker_pos.0.wrapping_sub(dx),
-                                    attacker_pos.1.wrapping_sub(dy),
-                                ));
-                            }
-                        }
-                    }
-                }
-                cells
-            }
-            Self::Throw { radius } => {
-                // All units within radius of target
-                let mut cells = Vec::new();
-                for dx in 0..=*radius {
-                    for dy in 0..=*radius {
-                        if dx + dy <= *radius {
-                            cells.push((
-                                target_pos.0.wrapping_add(dx),
-                                target_pos.1.wrapping_add(dy),
-                            ));
-                            if dx > 0 {
-                                cells.push((
-                                    target_pos.0.wrapping_sub(dx),
-                                    target_pos.1.wrapping_add(dy),
-                                ));
-                            }
-                            if dy > 0 {
-                                cells.push((
-                                    target_pos.0.wrapping_add(dx),
-                                    target_pos.1.wrapping_sub(dy),
-                                ));
-                            }
-                            if dx > 0 && dy > 0 {
-                                cells.push((
-                                    target_pos.0.wrapping_sub(dx),
-                                    target_pos.1.wrapping_sub(dy),
-                                ));
-                            }
-                        }
-                    }
-                }
-                cells
-            }
-            Self::Spread => {
-                // Target + 4 adjacent cells (cross pattern)
-                let (tx, ty) = target_pos;
-                vec![
-                    target_pos,
-                    (tx.wrapping_add(1), ty),
-                    (tx.wrapping_sub(1), ty),
-                    (tx, ty.wrapping_add(1)),
-                    (tx, ty.wrapping_sub(1)),
-                ]
-            }
-            Self::Straight => {
-                // Line from attacker through target, extending to max_range
-                line_cells(attacker_pos, target_pos, max_range as u32)
-            }
-            Self::Fan => {
-                // Fan-shaped area from attacker toward target
-                fan_cells(attacker_pos, target_pos, max_range as u32)
-            }
-            Self::Line => {
-                // Line between attacker and target
-                line_cells(attacker_pos, target_pos, max_range as u32)
-            }
-        }
-    }
-}
-
-/// Get cells on a line from start through end, extending to max_length.
-fn line_cells(start: (u32, u32), end: (u32, u32), max_length: u32) -> Vec<(u32, u32)> {
-    let dx = end.0 as i32 - start.0 as i32;
-    let dy = end.1 as i32 - start.1 as i32;
-    let dist = dx.abs().max(dy.abs()).max(1) as u32;
-    let steps = dist.min(max_length);
-
-    let mut cells = Vec::new();
-    for i in 0..=steps {
-        let x = (start.0 as i32 + dx * i as i32 / dist as i32) as u32;
-        let y = (start.1 as i32 + dy * i as i32 / dist as i32) as u32;
-        cells.push((x, y));
-    }
-    cells
-}
-
-/// Get fan-shaped cells from attacker toward target.
-fn fan_cells(_attacker: (u32, u32), target: (u32, u32), _max_range: u32) -> Vec<(u32, u32)> {
-    // Simplified fan: target + cells adjacent to target toward attacker
-    let mut cells = vec![target];
-    let (tx, ty) = target;
-
-    let adjacent = [
-        (tx.wrapping_add(1), ty),
-        (tx.wrapping_sub(1), ty),
-        (tx, ty.wrapping_add(1)),
-        (tx, ty.wrapping_sub(1)),
-    ];
-    cells.extend(adjacent);
-
-    cells
-}
-
-/// Check if a unit at `unit_pos` is hit by a map attack targeting `target_pos`.
-pub fn is_unit_hit_by_map_attack(
-    shape: MapAttackShape,
-    attacker_pos: (u32, u32),
-    target_pos: (u32, u32),
-    unit_pos: (u32, u32),
-    max_range: i32,
-) -> bool {
-    let affected = shape.affected_cells(attacker_pos, target_pos, max_range);
-    affected.contains(&unit_pos)
-}
-
 /// `attacker_unit` の武器のうち射程内のもののうち、最もダメージ期待値が高い
 /// (= power が大きい) ものを返す。
 pub fn best_weapon_in_range(unit: &UnitData, distance: u32) -> Option<&WeaponData> {
@@ -1195,6 +907,112 @@ pub fn best_weapon_in_range_with_charge(
 /// SRC.NET 仕様: チャージ攻撃武器は `Charge` コマンド後にしか使えない。
 pub fn is_charge_weapon(w: &WeaponData) -> bool {
     w.class.contains('Ｃ') || w.class.contains('C')
+}
+
+/// マップ攻撃の効果範囲を表す `(x, y)` 集合を計算する。
+/// 武器の `class` 文字列に含まれる SRC の属性記号を解釈する:
+///
+/// - `Ｍ全`             : 全方位 (攻撃者を中心としたマンハッタン菱形 ≤ max_range)
+/// - `Ｍ投L<n>` / `Ｍ投` : 指定地点を中心とした菱形 (半径 = L 値 or max_range)
+/// - `Ｍ直`             : 攻撃者から指定方向へ max_range タイルの直線
+/// - `Ｍ拡`             : 攻撃者から指定方向へ max_range タイル幅 3 の直線
+/// - `Ｍ移` / `Ｍ線`     : 攻撃者と指定地点を結ぶ直線 (近似で軸線優先)
+/// - `Ｍ扇L<n>`         : 簡略実装で `Ｍ拡` 同等 (将来詳細化)
+/// - 不明 / `Ｍ` 接頭辞なし : 指定地点中心の菱形 (半径 = max_range) — 旧挙動互換
+pub fn map_attack_area(
+    weapon: &crate::data::unit::WeaponData,
+    src: (u32, u32),
+    target: (u32, u32),
+) -> Vec<(u32, u32)> {
+    let cls = weapon.class.as_str();
+    let range = weapon.max_range.max(0);
+    let lvl_after = |key: &str| -> Option<i32> {
+        cls.find(key).map(|idx| {
+            let tail = &cls[idx + key.len()..];
+            // 'L' があれば数字を読む
+            if let Some(rest) = tail.strip_prefix('L') {
+                let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                digits.parse::<i32>().unwrap_or(range)
+            } else {
+                range
+            }
+        })
+    };
+
+    let mut out: Vec<(u32, u32)> = Vec::new();
+    if cls.contains("Ｍ全") {
+        // 攻撃者中心の菱形 (max_range)
+        diamond_into(&mut out, src.0 as i32, src.1 as i32, range);
+    } else if let Some(lvl) = lvl_after("Ｍ投") {
+        // ターゲット中心の菱形 (L<lvl> あれば lvl、無ければ max_range)
+        diamond_into(&mut out, target.0 as i32, target.1 as i32, lvl);
+    } else if cls.contains("Ｍ直") {
+        line_into(&mut out, src, target, range, 0);
+    } else if cls.contains("Ｍ拡") || cls.contains("Ｍ扇") {
+        // 簡略実装: 3 マス幅の直線
+        line_into(&mut out, src, target, range, 1);
+    } else if cls.contains("Ｍ移") || cls.contains("Ｍ線") {
+        // 攻撃者からターゲットまでの直線 (距離 ≤ max_range)
+        line_into(&mut out, src, target, range, 0);
+    } else {
+        // フォールバック: 旧挙動 (target 中心の菱形, radius=max_range)
+        diamond_into(&mut out, target.0 as i32, target.1 as i32, range);
+    }
+    out
+}
+
+/// (cx, cy) を中心としたマンハッタン半径 `radius` の菱形領域。
+fn diamond_into(out: &mut Vec<(u32, u32)>, cx: i32, cy: i32, radius: i32) {
+    if radius < 0 {
+        return;
+    }
+    for dy in -radius..=radius {
+        let span = radius - dy.abs();
+        for dx in -span..=span {
+            let x = cx + dx;
+            let y = cy + dy;
+            if x >= 0 && y >= 0 {
+                out.push((x as u32, y as u32));
+            }
+        }
+    }
+}
+
+/// 攻撃者 `src` から `target` へ向かう直線（軸線優先）。
+/// `width_each` = 1 なら線の両側 1 マス（合計 3 マス幅）。
+fn line_into(
+    out: &mut Vec<(u32, u32)>,
+    src: (u32, u32),
+    target: (u32, u32),
+    range: i32,
+    width_each: i32,
+) {
+    let dx = target.0 as i32 - src.0 as i32;
+    let dy = target.1 as i32 - src.1 as i32;
+    let (sx, sy) = if dx.abs() >= dy.abs() {
+        (dx.signum(), 0)
+    } else {
+        (0, dy.signum())
+    };
+    if sx == 0 && sy == 0 {
+        return;
+    }
+    for step in 1..=range {
+        let x = src.0 as i32 + sx * step;
+        let y = src.1 as i32 + sy * step;
+        if x < 0 || y < 0 {
+            continue;
+        }
+        for w in -width_each..=width_each {
+            // 線方向に垂直なオフセット
+            let (ox, oy) = if sx != 0 { (0, w) } else { (w, 0) };
+            let xx = x + ox;
+            let yy = y + oy;
+            if xx >= 0 && yy >= 0 {
+                out.push((xx as u32, yy as u32));
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2348,15 +2166,18 @@ mod tests {
         // C# `Unit.SpecialPowerEffectLevel` と同じく加算ではなく最大値勝ち。
         let s = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<String>>();
         // 熱血 のみ → Lv10 (×2.0)。
-        assert_eq!(default_damage_boost_level(&s(&["熱血"])), 10.0);
+        assert_eq!(default_sp_effect_level(&s(&["熱血"]), "ダメージ増加"), 10.0);
         // 魂 のみ → Lv20 (×3.0)。
-        assert_eq!(default_damage_boost_level(&s(&["魂"])), 20.0);
+        assert_eq!(default_sp_effect_level(&s(&["魂"]), "ダメージ増加"), 20.0);
         // 気合 のみ → Lv0 (ダメージ増加なし → ×1.0)。
-        assert_eq!(default_damage_boost_level(&s(&["気合"])), 0.0);
+        assert_eq!(default_sp_effect_level(&s(&["気合"]), "ダメージ増加"), 0.0);
         // 熱血 + 魂 → max(10, 20) = 20 (×3.0)。加算 (×6) ではない。
-        assert_eq!(default_damage_boost_level(&s(&["熱血", "魂"])), 20.0);
+        assert_eq!(
+            default_sp_effect_level(&s(&["熱血", "魂"]), "ダメージ増加"),
+            20.0
+        );
         // 該当なし → 0.0。
-        assert_eq!(default_damage_boost_level(&s(&["必中"])), 0.0);
+        assert_eq!(default_sp_effect_level(&s(&["必中"]), "ダメージ増加"), 0.0);
     }
 
     #[test]
@@ -2750,25 +2571,6 @@ mod tests {
     }
 
     #[test]
-    fn dodge_reduces_hit_chance() {
-        let dodged = predict_with_defense(
-            &p(0, 0, 0),
-            &u(0, vec![]),
-            &weapon(500, 1, 1, 0),
-            &p(0, 50, 0),
-            &u(0, vec![]),
-            0,
-            0,
-            100,
-            100,
-            &[],
-            &[],
-            DefenseMode::Dodge,
-        );
-        assert_eq!(dodged.hit_chance, 40);
-    }
-
-    #[test]
     fn hit_chance_has_no_upper_cap() {
         // SRC 原典 (`Unit.cls:6694-6696`) は命中率に上限を設けない (>100=必中)。
         // 旧実装の clamp(5,95) は非原典だった。差分オラクル (placeattack) で C# と突合し是正済。
@@ -2800,264 +2602,6 @@ mod tests {
             0,
         );
         assert_eq!(prev.damage, 10);
-    }
-
-    #[test]
-    fn defend_halves_damage() {
-        let base = predict(
-            &p(0, 0, 100),
-            &u(0, vec![]),
-            &weapon(500, 1, 1, 0),
-            &p(0, 0, 0),
-            &u(0, vec![]),
-            0,
-            0,
-        );
-        let defended = predict_with_defense(
-            &p(0, 0, 100),
-            &u(0, vec![]),
-            &weapon(500, 1, 1, 0),
-            &p(0, 0, 0),
-            &u(0, vec![]),
-            0,
-            0,
-            100,
-            100,
-            &[],
-            &[],
-            DefenseMode::Defend,
-        );
-        assert_eq!(defended.damage, base.damage / 2);
-    }
-
-    #[test]
-    fn barrier_absorbs_damage_up_to_limit() {
-        // Barrier 500 vs damage 800 -> remaining 300
-        let prev = predict_with_defense(
-            &p(0, 0, 100),
-            &u(0, vec![]),
-            &weapon(800, 1, 1, 0),
-            &p(0, 0, 0),
-            &u(0, vec![]),
-            0,
-            0,
-            100,
-            100,
-            &[],
-            &[],
-            DefenseMode::Barrier { strength: 500 },
-        );
-        assert_eq!(prev.damage, 300);
-    }
-
-    #[test]
-    fn barrier_fully_absorbs_small_damage() {
-        // Barrier 1000 vs damage 500 -> remaining 0
-        let prev = predict_with_defense(
-            &p(0, 0, 100),
-            &u(0, vec![]),
-            &weapon(500, 1, 1, 0),
-            &p(0, 0, 0),
-            &u(0, vec![]),
-            0,
-            0,
-            100,
-            100,
-            &[],
-            &[],
-            DefenseMode::Barrier { strength: 1000 },
-        );
-        assert_eq!(prev.damage, 0);
-    }
-
-    #[test]
-    fn shield_reduces_expected_damage() {
-        // Shield 50% -> expected damage halved
-        let base = predict(
-            &p(0, 0, 100),
-            &u(0, vec![]),
-            &weapon(1000, 1, 1, 0),
-            &p(0, 0, 0),
-            &u(0, vec![]),
-            0,
-            0,
-        );
-        let shielded = predict_with_defense(
-            &p(0, 0, 100),
-            &u(0, vec![]),
-            &weapon(1000, 1, 1, 0),
-            &p(0, 0, 0),
-            &u(0, vec![]),
-            0,
-            0,
-            100,
-            100,
-            &[],
-            &[],
-            DefenseMode::Shield { chance: 50 },
-        );
-        assert_eq!(shielded.damage, base.damage / 2);
-    }
-
-    #[test]
-    fn map_attack_all_hits_all_in_range() {
-        let shape = MapAttackShape::All;
-        let attacker = (5, 5);
-        let target = (5, 5);
-        let cells = shape.affected_cells(attacker, target, 2);
-        // With range 2, should cover diamond shape: dx+dy <= 2
-        assert!(cells.contains(&(5, 5)));
-        assert!(cells.contains(&(6, 5)));
-        assert!(cells.contains(&(4, 5)));
-        assert!(cells.contains(&(5, 6)));
-        assert!(cells.contains(&(5, 4)));
-        assert!(cells.contains(&(6, 6)));
-        assert!(cells.contains(&(4, 4)));
-        assert!(cells.contains(&(7, 5)));
-        assert!(cells.contains(&(3, 5)));
-    }
-
-    #[test]
-    fn map_attack_spread_hits_cross_pattern() {
-        let shape = MapAttackShape::Spread;
-        let attacker = (0, 0);
-        let target = (5, 5);
-        let cells = shape.affected_cells(attacker, target, 10);
-        // Spread hits target + 4 adjacent (cross pattern)
-        assert_eq!(cells.len(), 5);
-        assert!(cells.contains(&(5, 5)));
-        assert!(cells.contains(&(6, 5)));
-        assert!(cells.contains(&(4, 5)));
-        assert!(cells.contains(&(5, 6)));
-        assert!(cells.contains(&(5, 4)));
-    }
-
-    #[test]
-    fn map_attack_throw_hits_radius() {
-        let shape = MapAttackShape::Throw { radius: 2 };
-        let attacker = (0, 0);
-        let target = (10, 10);
-        let cells = shape.affected_cells(attacker, target, 5);
-        // Within radius 2 of target (10,10): dx+dy <= 2
-        assert!(cells.contains(&(10, 10)));
-        assert!(cells.contains(&(11, 10)));
-        assert!(cells.contains(&(9, 10)));
-        assert!(cells.contains(&(10, 11)));
-        assert!(cells.contains(&(10, 9)));
-        assert!(cells.contains(&(11, 11)));
-        assert!(cells.contains(&(9, 9)));
-        // (12, 10) has dx=2, dy=0, sum=2, should be included
-        assert!(cells.contains(&(12, 10)));
-    }
-
-    #[test]
-    fn map_attack_single_only_hits_target() {
-        let shape = MapAttackShape::Single;
-        let attacker = (0, 0);
-        let target = (5, 5);
-        let cells = shape.affected_cells(attacker, target, 99);
-        assert_eq!(cells.len(), 1);
-        assert_eq!(cells[0], (5, 5));
-    }
-
-    #[test]
-    fn is_unit_hit_by_map_attack_correct() {
-        let shape = MapAttackShape::Spread;
-        let attacker = (0, 0);
-        let target = (5, 5);
-        let max_range = 10;
-        // Target cell and its 4 adjacent
-        assert!(is_unit_hit_by_map_attack(
-            shape,
-            attacker,
-            target,
-            (5, 5),
-            max_range
-        ));
-        assert!(is_unit_hit_by_map_attack(
-            shape,
-            attacker,
-            target,
-            (6, 5),
-            max_range
-        ));
-        assert!(is_unit_hit_by_map_attack(
-            shape,
-            attacker,
-            target,
-            (4, 5),
-            max_range
-        ));
-        assert!(is_unit_hit_by_map_attack(
-            shape,
-            attacker,
-            target,
-            (5, 6),
-            max_range
-        ));
-        assert!(is_unit_hit_by_map_attack(
-            shape,
-            attacker,
-            target,
-            (5, 4),
-            max_range
-        ));
-        // Not hit: diagonals and further
-        assert!(!is_unit_hit_by_map_attack(
-            shape,
-            attacker,
-            target,
-            (6, 6),
-            max_range
-        ));
-        assert!(!is_unit_hit_by_map_attack(
-            shape,
-            attacker,
-            target,
-            (7, 5),
-            max_range
-        ));
-    }
-
-    #[test]
-    fn map_attack_shape_from_weapon_class_parsing() {
-        assert_eq!(
-            MapAttackShape::from_weapon_class("Ｍ全"),
-            MapAttackShape::All
-        );
-        assert_eq!(
-            MapAttackShape::from_weapon_class("Ｍ投L3"),
-            MapAttackShape::Throw { radius: 3 }
-        );
-        assert_eq!(
-            MapAttackShape::from_weapon_class("Ｍ投L1"),
-            MapAttackShape::Throw { radius: 1 }
-        );
-        assert_eq!(
-            MapAttackShape::from_weapon_class("Ｍ直"),
-            MapAttackShape::Straight
-        );
-        assert_eq!(
-            MapAttackShape::from_weapon_class("Ｍ拡"),
-            MapAttackShape::Spread
-        );
-        assert_eq!(
-            MapAttackShape::from_weapon_class("Ｍ扇"),
-            MapAttackShape::Fan
-        );
-        assert_eq!(
-            MapAttackShape::from_weapon_class("Ｍ線"),
-            MapAttackShape::Line
-        );
-        // No match -> Single
-        assert_eq!(
-            MapAttackShape::from_weapon_class("通常兵器"),
-            MapAttackShape::Single
-        );
-        assert_eq!(
-            MapAttackShape::from_weapon_class(""),
-            MapAttackShape::Single
-        );
     }
 
     #[test]

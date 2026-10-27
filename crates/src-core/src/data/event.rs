@@ -25,8 +25,14 @@ pub enum EventStatement {
     /// 通常の命令行（先頭が command 名、残りが引数）。
     Command {
         name: String,
+        /// 引数。全体が `"..."` / `` `...` `` で囲まれたトークンはクォートを外してある。
         args: Vec<String>,
         line_num: usize,
+        /// クォートを外す前の引数トークン (`args` と同じ並び)。式評価器 (`If` の条件等) は
+        /// `"n"` (文字列) と `n` (変数) を区別する必要があるため原文を使う。
+        /// 旧形式のデータでは空 (呼び出し側は `args` で代用する)。
+        #[serde(default)]
+        raw_args: Vec<String>,
     },
 }
 
@@ -54,13 +60,14 @@ pub fn parse(src: &str) -> Result<Vec<EventStatement>, ParseError> {
         if toks.is_empty() {
             continue;
         }
-        let mut it = toks.into_iter();
-        let name = it.next().unwrap();
-        let args: Vec<String> = it.collect();
+        let name = strip_token_quotes(&toks[0]);
+        let raw_args: Vec<String> = toks[1..].to_vec();
+        let args = raw_args.iter().map(|t| strip_token_quotes(t)).collect();
         out.push(EventStatement::Command {
             name,
             args,
             line_num: line.line_num,
+            raw_args,
         });
     }
     Ok(out)
@@ -138,6 +145,7 @@ fn parse_include(line: &SourceLine) -> Option<EventStatement> {
     None
 }
 
+/// 1 行をトークンに分ける。トークンはクォートを含む原文のまま返す。
 fn tokenize(text: &str, line_num: usize) -> Result<Vec<String>, ParseError> {
     let mut out = Vec::new();
     let bytes = text.as_bytes();
@@ -156,7 +164,7 @@ fn tokenize(text: &str, line_num: usize) -> Result<Vec<String>, ParseError> {
         // - `(...)` 内のスペース / カンマもトークン分割に使わない（関数記法）
         // - `[...]` 内のスペースも同様。`Set 配列[Count(x) + 1] 値` のように
         //   インデックス式が空白を含むケースを 1 トークンに保つ。
-        // 純粋に `"..."` でくくられた値はクオートを剥がして返す。
+        // クォートは残す (外すのは `parse` 側の `strip_token_quotes`)。
         let begin = i;
         let mut in_quote = false;
         // SRC は Asc 96 (`` ` ``) を `"` を内包できる代替クオート境界として扱う
@@ -217,18 +225,21 @@ fn tokenize(text: &str, line_num: usize) -> Result<Vec<String>, ParseError> {
         // 散見される (例: ASTOR151 の各話 .eve 末尾の孤立 `"`) ため、SRC と同じ
         // 寛容さでそのままトークン化する。`line_num` は将来の警告用に残す。
         let _ = (in_quote, in_backtick, line_num);
-        let raw = &text[begin..i];
-        let pushed = if raw.len() >= 2
-            && ((raw.starts_with('"') && raw.ends_with('"'))
-                || (raw.starts_with('`') && raw.ends_with('`')))
-        {
-            raw[1..raw.len() - 1].to_string()
-        } else {
-            raw.to_string()
-        };
-        out.push(pushed);
+        out.push(text[begin..i].to_string());
     }
     Ok(out)
+}
+
+/// 全体が `"..."` / `` `...` `` で囲まれたトークンのクォートを外す。
+fn strip_token_quotes(raw: &str) -> String {
+    if raw.len() >= 2
+        && ((raw.starts_with('"') && raw.ends_with('"'))
+            || (raw.starts_with('`') && raw.ends_with('`')))
+    {
+        raw[1..raw.len() - 1].to_string()
+    } else {
+        raw.to_string()
+    }
 }
 
 #[cfg(test)]

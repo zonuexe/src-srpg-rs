@@ -113,10 +113,13 @@ Set d IsVarDefined(empty)
 }
 
 #[test]
-fn get_undefined_variable_returns_empty() {
-    let app = run("Set v $(never_defined)");
-    // expand_vars は未定義 → 空文字
-    assert_eq!(app.script_var("v"), "");
+fn undefined_variable_in_subexpression_expands_to_its_name() {
+    // 原典 ReplaceSubExpression → GetVariable: 未定義変数は名前そのもの (C# oracle で確認)。
+    let app = run(r#"Set v "$(never_defined)""#);
+    assert_eq!(app.script_var("v"), "never_defined");
+    // 未定義の配列要素は空文字。
+    let app = run(r#"Set v "[$(配列[5])]""#);
+    assert_eq!(app.script_var("v"), "[]");
 }
 
 // ============================================================
@@ -251,7 +254,7 @@ Set v Abs(-$(s))
 }
 
 // ============================================================
-//  fn_arg_value: 空文字列変数を正しく返す
+//  引数評価: 空文字列変数を正しく返す
 // ============================================================
 
 #[test]

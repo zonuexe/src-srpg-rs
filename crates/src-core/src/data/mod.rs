@@ -16,6 +16,7 @@ pub mod event;
 pub mod item;
 pub mod loader;
 pub mod map;
+pub mod necessary;
 pub mod non_pilot;
 pub mod pilot;
 pub mod save_src;

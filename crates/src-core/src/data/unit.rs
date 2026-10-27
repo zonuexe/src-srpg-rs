@@ -539,7 +539,7 @@ fn try_parse_weapon(text: &str) -> Option<WeaponData> {
         String::new()
     };
     let (class, necessary_skill, necessary_condition) =
-        crate::necessary_skill::split_necessary(&raw_class);
+        super::necessary::split_necessary(&raw_class);
     let class = if class == "-" { String::new() } else { class };
     let extras = if necessary_skill.is_empty() && necessary_condition.is_empty() {
         Vec::new()

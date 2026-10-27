@@ -1,0 +1,156 @@
+# 評価経路モード (paths) の追加コーパス: 既存 corpus.txt の式に加え、`$()` 補間・配列・
+# 関数・単項マイナス・数値表記・ゼロ除算・`\`/`Mod` の端の値を突合する。
+Set n 10
+Set m 3
+Set s "abc"
+Set sp "a b"
+Set arr[1] 5
+Set arr[2] "x"
+Set idx 2
+Set fl 2.5
+===PROBES===
+3 + 4
+5 - 4
+3 * 4
+5 / 2
+12 / 3
+5 \ 2
+1000 \ 3
+7 \ 2
+2 ^ 3
+5 ^ 0
+4 ^ 0.5
+2 + 3 * 4
+10 - 2 * 3 + 1
+(2 + 3) * 4
+((2 + 3) * (4 - 1))
+10 - 5 - 4
+1 + 2 + 3 + 4
+-5
+-5 + 2
+-2 * 3
+-3 + -4
+-2 * -3
+-7 \ 2
+7 Mod 3
+6 Mod 3
+3 Mod 10
+-7 Mod 3
+1 / 0
+5 \ 0
+5 Mod 0
+3 = 3
+3 = 4
+3 <> 4
+3 < 4
+5 > 4
+4 <= 4
+5 >= 4
+2 + 3 > 4
+1 < 2 And 2 < 3 And 3 < 4
+1 And 1
+1 And 0
+0 Or 1
+0 Or 0
+Not 0
+Not 1
+Not 5
+Not (1 = 1)
+Not (1 = 2)
+Int(3.9)
+Int(-3.1)
+Int(-2.5)
+Round(2.5, 0)
+Round(-2.5, 0)
+Round(2.75, 1)
+RoundUp(3.01, 0)
+RoundUp(-3.1, 0)
+RoundDown(3.99, 0)
+RoundDown(-3.1, 0)
+Abs(-5)
+Abs(-3.14)
+Sqr(9)
+Sqr(2.25)
+Max(3, 5)
+Max(1, 2, 99, 3, 4)
+Max(42)
+Min(0, -10, 5, -3, 2)
+Len("hello")
+Len("あいう")
+LenB("あいう")
+InStr("hello", "el")
+InStr("hello", "xyz")
+InStr("hello", "l", 3)
+Asc("A")
+Max(Min(5, 10), 3)
+Int(7 / 2)
+Abs(3 - 10)
+$(n)
+$(n) + 1
+$(n) = 10
+"$(n)" + 1
+"n=$(n)"
+"$(s)" = "abc"
+$(s) = "abc"
+arr[1]
+arr[1] + 1
+arr[idx]
+arr[idx] = "x"
+arr[3]
+arr[3] = ""
+arr[n]
+Len(sp)
+sp = "a b"
+Mid(sp, 1, 1)
+Left(s, 2) & Right(s, 1)
+Len("abc") * 2
+Max(n, m)
+Min(n, m) - 1
+Abs(-3)
+Int(2.7)
+Round(2.5)
+- 5
+- n
+-5 - -5
++5
+1e3
+1,000
+"1,000" + 1
+1.50
+1.5 + 1.5
+0.5 * 3
+10 / 3
+n / 0
+n \ 0
+n Mod 0
+7 \ 2
+-7 \ 2
+7 Mod -3
+-7 Mod 3
+fl \ 1
+fl Mod 2
+3.5 \ 1
+2 ^ -1
+"" = ""
+"" & ""
+`abc`
+`a b` = "a b"
+#FF0000
+(1)
+((1))
+(1) = 1
+s Like "[a-c]*"
+s Like "*c"
+n Like "1*"
+Not Not n = 10
+Not 0
+Not 1
+Not n
+n And m
+n Or 0
+0 Or 0
+1 And 0 Or 1
+(1 Or 0) And 0
+n > m = 1
+n = n
+n <> m And s = "abc"

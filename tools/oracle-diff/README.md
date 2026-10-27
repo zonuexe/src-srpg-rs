@@ -61,6 +61,71 @@ sed -n '/^===PROBES===$/,$p' tools/oracle-diff/scenario_vars.txt | grep -vE '^==
 paste -d'~' /tmp/p.txt /tmp/cs.txt /tmp/rs.txt | awk -F'~' '$2!=$3{print}'
 ```
 
+## 評価経路モード (paths) — 式評価器の経路別差分
+
+`scenario` と同じ入力形式で、probe ごとに C# は `GetValueAsString` の値と、実際に
+構文解析した `If <probe> Then` の真偽 (`AIfCmd.Evaluate()`) をタブ区切りで出す。
+Rust 側 [`oracle_paths`](../verify-archive/src/bin/oracle_paths.rs) は本実装の評価経路ごと
+(`Eval()` / `=` 代入 / `If` / メニュー条件 / 統一評価器の値 / 統一評価器の If) に評価して出す。
+コーパスは [`paths.txt`](paths.txt) / [`paths_ext.txt`](paths_ext.txt) / [`paths_func.txt`](paths_func.txt) (組み込み関数の引数) /
+[`paths_index.txt`](paths_index.txt) (添字付き変数の添字と `Set Eval(式)` の左辺)。
+
+```sh
+# C#
+$NIX develop .#dotnet --command bash -c \
+  'dotnet run --project tools/oracle-diff/oracle-diff.csproj -c Release paths < tools/oracle-diff/paths.txt > /tmp/cs.txt 2>/dev/null'
+# Rust
+$NIX develop --command bash -c \
+  'cargo run -q -p verify-archive --bin oracle_paths < tools/oracle-diff/paths.txt > /tmp/rs.txt 2>/dev/null'
+# probe ごとに並べる (C# 値, C# If, Rust 6 列)
+sed -n '/^===PROBES===$/,$p' tools/oracle-diff/paths.txt | grep -vE '^===|^#|^$' > /tmp/p.txt
+paste /tmp/p.txt /tmp/cs.txt /tmp/rs.txt
+```
+
+統一評価器 (`event_runtime::eval_expression` / `eval_if_condition`) は両コーパスで C# と
+一致する。残る差は VB6 原典に合わせた意図的なもの: `Mod 0` (C# `NaN`、VB6 は実行時エラー、
+本実装は 0)、`Round(-2.5)` (偶数丸め)、`\` / `Mod` の非整数オペランド (VB6 は整数へ偶数丸め)。
+また C# は `If` の項数を記録し忘れており、パイロット名 1 項 / `Not パイロット名` の判定が
+効かない (本実装は VB6 どおり判定する)。
+
+## コマンド引数モード (args) — GetArgAsString / GetArgAsLong / GetArgAsDouble の差分
+
+`scenario` と同じ入力形式で、下段の各行をコマンドとして構文解析し、引数ごとの
+`GetArgAsString(i)|GetArgAsLong(i)|GetArgAsDouble(i)` をタブ区切りで出す (C# は `CmdData` を直接、Rust は
+[`oracle_args`](../verify-archive/src/bin/oracle_args.rs) が `event_runtime::eval_command_args`)。
+コーパスは [`args.txt`](args.txt)。コマンド実行を通した突合は `scenario` モードの
+[`scenario_args.txt`](scenario_args.txt)。
+
+```sh
+$NIX develop .#dotnet --command bash -c \
+  'dotnet run --project tools/oracle-diff/oracle-diff.csproj -c Release args < tools/oracle-diff/args.txt > /tmp/cs.txt 2>/dev/null'
+$NIX develop --command bash -c \
+  'cargo run -q -p verify-archive --bin oracle_args < tools/oracle-diff/args.txt > /tmp/rs.txt 2>/dev/null'
+```
+
+一致しない既知の差: 数値引数の整数化 (`1.50` / `3.5` / `(7 / 2)` / 値が 3.5 の変数。VB6 は
+Double を Long へ代入するので偶数丸め、C# は切り捨て。本実装は VB6 準拠) と、クォート外の
+`$(...)` (本移植の拡張)。Rust 側の数値はコマンドと同じく評価済みの文字列値から求める
+(`Cmd::long` / `Cmd::double`)。`scenario_args.txt` の `Incr` / `Money` (引用符付きの数値は 0、
+式・変数の小数) も C# と一致する。
+
+## Switch モード (switch) — Case の評価・比較の差分
+
+`scenario` と同じ入力形式で、下段の `Switch` ～ `EndSw` の各ブロックで Switch を実行し、
+飛び込んだ `Case` のブロック内行番号 (0 始まり。どれにも入らなければ `end`) を出す
+(C# は `SwitchCmd.Exec()` の戻り値、Rust は [`oracle_switch`](../verify-archive/src/bin/oracle_switch.rs)
+が各 `Case` 行の直後に目印の `Set` を差し込んで実行する)。コーパスは [`switch.txt`](switch.txt)。
+
+```sh
+$NIX develop .#dotnet --command bash -c \
+  'dotnet run --project tools/oracle-diff/oracle-diff.csproj -c Release switch < tools/oracle-diff/switch.txt > /tmp/cs.txt 2>/dev/null'
+$NIX develop --command bash -c \
+  'cargo run -q -p verify-archive --bin oracle_switch < tools/oracle-diff/switch.txt > /tmp/rs.txt 2>/dev/null'
+```
+
+一致しない既知の差: クォート外の `$(...)` (本移植の拡張) と 1 語の `CaseElse` (本移植の拡張。
+原典は `Case Else` のみ)。
+
 ## データロードモード (loaddata) — 静的ユニット/パイロットデータの差分
 
 実シナリオの**データディレクトリ** (`pilot.txt` / `unit.txt` / …) を両エンジンにロードし、
