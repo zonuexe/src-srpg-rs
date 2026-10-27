@@ -65,25 +65,6 @@ pub(super) fn recover_en(app: &mut App, key: &str, spec: Option<&str>) {
     app.database_mut().unit_instances[idx].en_consumed = new_consumed;
 }
 
-/// `Attack` / `MapAttack` 命令経由のダメージ適用 (損傷率/破壊ラベルを
-/// 発火させない版)。原典: "Attackコマンドや MapAttackコマンドなどによる
-/// イベント上の戦闘では発生しません"。
-/// HP <= 0 になっても unit_instance を残す (Destruction は発火しない)。
-pub(super) fn apply_damage_no_event(app: &mut App, key: &str, amount: i64) {
-    let Some(idx) = app
-        .database()
-        .unit_instances
-        .iter()
-        .position(|u| matches_unit_handle(u, key))
-    else {
-        return;
-    };
-    let u = &mut app.database_mut().unit_instances[idx];
-    u.damage = (u.damage + amount).max(0);
-    // HP <= 0 でも instance は残す (撃破イベントを発火させないため)。
-    // SRC.NET の Attack 命令も "イベント上の戦闘" として label 発火を抑制する。
-}
-
 /// 直接ダメージ / 回復を反映。HP <= 0 ならインスタンスを削除。
 pub(super) fn apply_damage(app: &mut App, key: &str, amount: i64) {
     let Some(idx) = app

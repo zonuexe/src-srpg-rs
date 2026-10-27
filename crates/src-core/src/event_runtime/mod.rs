@@ -3362,151 +3362,28 @@ fn exec_command_pc(
         }
         "attack" => {
             // SRC `Attack unit1 weapon1 unit2 weapon2` (`Attackコマンド.md`):
-            // スクリプト経由の戦闘実行。射程/気力/EN 等の使用条件は無視。
+            // イベント上の戦闘。命中・ダメージはプレイヤー / AI の攻撃と同じ判定
+            // (`App::script_attack` → `resolve_strike`) で、使用条件 (射程/気力/EN) は問わない。
             // weapon1: `自動` で最強武器自動選択 / 武器名で固定
-            // weapon2: `防御`/`回避`/`無抵抗` で反撃なし / `自動` or 武器名で反撃
-            // 仕様準拠: `攻撃` / `攻撃後` / `損傷率` ラベルは Attack 命令経由では
-            // 発火させない (spec の "Attackコマンドや MapAttackコマンドなどによる
-            // イベント上の戦闘では発生しません" を遵守)。
+            // weapon2: `防御`/`回避`/`無抵抗`/`反撃不能` で反撃なし / `自動` or 武器名で反撃
+            // 仕様準拠: 使用 / 攻撃 / 損傷率 / 破壊 / 全滅イベントは発火させず、経験値・資金も
+            // 入らない ("Attackコマンドの結果、他のイベントが発生することはありません")。
             if xargs.len() < 4 {
                 return Err(err(
                     line,
                     "Attack 命令は 4 引数必要 (unit1 weapon1 unit2 weapon2)。",
                 ));
             }
-            let key1 = fn_arg_value(app, &xargs[0]);
-            let w1_arg = xargs[1].clone();
-            let key2 = fn_arg_value(app, &xargs[2]);
-            let w2_arg = xargs[3].clone();
-            // 攻撃側の武器選択
-            let atk_data = app
-                .database()
-                .unit_instances
-                .iter()
-                .find(|u| matches_unit_handle(u, &key1))
-                .and_then(|u| app.database().unit_by_name(&u.unit_data_name).cloned());
-            let def_data = app
-                .database()
-                .unit_instances
-                .iter()
-                .find(|u| matches_unit_handle(u, &key2))
-                .and_then(|u| app.database().unit_by_name(&u.unit_data_name).cloned());
-            let Some(atk_data) = atk_data else {
-                return Ok(pc + 1);
+            let uid_of = |app: &App, arg: &str| {
+                let key = fn_arg_value(app, arg);
+                app.database()
+                    .unit_instances
+                    .iter()
+                    .find(|u| matches_unit_handle(u, &key))
+                    .map(|u| u.uid.clone())
             };
-            let Some(_def_data) = def_data else {
-                return Ok(pc + 1);
-            };
-            // weapon1 = "自動" → 最大攻撃力武器、それ以外 → 名前一致
-            let weapon = if w1_arg == "自動" || w1_arg.eq_ignore_ascii_case("auto") {
-                atk_data.weapons.iter().max_by_key(|w| w.power)
-            } else {
-                atk_data.weapons.iter().find(|w| w.name == w1_arg)
-            };
-            let Some(weapon) = weapon else {
-                return Ok(pc + 1);
-            };
-            // SRC 準拠ダメージ計算 (pilot stats + morale 考慮)
-            let atk_pilot = app
-                .database()
-                .pilot_by_name(
-                    &app.database()
-                        .unit_instances
-                        .iter()
-                        .find(|u| matches_unit_handle(u, &key1))
-                        .map(|u| u.pilot_name.clone())
-                        .unwrap_or_default(),
-                )
-                .cloned();
-            let def_pilot = app
-                .database()
-                .pilot_by_name(
-                    &app.database()
-                        .unit_instances
-                        .iter()
-                        .find(|u| matches_unit_handle(u, &key2))
-                        .map(|u| u.pilot_name.clone())
-                        .unwrap_or_default(),
-                )
-                .cloned();
-            let atk_morale = app
-                .database()
-                .unit_instances
-                .iter()
-                .find(|u| matches_unit_handle(u, &key1))
-                .map(|u| u.morale)
-                .unwrap_or(100);
-            let def_morale = app
-                .database()
-                .unit_instances
-                .iter()
-                .find(|u| matches_unit_handle(u, &key2))
-                .map(|u| u.morale)
-                .unwrap_or(100);
-            let default_pilot = crate::data::pilot::PilotData {
-                spirit_commands: Vec::new(),
-                name: String::new(),
-                nickname: String::new(),
-                kana_name: String::new(),
-                sex: crate::data::pilot::Sex::Unspecified,
-                class: String::new(),
-                adaption: crate::data::pilot::Adaption::parse("AAAA").unwrap(),
-                exp_value: 0,
-                infight: 100,
-                shooting: 100,
-                hit: 0,
-                dodge: 0,
-                intuition: 0,
-                technique: 0,
-                personality: None,
-                sp: None,
-                bgm: None,
-                bitmap: None,
-                features: Vec::new(),
-            };
-            let atk_pilot_ref = atk_pilot.as_ref().unwrap_or(&default_pilot);
-            let def_pilot_ref = def_pilot.as_ref().unwrap_or(&default_pilot);
-            let preview = crate::combat::predict_with_status(
-                atk_pilot_ref,
-                &atk_data,
-                weapon,
-                def_pilot_ref,
-                &_def_data,
-                0,
-                0,
-                atk_morale,
-                def_morale,
-                &[],
-                &[],
-            );
-            let damage = preview.damage;
-            apply_damage_no_event(app, &key2, damage);
-            // 反撃: weapon2 が `防御`/`回避`/`無抵抗` 以外なら攻撃側にもダメージ
-            if !matches!(
-                w2_arg.as_str(),
-                "防御" | "回避" | "無抵抗" | "Defense" | "Evade" | "Nodefense"
-            ) {
-                let counter = if w2_arg == "自動" || w2_arg.eq_ignore_ascii_case("auto") {
-                    _def_data.weapons.iter().max_by_key(|w| w.power)
-                } else {
-                    _def_data.weapons.iter().find(|w| w.name == w2_arg)
-                };
-                if let Some(cw) = counter {
-                    let counter_preview = crate::combat::predict_with_status(
-                        def_pilot_ref,
-                        &_def_data,
-                        cw,
-                        atk_pilot_ref,
-                        &atk_data,
-                        0,
-                        0,
-                        def_morale,
-                        atk_morale,
-                        &[],
-                        &[],
-                    );
-                    apply_damage_no_event(app, &key1, counter_preview.damage);
-                }
+            if let (Some(atk), Some(def)) = (uid_of(app, &xargs[0]), uid_of(app, &xargs[2])) {
+                app.script_attack(&atk, &xargs[1], &def, &xargs[3]);
             }
             return Ok(pc + 1);
         }

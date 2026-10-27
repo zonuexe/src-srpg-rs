@@ -2,6 +2,33 @@
 
 use super::*;
 
+/// `resolve_strike` の入力。攻撃側 / 防御側の実効データ (育成・強化パーツ・状態込み) と
+/// 防御側の地形補正。`def_unit` は防御特性による装甲調整済みのもの。
+#[derive(Clone, Copy)]
+struct StrikeSetup<'a> {
+    atk_pilot: &'a crate::data::pilot::PilotData,
+    atk_unit: &'a crate::data::unit::UnitData,
+    weapon: &'a crate::data::unit::WeaponData,
+    def_pilot: &'a crate::data::pilot::PilotData,
+    def_unit: &'a crate::data::unit::UnitData,
+    def_inst: &'a crate::UnitInstance,
+    def_hit_mod: i32,
+    def_damage_mod: i32,
+}
+
+/// `resolve_strike` の結果。`damage` は防御選択・クリティカル・即死・切り払い・
+/// 防御特性を反映した最終ダメージ (吸収なら負)。命中しなかった場合は適用しない。
+struct StrikeOutcome {
+    preview: combat::CombatPreview,
+    atk_statuses: Vec<String>,
+    effective_hit: i32,
+    roll: i32,
+    hit: bool,
+    critical: bool,
+    parried: bool,
+    damage: i64,
+}
+
 impl App {
     /// 攻撃の本体。`desired_target` が `Some(tile)` ならそのタイルの敵を対象に、
     /// `None` なら射程内最寄り敵を対象に攻撃を実行する。`post_move` は移動後攻撃
@@ -253,129 +280,32 @@ impl App {
             }
         }
 
-        // 状態異常 / 精神コマンド分の補正は predict_with_status に任せる。
-        let atk_morale = self.database.unit_instances[atk_idx].morale;
-        let def_morale = def_inst.morale;
-        let mut atk_statuses: Vec<String> = self.database.unit_instances[atk_idx]
-            .conditions
-            .iter()
-            .map(|c| c.name.clone())
-            .collect();
-        push_combat_feature_statuses(&self.database.unit_instances[atk_idx], &mut atk_statuses);
-        let mut def_statuses: Vec<String> =
-            def_inst.conditions.iter().map(|c| c.name.clone()).collect();
-        push_combat_feature_statuses(&def_inst, &mut def_statuses);
-        // 地形適応 (SRC `戦闘システム詳細.md`): 攻撃側は自地形、防御側は自地形で参照。
-        let atk_env = self.terrain_env_at(
-            self.database.unit_instances[atk_idx].x,
-            self.database.unit_instances[atk_idx].y,
+        let strike = self.resolve_strike(
+            atk_idx,
+            def_idx,
+            &StrikeSetup {
+                atk_pilot: &atk_pilot,
+                atk_unit: &atk_unit,
+                weapon: &weapon,
+                def_pilot: &def_pilot,
+                def_unit: &def_unit,
+                def_inst: &def_inst,
+                def_hit_mod,
+                def_damage_mod,
+            },
+            def_mode,
         );
-        let def_env = self.terrain_env_at(def_inst.x, def_inst.y);
-        // 与/被ダメージ修正 (ダメージ増加/被ダメージ増加/ダメージ低下/被ダメージ低下) を
-        // 攻撃側/防御側それぞれの精神効果から sp.txt 経由で解決 (シナリオ固有値を反映)。
-        let dmg_levels = self
-            .database
-            .damage_spirit_levels(&atk_statuses, &def_statuses);
-        let preview = combat::predict_with_status_terrain(
-            &atk_pilot,
-            &atk_unit,
-            &weapon,
-            &def_pilot,
-            &def_unit,
-            def_hit_mod,
-            def_damage_mod,
-            atk_morale,
-            def_morale,
-            &atk_statuses,
-            &def_statuses,
-            atk_env,
-            def_env,
-            dmg_levels,
-            self.ecm_hit_mult(def_idx, atk_idx, &weapon.class),
-        );
-        // 散 (散布) 属性武器の距離補正 (命中アップ・ダメージダウン)。
-        let atk_def_dist = combat::manhattan(
-            (
-                self.database.unit_instances[atk_idx].x,
-                self.database.unit_instances[atk_idx].y,
-            ),
-            (
-                self.database.unit_instances[def_idx].x,
-                self.database.unit_instances[def_idx].y,
-            ),
-        );
-        let preview = preview.apply_scatter(&weapon.class, atk_def_dist);
-
-        // 命中判定。回避を選んだ防御側は命中率が半減する (SRC 反撃モード)。
-        let effective_hit = if def_mode == "回避" {
-            preview.hit_chance / 2
-        } else {
-            preview.hit_chance
-        };
-        // 1 つの乱数から命中(下位)とクリティカル(上位)を取り出す。下位 2 桁は従来の
-        // 命中ロールと同一なので、命中可否・後続の乱数列 (反撃/援護) は一切変わらない。
-        let r = self.next_u32();
-        let roll = (r % 100) as i32;
-        // 回避系特殊能力 (B): 命中するはずでも 分身/超回避 で完全回避され得る。
-        let hit =
-            roll < effective_hit && !self.check_dodge_feature(def_idx, atk_idx, &weapon.class);
-        // クリティカル判定 (命中時のみ)。技能補正 (超反応/超能力/底力) を base へ加算した後、
-        // 防御選択でクリ率が半減する (SRC `戦闘システム詳細.md`「防御」: クリティカル率 ×0.5)。
-        let crit_base = preview.critical_chance + self.crit_skill_bonus(atk_idx, def_idx);
-        let crit_chance = if def_mode == "防御" {
-            crit_base / 2
-        } else {
-            crit_base
-        };
-        let crit_roll = ((r / 100) % 100) as i32;
-        // 特殊効果攻撃属性 (CC 属性) を持つ武器では通常のクリティカルは発生しない。
-        // 特殊効果の発動がクリティカルの代わりとみなされる (SRC 特殊効果攻撃属性.md)。
-        // 状態異常付与 (weapon_special_effects) と 気力減少 (脱/Ｄ) の双方が該当。
-        let has_special_effect = !crate::combat::weapon_special_effects(&weapon.class).is_empty()
-            || crate::combat::weapon_morale_reduction(&weapon.class).is_some()
-            || weapon.class.split_whitespace().any(|t| t == "即");
-        let critical = hit && crit_roll < crit_chance && !has_special_effect;
+        let StrikeOutcome {
+            preview,
+            atk_statuses,
+            effective_hit,
+            roll,
+            hit,
+            critical,
+            parried,
+            damage: applied_damage,
+        } = strike;
         let mut defender_killed = false;
-        // クリティカルはダメージ 1.5 倍 (SRC)。その後、防御選択でさらに半減する。
-        let crit_damage = if critical {
-            (preview.damage * 3 / 2).max(0)
-        } else {
-            preview.damage
-        };
-        let applied_damage = if def_mode == "防御" {
-            (crit_damage / 2).max(0)
-        } else {
-            crit_damage.max(0)
-        };
-        // 即死 (即): 命中時に特殊効果発動率で proc し、ボス以外を致死化する
-        // (`特殊効果攻撃属性.md`)。proc すると致死ダメージにして撃破サイトへ流す。
-        // 非 即 武器は RNG を消費しない (既存の乱数列を保つ)。
-        let applied_damage =
-            if hit && self.roll_weapon_instakill(def_idx, &weapon, &atk_pilot, &def_pilot) {
-                def_unit.hp.max(applied_damage)
-            } else {
-                applied_damage
-            };
-        // 切り払い: 格闘系の攻撃を防御側が確率で無効化する (攻撃側 直撃 で無効化されない)。
-        let atk_has_chokugeki = atk_statuses.iter().any(|s| s.contains("直撃"));
-        let parried = hit && !atk_has_chokugeki && self.roll_parry(atk_idx, def_idx, &weapon.class);
-        if parried {
-            self.push_message(format!(
-                "{} は {} の [{}] を切り払った！",
-                def_pilot.nickname, atk_pilot.nickname, weapon.name
-            ));
-        }
-        let applied_damage = if parried { 0 } else { applied_damage };
-        // 防御特性 (耐性 ÷2 / 無効化 0 / 吸収 回復) を最終ダメージへ適用する。
-        let dmg_before_def = applied_damage;
-        let applied_damage = self.defense_attribute_damage(def_idx, &weapon.class, applied_damage);
-        if applied_damage != dmg_before_def {
-            if applied_damage < 0 {
-                self.push_message(format!("{} は攻撃を吸収した！", def_pilot.nickname));
-            } else if applied_damage == 0 {
-                self.push_message(format!("{} には効かない (無効化)", def_pilot.nickname));
-            }
-        }
 
         // 援護防御チェック。`def_mode` で挙動を切替える (SRC 反撃モードの「援護防御
         // ON/OFF」):
@@ -744,6 +674,273 @@ impl App {
 
         self.check_victory();
         true
+    }
+
+    /// 1 回の攻撃の命中・ダメージ判定。プレイヤー / AI の本線攻撃
+    /// (`attack_resolve_and_run`) と `.eve Attack` (`script_attack`) の共通コア。
+    /// 状態異常・精神コマンド・地形・散布補正を反映した予測から、命中 / クリティカル /
+    /// 即死 / 切り払い / 防御特性 を判定する。乱数は本線攻撃と同じ順に消費する。
+    /// ダメージの適用 (援護防御・みがわり・バリア等) は呼び出し側が行う。
+    fn resolve_strike(
+        &mut self,
+        atk_idx: usize,
+        def_idx: usize,
+        setup: &StrikeSetup,
+        def_mode: &str,
+    ) -> StrikeOutcome {
+        let StrikeSetup {
+            atk_pilot,
+            atk_unit,
+            weapon,
+            def_pilot,
+            def_unit,
+            def_inst,
+            def_hit_mod,
+            def_damage_mod,
+        } = *setup;
+        // 状態異常 / 精神コマンド分の補正は predict_with_status に任せる。
+        let atk_morale = self.database.unit_instances[atk_idx].morale;
+        let def_morale = def_inst.morale;
+        let mut atk_statuses: Vec<String> = self.database.unit_instances[atk_idx]
+            .conditions
+            .iter()
+            .map(|c| c.name.clone())
+            .collect();
+        push_combat_feature_statuses(&self.database.unit_instances[atk_idx], &mut atk_statuses);
+        let mut def_statuses: Vec<String> =
+            def_inst.conditions.iter().map(|c| c.name.clone()).collect();
+        push_combat_feature_statuses(def_inst, &mut def_statuses);
+        // 地形適応 (SRC `戦闘システム詳細.md`): 攻撃側は自地形、防御側は自地形で参照。
+        let atk_env = self.terrain_env_at(
+            self.database.unit_instances[atk_idx].x,
+            self.database.unit_instances[atk_idx].y,
+        );
+        let def_env = self.terrain_env_at(def_inst.x, def_inst.y);
+        // 与/被ダメージ修正 (ダメージ増加/被ダメージ増加/ダメージ低下/被ダメージ低下) を
+        // 攻撃側/防御側それぞれの精神効果から sp.txt 経由で解決 (シナリオ固有値を反映)。
+        let dmg_levels = self
+            .database
+            .damage_spirit_levels(&atk_statuses, &def_statuses);
+        let preview = combat::predict_with_status_terrain(
+            atk_pilot,
+            atk_unit,
+            weapon,
+            def_pilot,
+            def_unit,
+            def_hit_mod,
+            def_damage_mod,
+            atk_morale,
+            def_morale,
+            &atk_statuses,
+            &def_statuses,
+            atk_env,
+            def_env,
+            dmg_levels,
+            self.ecm_hit_mult(def_idx, atk_idx, &weapon.class),
+        );
+        // 散 (散布) 属性武器の距離補正 (命中アップ・ダメージダウン)。
+        let atk_def_dist = combat::manhattan(
+            (
+                self.database.unit_instances[atk_idx].x,
+                self.database.unit_instances[atk_idx].y,
+            ),
+            (
+                self.database.unit_instances[def_idx].x,
+                self.database.unit_instances[def_idx].y,
+            ),
+        );
+        let preview = preview.apply_scatter(&weapon.class, atk_def_dist);
+
+        // 命中判定。回避を選んだ防御側は命中率が半減する (SRC 反撃モード)。
+        let effective_hit = if def_mode == "回避" {
+            preview.hit_chance / 2
+        } else {
+            preview.hit_chance
+        };
+        // 1 つの乱数から命中(下位)とクリティカル(上位)を取り出す。下位 2 桁は従来の
+        // 命中ロールと同一なので、命中可否・後続の乱数列 (反撃/援護) は一切変わらない。
+        let r = self.next_u32();
+        let roll = (r % 100) as i32;
+        // 回避系特殊能力 (B): 命中するはずでも 分身/超回避 で完全回避され得る。
+        let hit =
+            roll < effective_hit && !self.check_dodge_feature(def_idx, atk_idx, &weapon.class);
+        // クリティカル判定 (命中時のみ)。技能補正 (超反応/超能力/底力) を base へ加算した後、
+        // 防御選択でクリ率が半減する (SRC `戦闘システム詳細.md`「防御」: クリティカル率 ×0.5)。
+        let crit_base = preview.critical_chance + self.crit_skill_bonus(atk_idx, def_idx);
+        let crit_chance = if def_mode == "防御" {
+            crit_base / 2
+        } else {
+            crit_base
+        };
+        let crit_roll = ((r / 100) % 100) as i32;
+        // 特殊効果攻撃属性 (CC 属性) を持つ武器では通常のクリティカルは発生しない。
+        // 特殊効果の発動がクリティカルの代わりとみなされる (SRC 特殊効果攻撃属性.md)。
+        // 状態異常付与 (weapon_special_effects) と 気力減少 (脱/Ｄ) の双方が該当。
+        let has_special_effect = !crate::combat::weapon_special_effects(&weapon.class).is_empty()
+            || crate::combat::weapon_morale_reduction(&weapon.class).is_some()
+            || weapon.class.split_whitespace().any(|t| t == "即");
+        let critical = hit && crit_roll < crit_chance && !has_special_effect;
+        // クリティカルはダメージ 1.5 倍 (SRC)。その後、防御選択でさらに半減する。
+        let crit_damage = if critical {
+            (preview.damage * 3 / 2).max(0)
+        } else {
+            preview.damage
+        };
+        let applied_damage = if def_mode == "防御" {
+            (crit_damage / 2).max(0)
+        } else {
+            crit_damage.max(0)
+        };
+        // 即死 (即): 命中時に特殊効果発動率で proc し、ボス以外を致死化する
+        // (`特殊効果攻撃属性.md`)。proc すると致死ダメージにして撃破サイトへ流す。
+        // 非 即 武器は RNG を消費しない (既存の乱数列を保つ)。
+        let applied_damage =
+            if hit && self.roll_weapon_instakill(def_idx, weapon, atk_pilot, def_pilot) {
+                def_unit.hp.max(applied_damage)
+            } else {
+                applied_damage
+            };
+        // 切り払い: 格闘系の攻撃を防御側が確率で無効化する (攻撃側 直撃 で無効化されない)。
+        let atk_has_chokugeki = atk_statuses.iter().any(|s| s.contains("直撃"));
+        let parried = hit && !atk_has_chokugeki && self.roll_parry(atk_idx, def_idx, &weapon.class);
+        if parried {
+            self.push_message(format!(
+                "{} は {} の [{}] を切り払った！",
+                def_pilot.nickname, atk_pilot.nickname, weapon.name
+            ));
+        }
+        let applied_damage = if parried { 0 } else { applied_damage };
+        // 防御特性 (耐性 ÷2 / 無効化 0 / 吸収 回復) を最終ダメージへ適用する。
+        let dmg_before_def = applied_damage;
+        let applied_damage = self.defense_attribute_damage(def_idx, &weapon.class, applied_damage);
+        if applied_damage != dmg_before_def {
+            if applied_damage < 0 {
+                self.push_message(format!("{} は攻撃を吸収した！", def_pilot.nickname));
+            } else if applied_damage == 0 {
+                self.push_message(format!("{} には効かない (無効化)", def_pilot.nickname));
+            }
+        }
+        StrikeOutcome {
+            preview,
+            atk_statuses,
+            effective_hit,
+            roll,
+            hit,
+            critical,
+            parried,
+            damage: applied_damage,
+        }
+    }
+
+    /// `.eve Attack unit1 weapon1 unit2 weapon2` (`Attackコマンド.md`, C# `AttackCmd`)。
+    /// `atk_uid` が `weapon1` で `def_uid` を攻撃し、`weapon2` が `防御`/`回避`/`無抵抗`/
+    /// `反撃不能` 以外なら防御側が反撃する。命中・ダメージはプレイヤー / AI の攻撃と
+    /// 同じ `resolve_strike` で判定する。イベント上の戦闘なので武器の使用条件
+    /// (射程・気力) は問わず、使用 / 攻撃 / 損傷率 / 破壊 / 全滅イベント・経験値・資金・
+    /// 援護攻撃 / 援護防御は発生しない。撃破されたユニットは盤面から除去する。
+    pub(crate) fn script_attack(&mut self, atk_uid: &str, w1: &str, def_uid: &str, w2: &str) {
+        let def_mode = match w2 {
+            "防御" | "Defense" => "防御",
+            "回避" | "Evade" => "回避",
+            _ => "",
+        };
+        let counter = !matches!(
+            w2,
+            "防御" | "回避" | "無抵抗" | "反撃不能" | "Defense" | "Evade" | "Nodefense"
+        );
+        self.script_strike(atk_uid, def_uid, w1, def_mode);
+        if counter {
+            self.script_strike(def_uid, atk_uid, w2, "");
+        }
+    }
+
+    /// `script_attack` の片側 1 回分。`weapon_arg` は武器名か `自動` (最大攻撃力)。
+    fn script_strike(&mut self, atk_uid: &str, def_uid: &str, weapon_arg: &str, def_mode: &str) {
+        let (Some(atk_idx), Some(def_idx)) = (
+            self.database.idx_by_uid(atk_uid),
+            self.database.idx_by_uid(def_uid),
+        ) else {
+            return;
+        };
+        let (Some((atk_pilot, atk_unit)), Some((def_pilot, mut def_unit))) = (
+            self.database.effective_combat_data(atk_idx),
+            self.database.effective_combat_data(def_idx),
+        ) else {
+            return;
+        };
+        let weapon = if weapon_arg == "自動" || weapon_arg.eq_ignore_ascii_case("auto") {
+            atk_unit
+                .weapons
+                .iter()
+                .filter(|w| !w.class.contains('Ｍ'))
+                .max_by_key(|w| w.power)
+        } else {
+            atk_unit.weapons.iter().find(|w| w.name == weapon_arg)
+        };
+        let Some(weapon) = weapon.cloned() else {
+            return;
+        };
+        self.apply_defense_armor_mod(def_idx, &weapon.class, &mut def_unit);
+        let def_inst = self.database.unit_instances[def_idx].clone();
+        let (def_hit_mod, def_damage_mod) = self
+            .database
+            .map
+            .as_ref()
+            .map(|m| m.cell(def_inst.x, def_inst.y).terrain_id)
+            .map(|t| {
+                (
+                    self.database.terrain_hit_mod(t),
+                    self.database.terrain_damage_mod(t),
+                )
+            })
+            .unwrap_or_default();
+        if let Some(wi) = atk_unit.weapons.iter().position(|w| w.name == weapon.name) {
+            self.consume_weapon_resources(atk_idx, wi);
+        }
+        let strike = self.resolve_strike(
+            atk_idx,
+            def_idx,
+            &StrikeSetup {
+                atk_pilot: &atk_pilot,
+                atk_unit: &atk_unit,
+                weapon: &weapon,
+                def_pilot: &def_pilot,
+                def_unit: &def_unit,
+                def_inst: &def_inst,
+                def_hit_mod,
+                def_damage_mod,
+            },
+            def_mode,
+        );
+        if !strike.hit {
+            self.push_message(format!(
+                "{} の [{}] を {} は回避した",
+                atk_pilot.nickname, weapon.name, def_pilot.nickname
+            ));
+            return;
+        }
+        let dmg = self.apply_barrier_absorb(def_idx, atk_idx, &weapon.class, strike.damage);
+        let dmg = self.apply_active_field_absorb(def_idx, atk_idx, &weapon.class, dmg);
+        let dmg = self.apply_shield_defense(def_idx, &weapon.class, dmg);
+        let dmg = self.cap_damage_for_immortal(def_idx, def_unit.hp, dmg);
+        let u = &mut self.database.unit_instances[def_idx];
+        u.damage = (u.damage + dmg).max(0);
+        let destroyed = u.damage >= def_unit.hp;
+        self.push_message(format!(
+            "{} の [{}] → {} に {} ダメージ{}",
+            atk_pilot.nickname,
+            weapon.name,
+            def_pilot.nickname,
+            dmg,
+            if strike.critical {
+                " (クリティカル)"
+            } else {
+                ""
+            }
+        ));
+        if destroyed {
+            self.database.remove_unit_at(def_idx);
+        }
     }
 
     /// 再攻撃 (VB5 `Unit.cls:10251-10270`) の発動判定。攻撃側が 再攻撃 技能を持てば

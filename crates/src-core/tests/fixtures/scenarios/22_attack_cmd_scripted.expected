@@ -12,14 +12,15 @@ pending_dialog = None
 pending_timer = None
 pending_audio = 0
 
-== messages (1) ==
-[0] damage_applied
+== messages (2) ==
+[0] リオ の [ライフル] → ガロ に 1725 ダメージ
+[1] damage_applied
 
 == vars (0) ==
 
 == units (2) ==
 [0] ブレイバー/リオ Player @(1,1) HP=3500/3500 EN=120/120 morale=100
-[1] ゾルダ/ガロ Enemy @(5,5) HP=800/2500 EN=110/110 morale=100
+[1] ゾルダ/ガロ Enemy @(5,5) HP=775/2500 EN=110/110 morale=100
 
 == hotpoints (0) ==
 
