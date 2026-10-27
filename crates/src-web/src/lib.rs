@@ -179,37 +179,44 @@ pub fn start() -> Result<(), JsValue> {
 
     // 汎用素材パック (グラフィック / 戦闘アニメ / 効果音) を vendor-assets/ から
     // 起動時に自動読込する。未配置 (404) は正常系としてスキップ。
-    install_asset_packs(app.clone(), assets.clone(), ctx.clone(), packs.clone());
+    // 素材パックの後に、URL の `?load=<URL>` で指定したシナリオを読み込む (開発・検証用)。
+    install_asset_packs(
+        app.clone(),
+        assets.clone(),
+        ctx.clone(),
+        packs.clone(),
+        scenario,
+    );
     Ok(())
 }
 
 /// 起動時に汎用素材パックを `vendor-assets/` から fetch して読み込む。
 /// 再配布規約のためリポジトリには同梱せず、各自が配置したファイルを配信・読込する。
 /// 未配置 (HTTP エラー) のパックは警告を出さずスキップする。
-fn install_asset_packs(app: SharedApp, assets: SharedAssets, ctx: SharedCtx, packs: SharedPacks) {
-    // 汎用素材パック (ZIP) に加え、SRC 本体の標準システムデータ (terrain.txt 等) も
-    // 同じ経路で取り込む。`load_into_app` が単体テキストを内容種別で振り分け、
-    // `packs` にキャッシュされるためシナリオ読込後の `reapply_packs` でも再適用される。
-    for name in ASSET_PACK_FILES
-        .iter()
-        .chain(SYSTEM_DATA_FILES.iter())
-        .copied()
-    {
-        let app = app.clone();
-        let assets = assets.clone();
-        let ctx = ctx.clone();
-        let packs = packs.clone();
-        wasm_bindgen_futures::spawn_local(async move {
+///
+/// パックは `ASSET_PACK_FILES` → `SYSTEM_DATA_FILES` の順に 1 つずつ読み込む (後のパックが
+/// 前のパックを上書きできる順序を固定するため)。すべて読み終えたら、ページ URL の
+/// `?load=<URL>` で指定されたシナリオを、ファイル選択と同じ手順で読み込む。
+fn install_asset_packs(
+    app: SharedApp,
+    assets: SharedAssets,
+    ctx: SharedCtx,
+    packs: SharedPacks,
+    scenario: SharedScenario,
+) {
+    wasm_bindgen_futures::spawn_local(async move {
+        for name in ASSET_PACK_FILES
+            .iter()
+            .chain(SYSTEM_DATA_FILES.iter())
+            .copied()
+        {
             let url = format!("vendor-assets/{name}");
-            let bytes = match fetch_bytes(&url).await {
-                Ok(b) => b,
-                Err(_) => {
-                    // 未配置はエラーではない: 案内のみ。
-                    web_sys::console::log_1(&JsValue::from_str(&format!(
-                        "素材パック {name} 未配置 (vendor-assets/ に置くと起動時に自動読込)"
-                    )));
-                    return;
-                }
+            let Ok(bytes) = fetch_bytes(&url).await else {
+                // 未配置はエラーではない: 案内のみ。
+                web_sys::console::log_1(&JsValue::from_str(&format!(
+                    "素材パック {name} 未配置 (vendor-assets/ に置くと起動時に自動読込)"
+                )));
+                continue;
             };
             let on_img = make_image_redraw_cb(app.clone(), assets.clone(), ctx.clone());
             // 素材パック (ZIP) は full_load=true で画像/音声/.eve を登録 + entrypoint
@@ -233,8 +240,37 @@ fn install_asset_packs(app: SharedApp, assets: SharedAssets, ctx: SharedCtx, pac
             // シナリオ読込後の再適用用に生バイトをキャッシュ (ASSET_PACK_FILES 順を維持)。
             cache_pack_bytes(&packs, name, bytes);
             redraw(&ctx, &app, &assets);
-        });
-    }
+        }
+        if let Some(url) = autoload_url() {
+            match fetch_bytes(&url).await {
+                Ok(bytes) => {
+                    let name = file_name_of_url(&url);
+                    load_scenario_file(&app, &assets, &ctx, &scenario, &packs, &name, bytes);
+                }
+                Err(e) => web_sys::console::warn_1(&JsValue::from_str(&format!(
+                    "?load={url} の取得に失敗: {e:?}"
+                ))),
+            }
+        }
+    });
+}
+
+/// ページ URL の `?load=<URL>` (起動時に読み込むシナリオ)。開発サーバでは
+/// `?load=fixtures/<名前>.zip` でテスト用フィクスチャを読み込める (Trunk.toml の proxy)。
+fn autoload_url() -> Option<String> {
+    let search = web_sys::window()?.location().search().ok()?;
+    let params = web_sys::UrlSearchParams::new_with_str(&search).ok()?;
+    params.get("load").filter(|u| !u.is_empty())
+}
+
+/// URL の末尾要素をファイル名として取り出す (拡張子で展開方法を決めるため)。
+fn file_name_of_url(url: &str) -> String {
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    let last = path.rsplit('/').next().unwrap_or(path);
+    js_sys::decode_uri_component(last)
+        .ok()
+        .and_then(|s| s.as_string())
+        .unwrap_or_else(|| last.to_string())
 }
 
 /// 公式配布の汎用素材集ファイル名。再適用順は graphics → battle anim → SFX。
@@ -570,40 +606,7 @@ fn install_file_picker(
                     let arr = js_sys::Uint8Array::new(&buf);
                     let mut bytes = vec![0u8; arr.length() as usize];
                     arr.copy_to(&mut bytes);
-                    let on_img = make_image_redraw_cb(app.clone(), assets.clone(), ctx.clone());
-                    {
-                        let mut a = app.borrow_mut();
-                        let mut s = assets.borrow_mut();
-                        // 既存状態をリセットし、汎用素材パックのライブラリ/データを
-                        // 下地として再適用してから、新シナリオをその上に読み込む。
-                        // Assets (画像/音声) はリセットせず保持する。
-                        *a = src_core::App::new();
-                        a.set_animate_ai(true);
-                        a.set_animate_battle(true);
-                        reapply_packs(&mut a, &mut s, &packs, &on_img);
-                    }
-                    let result = {
-                        let mut a = app.borrow_mut();
-                        let mut s = assets.borrow_mut();
-                        archive::load_into_app(&mut a, &mut s, &name, &bytes, &on_img, true)
-                    };
-                    match result {
-                        Ok(log) => {
-                            web_sys::console::log_1(&JsValue::from_str(&log));
-                            // 「最初からやり直す」用に読込元を保持。
-                            *scenario.borrow_mut() = Some((name.clone(), bytes.clone()));
-                            let mut a = app.borrow_mut();
-                            a.push_message(format!("読込完了: {name}"));
-                        }
-                        Err(e) => {
-                            web_sys::console::warn_1(&JsValue::from_str(&format!(
-                                "アーカイブ読込エラー: {e}"
-                            )));
-                            let mut a = app.borrow_mut();
-                            a.push_message(format!("読込失敗: {e}"));
-                        }
-                    }
-                    redraw(&ctx, &app, &assets);
+                    load_scenario_file(&app, &assets, &ctx, &scenario, &packs, &name, bytes);
                 }
                 Err(e) => {
                     web_sys::console::warn_1(&e);
@@ -614,6 +617,47 @@ fn install_file_picker(
     input.add_event_listener_with_callback("change", handler.as_ref().unchecked_ref())?;
     handler.forget();
     Ok(())
+}
+
+/// シナリオファイル (アーカイブ / 単独テキスト) を読み込む。既存状態をリセットし、汎用素材
+/// パックのライブラリ/データを下地として再適用してから、新シナリオをその上に読み込む。
+/// Assets (画像/音声) はリセットせず保持する。ファイル選択と `?load=` の共通経路。
+fn load_scenario_file(
+    app: &SharedApp,
+    assets: &SharedAssets,
+    ctx: &SharedCtx,
+    scenario: &SharedScenario,
+    packs: &SharedPacks,
+    name: &str,
+    bytes: Vec<u8>,
+) {
+    let on_img = make_image_redraw_cb(app.clone(), assets.clone(), ctx.clone());
+    {
+        let mut a = app.borrow_mut();
+        let mut s = assets.borrow_mut();
+        *a = src_core::App::new();
+        a.set_animate_ai(true);
+        a.set_animate_battle(true);
+        reapply_packs(&mut a, &mut s, packs, &on_img);
+    }
+    let result = {
+        let mut a = app.borrow_mut();
+        let mut s = assets.borrow_mut();
+        archive::load_into_app(&mut a, &mut s, name, &bytes, &on_img, true)
+    };
+    match result {
+        Ok(log) => {
+            web_sys::console::log_1(&JsValue::from_str(&log));
+            app.borrow_mut().push_message(format!("読込完了: {name}"));
+            // 「最初からやり直す」用に読込元を保持。
+            *scenario.borrow_mut() = Some((name.to_string(), bytes));
+        }
+        Err(e) => {
+            web_sys::console::warn_1(&JsValue::from_str(&format!("アーカイブ読込エラー: {e}")));
+            app.borrow_mut().push_message(format!("読込失敗: {e}"));
+        }
+    }
+    redraw(ctx, app, assets);
 }
 
 /// 現在のシナリオ状態を破棄して最初からやり直す。シナリオが読込済みなら同じ

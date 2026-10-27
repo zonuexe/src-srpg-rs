@@ -11,3 +11,10 @@ open = false
 
 [watch]
 ignore = ["SRC_20121125", "dist", "target"]
+
+# 開発・検証用: `/fixtures/` をテスト用フィクスチャ (crates/src-web/tests/fixtures、
+# 再配布不可のため .gitignore 済み) を配る静的サーバへ中継する。`dist/` には複製しない。
+# 静的サーバは `just fixtures` (127.0.0.1:8090) で起動し、`?load=fixtures/<名前>.zip` で読み込む。
+[[proxy]]
+rewrite = "/fixtures/"
+backend = "http://127.0.0.1:8090/"

@@ -48,6 +48,8 @@ features = [
     "Response",
     "TextMetrics",
     "Url",
+    "UrlSearchParams",
+    "Location",
     "Performance",
     "Storage",
     "CssStyleDeclaration",
