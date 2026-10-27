@@ -570,9 +570,9 @@ fn exec_launch(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         .find(|u| matches_unit_handle(u, target))
         .map(|u| u.uid.clone());
     if let Some(uid) = uid {
-        // 先に座標を確定 (off_map 中は索引非登録)、続けて off_map 解除で索引へ載せる。
-        app.database_mut().move_unit(&uid, nx, ny);
-        app.database_mut().set_off_map(&uid, false);
+        // 原典 `StandBy`: 指定マスの近くの空きマスに出す。
+        let sparse = xargs[3..].iter().any(|o| o.contains("部隊配置"));
+        app.database_mut().stand_by(&uid, nx, ny, sparse);
     }
     Ok(pc + 1)
 }
@@ -948,8 +948,9 @@ fn exec_move(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         .map(|u| u.uid.clone());
     let found = uid.is_some();
     if let Some(uid) = uid {
-        app.database_mut().move_unit(&uid, nx, ny);
-        app.database_mut().set_off_map(&uid, false);
+        // 原典 `StandBy`: 指定マスの近くの空きマスへ (自分の居るマスは空きとみなす)。
+        let sparse = xargs[idx + 2..].iter().any(|o| o.contains("部隊配置"));
+        app.database_mut().stand_by(&uid, nx, ny, sparse);
     }
     // SRC.Sharp 準拠: 対象ユニットが存在しない場合はエラー (3 引数形式のみ)。
     if !found && xargs.len() >= 3 {
@@ -1026,7 +1027,16 @@ fn exec_create(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     inst.upgrade_level = rank.max(0);
     inst.total_exp = crate::pilot_instance::exp_for_level(level);
     populate_active_features(&mut inst, app);
+    // 盤外で登録してから、原典 `StandBy` どおり指定マスの近くの空きマスに出す
+    // (同じマスに 2 機目を作ると隣へずれる)。`部隊配置` ならユニット同士を隣接させない。
+    inst.off_map = true;
     let uid = app.database_mut().register_unit(inst);
+    app.database_mut().stand_by(
+        &uid,
+        x,
+        y,
+        xargs[7..].iter().any(|o| o.contains("部隊配置")),
+    );
     // 対象ユニットＩＤ は最新作成ユニットの uid (一意)、
     // 対象パイロット は pilot 名 (重複可) を入れる。
     // これで後続の `Escape 対象ユニットＩＤ` が正しいユニットを参照する。

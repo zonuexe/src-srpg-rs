@@ -550,10 +550,17 @@ impl GameDatabase {
         if u.move_disabled() {
             return std::collections::HashMap::new();
         }
-        let Some(def) = self.unit_by_name(&u.unit_data_name) else {
+        let Some(cost_fn) = self.unit_terrain_cost_fn(u) else {
             return std::collections::HashMap::new();
         };
         let mp = self.effective_speed(u);
+        crate::movement::compute_range_with(map, start, mp, cost_fn)
+    }
+
+    /// ユニット `u` の地形 ID → 移動コストの関数 (`movement::make_unit_cost_fn`)。0 以下は
+    /// 進入不能。ユニットデータが無ければ `None`。
+    fn unit_terrain_cost_fn(&self, u: &UnitInstance) -> Option<impl Fn(u32) -> i32> {
+        let def = self.unit_by_name(&u.unit_data_name)?;
         let active_feature_names: Vec<String> =
             u.active_features.iter().map(|f| f.name.clone()).collect();
         let terrain_adapt_names: Vec<String> = u
@@ -569,15 +576,66 @@ impl GameDatabase {
                     .collect::<Vec<_>>()
             })
             .collect();
-        let cost_fn = crate::movement::make_unit_cost_fn(
+        Some(crate::movement::make_unit_cost_fn(
             self.catalog.terrains.clone(),
             def.transportation.clone(),
             def.adaption.0,
             u.current_area.clone(),
             active_feature_names,
             terrain_adapt_names,
-        );
-        crate::movement::compute_range_with(map, start, mp, cost_fn)
+        ))
+    }
+
+    /// ユニット `uid` を `(x, y)` (内部座標) に置くときの実際の位置 (原典 `Unit.StandBy`)。
+    /// `(x, y)` から距離 0, 1, 2, … (最大 20) の順に、ほかのユニットが居らず、そのユニットが
+    /// 進入できる (移動コスト 1〜100) マスを探す。同じ距離では x の小さい順、同じ x では
+    /// y の小さい順 (原典のループ順)。`sparse` (原典 `部隊配置`) なら奇数距離を飛ばし、
+    /// ユニット同士を隣接させない。マップが無ければ `(x, y)` のまま、空きが無ければ `None`。
+    pub fn stand_by_position(&self, uid: &str, x: u32, y: u32, sparse: bool) -> Option<(u32, u32)> {
+        let Some(map) = self.map.as_ref() else {
+            return Some((x, y));
+        };
+        let u = self.unit_by_uid(uid)?;
+        let cost_fn = self.unit_terrain_cost_fn(u);
+        let enterable = |tx: u32, ty: u32| {
+            let free = !matches!(self.uid_at(tx, ty), Some(o) if o != uid);
+            let cost = cost_fn
+                .as_ref()
+                .map_or(1, |f| f(map.cell(tx, ty).terrain_id));
+            free && (1..=100).contains(&cost)
+        };
+        let (x, y) = (i64::from(x), i64::from(y));
+        let (w, h) = (i64::from(map.width), i64::from(map.height));
+        for d in 0..=20i64 {
+            if sparse && d % 2 != 0 {
+                continue;
+            }
+            for tx in (x - d).max(0)..=(x + d).min(w - 1) {
+                for ty in (y - d).max(0)..=(y + d).min(h - 1) {
+                    if (x - tx).abs() + (y - ty).abs() == d && enterable(tx as u32, ty as u32) {
+                        return Some((tx as u32, ty as u32));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// ユニット `uid` を `(x, y)` の近くの空きマスに出撃させる (原典 `Unit.StandBy`)。
+    /// 位置は `stand_by_position` で決める。空きが無ければ盤外 (待機) に置いて `false`。
+    pub fn stand_by(&mut self, uid: &str, x: u32, y: u32, sparse: bool) -> bool {
+        match self.stand_by_position(uid, x, y, sparse) {
+            Some((tx, ty)) => {
+                self.set_off_map(uid, true);
+                self.move_unit(uid, tx, ty);
+                self.set_off_map(uid, false);
+                true
+            }
+            None => {
+                self.set_off_map(uid, true);
+                false
+            }
+        }
     }
 
     /// 同じマスにいるユニットを返す（重複配置の検出にも使う）。
