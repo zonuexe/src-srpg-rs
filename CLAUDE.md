@@ -124,7 +124,7 @@ PilotInstance (runtime)   UnitInstance (runtime)    Tile (x,y,terrain_id)
 
 - テストランナー: `cargo test -p src-core`（ネイティブのみ、WASM 不可）
 - 統合テスト: `crates/src-core/tests/` 以下に配置
-- ユニットテスト: 各ファイル末尾の `#[cfg(test)]` ブロック
+- ユニットテスト: 各ファイル末尾の `#[cfg(test)]` ブロック。`app` と `event_runtime` は `app/tests/` / `event_runtime/tests/` にトピック別 (共通ヘルパは `mod.rs`)
 
 主要テストファイル例:
 - `pilot_function.rs` — `Pilot()` 関数の文法テスト

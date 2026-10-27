@@ -9,7 +9,7 @@
 |---|---|---|
 | 1. デッドコード削除 | 済 | unit_instance.rs 3,299 → 614 行。combat.rs の DefenseMode / MapAttackShape、`ui/`、`parse_with` を削除。武器ゲートを `necessary_skill::weapon_usable_by` に切り出し、テストを本番経路に向けた |
 | 2. util 新設・循環解消 | 済 | `util/{text,number}.rs`、`data/necessary.rs`。本番コードの循環は `app ⇄ event_runtime` のみ |
-| 3. テスト外出し | 済 | `app/tests.rs`、`event_runtime/tests.rs`（トピック別の再分割は未） |
+| 3. テスト外出し | 済 | `app/tests/`（ai / spirit / ability / unit_commands / intermission / status_effects / combat / stage_flow / input）、`event_runtime/tests/`（control_flow / dialog / graphics / files / events / units / expressions）にトピック別に分割。共通ヘルパは各 `mod.rs` |
 | 4. CLAUDE.md 修正 | 済 | §6 の記述ずれをすべて修正 |
 | 5. `impl App` 分割 | 済 | app/mod.rs 1,564 行 + 子モジュール 14 個 |
 | 6. event_runtime 分割 | 済 | 周辺関数を 8 個の子モジュールへ。`exec_command_pc` の 186 アームを 1 コマンド 1 関数にして `commands/` 以下の 10 カテゴリへ（mod.rs 約 7,000 → 1,687 行）。`eval_script_function` の 133 関数も `functions/` 以下の 5 カテゴリへ |
