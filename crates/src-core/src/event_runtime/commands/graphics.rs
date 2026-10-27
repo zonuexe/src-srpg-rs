@@ -902,7 +902,7 @@ fn exec_oval(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         let cx = eval_int_expr_app(app, &xargs[0]) as f64;
         let cy = eval_int_expr_app(app, &xargs[1]) as f64;
         let r = eval_int_expr_app(app, &xargs[2]) as f64;
-        let ratio = numeric_arg(app, &xargs[3]).unwrap_or(1.0);
+        let ratio = numeric_arg(&xargs[3]).unwrap_or(1.0);
         if let Some(c) = optional_draw_color(app, &xargs[4..]) {
             app.script_overlay_mut()
                 .push(crate::script_overlay::DrawCmd::SetColor { color: c });
@@ -921,8 +921,8 @@ fn exec_arc(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         let cx = eval_int_expr_app(app, &xargs[0]) as f64;
         let cy = eval_int_expr_app(app, &xargs[1]) as f64;
         let r = eval_int_expr_app(app, &xargs[2]) as f64;
-        let start_deg = numeric_arg(app, &xargs[3]).unwrap_or(0.0) % 360.0;
-        let end_deg = numeric_arg(app, &xargs[4]).unwrap_or(0.0) % 360.0;
+        let start_deg = numeric_arg(&xargs[3]).unwrap_or(0.0) % 360.0;
+        let end_deg = numeric_arg(&xargs[4]).unwrap_or(0.0) % 360.0;
         if let Some(c) = optional_draw_color(app, &xargs[5..]) {
             app.script_overlay_mut()
                 .push(crate::script_overlay::DrawCmd::SetColor { color: c });

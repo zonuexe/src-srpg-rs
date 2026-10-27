@@ -125,7 +125,7 @@ fn fn_action(app: &App, c: &FnCall) -> Option<String> {
     // `Action(unit)` — 残り行動数。`has_acted` で 0/1 判定。
     // SRC.Sharp は二回行動等を考慮するが、本実装は最大 1 で十分。
     // 未解決 unit は 0 (= 行動不能扱い)。
-    let key = fn_arg_value(app, args.first()?);
+    let key = args.first()?.to_string();
     let n = find_unit(app, &key)
         .map(|u| if u.has_acted { 0 } else { 1 })
         .unwrap_or(0);
@@ -136,7 +136,7 @@ fn fn_damage(app: &App, c: &FnCall) -> Option<String> {
     let FnCall { args, .. } = *c;
     // `Damage(unit)` — 損傷率 %  = damage * 100 / max_hp。
     // 0 = 無傷、100 = 破壊済。未解決 unit は 0。
-    let key = fn_arg_value(app, args.first()?);
+    let key = args.first()?.to_string();
     let pct = find_unit(app, &key)
         .map(|u| {
             let max = app.database().effective_max_hp(u);
@@ -158,8 +158,8 @@ fn fn_condition(app: &App, c: &FnCall) -> Option<String> {
     if args.len() < 2 {
         return None;
     }
-    let key = fn_arg_value(app, args[0]);
-    let status = fn_arg_value(app, args[1]);
+    let key = args[0].to_string();
+    let status = args[1].to_string();
     let status = status.trim().trim_matches('"');
     let has = find_unit(app, &key)
         .map(|u| u.has_condition(status))
@@ -178,7 +178,7 @@ fn fn_status(app: &App, c: &FnCall) -> Option<String> {
     //   - `破棄` ─ `RemoveUnit` / `RemovePilot` で削除されている
     // 優先順: 明示的に life_state がセットされていればそれ、未設定なら
     // off_map から `出撃` / `待機` を自動判定、未解決なら `破棄`。
-    let key = fn_arg_value(app, args.first()?);
+    let key = args.first()?.to_string();
     Some(match find_unit(app, &key) {
         Some(u) if !u.life_state.is_empty() => u.life_state.clone(),
         Some(u) if u.off_map => "待機".to_string(),
@@ -194,8 +194,8 @@ fn fn_bullet(app: &App, c: &FnCall) -> Option<String> {
     if args.len() < 2 {
         return None;
     }
-    let key = fn_arg_value(app, args[0]);
-    let wname = fn_arg_value(app, args[1]);
+    let key = args[0].to_string();
+    let wname = args[1].to_string();
     let wname = wname.trim().trim_matches('"');
     let n = find_unit(app, &key)
         .and_then(|u| {
@@ -223,8 +223,8 @@ fn fn_max_bullet(app: &App, c: &FnCall) -> Option<String> {
     if args.len() < 2 {
         return None;
     }
-    let key = fn_arg_value(app, args[0]);
-    let wname = fn_arg_value(app, args[1]);
+    let key = args[0].to_string();
+    let wname = args[1].to_string();
     let wname = wname.trim().trim_matches('"');
     let n = find_unit(app, &key)
         .and_then(|u| {
@@ -286,8 +286,8 @@ fn fn_rank(app: &App, c: &FnCall) -> Option<String> {
     let FnCall { args, .. } = *c;
     // `Rank(unit)` — SRC ユニットランク (`RankUpコマンド` / `BossRankコマンド`
     // で `__rank_<unit>` に蓄積)。未設定なら 0。
-    // 引数解決は fn_arg_value で行い、quoted/variable も受け付ける。
-    let raw = fn_arg_value(app, args.first()?);
+    // 引数は評価済み (クォート文字列・変数とも値になっている)。
+    let raw = args.first()?.to_string();
     let key = format!("__rank_{}", raw.trim().trim_matches('"'));
     let v = app.script_var(&key);
     Some(if v.is_empty() {
@@ -304,7 +304,7 @@ fn fn_partner(app: &App, c: &FnCall) -> Option<String> {
     // 本実装は合体技を完全にはモデル化していないため、合体技履歴を
     // `直前合体技パートナー[N]` script_var に格納する規約とする。
     // 未設定なら空文字 (SRC.NET 仕様)。
-    let n: i32 = fn_arg_value(app, args.first()?).parse().unwrap_or(0);
+    let n: i32 = args.first()?.to_string().parse().unwrap_or(0);
     if n == 0 {
         return Some(app.script_var("直前合体技ユニット").to_string());
     }
@@ -333,7 +333,7 @@ fn fn_is_equiped(app: &App, c: &FnCall) -> Option<String> {
         return None;
     }
     let unit = find_unit(app, args[0])?;
-    let item = fn_arg_value(app, args[1]);
+    let item = args[1].to_string();
     let item = item.trim().trim_matches('"');
     let has = unit.has_item_equipped(item);
     Some(if has { "1" } else { "0" }.to_string())
@@ -349,7 +349,7 @@ fn fn_special_power(app: &App, c: &FnCall) -> Option<String> {
         return None;
     }
     let unit = find_unit(app, args[0])?;
-    let sp = fn_arg_value(app, args[1]);
+    let sp = args[1].to_string();
     let sp = sp.trim().trim_matches('"');
     let has = unit.has_condition(sp);
     Some(if has { "1" } else { "0" }.to_string())
@@ -360,7 +360,7 @@ fn fn_count_item(app: &App, c: &FnCall) -> Option<String> {
     // `CountItem(unit)` — unit が装備しているアイテム総数。
     // 未解決 unit は 0。SRC.Sharp `Unit/Unit.cs::CountItem` 同等。
     // 「未装備」指定で未装備在庫 (`spare_items`) の総数を返す。
-    let key = fn_arg_value(app, args.first()?);
+    let key = args.first()?.to_string();
     if key == "未装備" {
         return Some(app.database().spare_items.len().to_string());
     }
@@ -383,7 +383,7 @@ fn fn_wx(app: &App, c: &FnCall) -> Option<String> {
     // 引数が数値ならその数値 × 32、ユニット指定ならユニット位置 × 32。
     // SRC 仕様の「画面表示左上隅」は本実装で「タイル左上」と一致する。
     const TILE_PX: i32 = 32;
-    let arg = fn_arg_value(app, args.first()?);
+    let arg = args.first()?.to_string();
     let arg = arg.trim();
     // 数値解釈優先
     if let Ok(n) = arg.parse::<i32>() {
@@ -402,7 +402,7 @@ fn fn_unit_id(app: &App, c: &FnCall) -> Option<String> {
     // `UnitID(name)` — SRC.Sharp `Unit/Unit.cs::UnitID` 同等:
     // unit を解決して unit の一意 ID を返す。uid が未設定なら
     // unit_data_name を返す。
-    let key = fn_arg_value(app, args.first()?);
+    let key = args.first()?.to_string();
     if let Some(inst) = find_unit(app, &key) {
         if !inst.uid.is_empty() {
             return Some(inst.uid.clone());
@@ -416,8 +416,9 @@ fn fn_unit_id(app: &App, c: &FnCall) -> Option<String> {
 fn fn_item(app: &App, c: &FnCall) -> Option<String> {
     let FnCall { args, .. } = *c;
     // `未装備` 指定で未装備在庫の num 番目のアイテム名を返す。
-    let key = fn_arg_value(app, args.first()?);
-    let idx: usize = fn_arg_value(app, args.get(1).unwrap_or(&""))
+    let key = args.first()?.to_string();
+    let idx: usize = (args.get(1).unwrap_or(&""))
+        .to_string()
         .parse()
         .unwrap_or(0);
     if key == "未装備" {
@@ -442,8 +443,9 @@ fn fn_item_id(app: &App, c: &FnCall) -> Option<String> {
     // 本実装はアイテム固有 ID を持たないので名称をそのまま返す
     // (SRC の実装と等価な挙動: 同名アイテムを区別しない)。
     // `未装備` を指定すると未装備在庫の num 番目を返す。
-    let key = fn_arg_value(app, args.first()?);
-    let idx: usize = fn_arg_value(app, args.get(1).unwrap_or(&""))
+    let key = args.first()?.to_string();
+    let idx: usize = (args.get(1).unwrap_or(&""))
+        .to_string()
         .parse()
         .unwrap_or(0);
     if key == "未装備" {
@@ -471,7 +473,7 @@ fn fn_item_id(app: &App, c: &FnCall) -> Option<String> {
 // を引く。未登録名なら "0" を返す。
 fn fn_item_index(app: &App, c: &FnCall) -> Option<String> {
     let FnCall { args, .. } = *c;
-    let name = fn_arg_value(app, args.first()?);
+    let name = args.first()?.to_string();
     let name = name.trim().trim_matches('"');
     // numeric passthrough: 既に数値ならそのまま返す。
     if !name.is_empty() && name.parse::<i64>().is_ok() {
@@ -492,7 +494,7 @@ fn fn_unit(app: &App, c: &FnCall) -> Option<String> {
     // `Unit(pilot_name_or_unit_id)` — SRC `ユニット情報関数.md`:
     // 指定パイロット (またはユニット ID) が乗っているユニットの名称を返す。
     // 未解決の場合は空文字。
-    let key = fn_arg_value(app, args.first()?);
+    let key = args.first()?.to_string();
     let Some(inst) = find_unit(app, &key) else {
         return Some(String::new());
     };
@@ -521,7 +523,7 @@ fn fn_party(app: &App, c: &FnCall) -> Option<String> {
 
 fn fn_morale(app: &App, c: &FnCall) -> Option<String> {
     let FnCall { args, .. } = *c;
-    let key = fn_arg_value(app, args.first().copied().unwrap_or(""));
+    let key = (args.first().copied().unwrap_or("")).to_string();
     let key = key.trim().trim_matches('"');
     // ユニット配置済み → UnitInstance.morale を返す。
     if let Some(u) = find_unit(app, key) {
@@ -548,8 +550,8 @@ fn fn_relation(app: &App, c: &FnCall) -> Option<String> {
     if args.len() < 2 {
         return Some("0".to_string());
     }
-    let a = fn_arg_value(app, args[0]);
-    let b = fn_arg_value(app, args[1]);
+    let a = args[0].to_string();
+    let b = args[1].to_string();
     let key = format!("__rel_{a}_{b}");
     let v = app.script_var(&key);
     Some(if v.is_empty() {
@@ -660,7 +662,7 @@ fn fn_count(app: &App, c: &FnCall) -> Option<String> {
     if args.is_empty() {
         return None;
     }
-    let key = fn_arg_value(app, args.first()?);
+    let key = args.first()?.to_string();
     let key = key.trim().trim_matches('"');
     let prefix = format!("{key}[");
     let array_count = app
@@ -706,8 +708,8 @@ fn fn_is_available(app: &App, c: &FnCall) -> Option<String> {
     if args.len() < 2 {
         return None;
     }
-    let key = fn_arg_value(app, args[0]);
-    let feat = fn_arg_value(app, args[1]);
+    let key = args[0].to_string();
+    let feat = args[1].to_string();
     let feat = feat.trim().trim_matches('"').to_string();
     let has = match find_unit(app, &key) {
         Some(inst) => {
@@ -739,10 +741,10 @@ fn fn_is_defined(app: &App, c: &FnCall) -> Option<String> {
     // `Expressions/Functions/Other/Other.cs::IsDefined` 同等。
     // - 1 arg: pilot / unit_instance / item の何れかに存在すれば 1
     // - 2 args: kind ("パイロット" / "ユニット" / "アイテム") を絞る
-    let pname = fn_arg_value(app, args.first()?);
+    let pname = args.first()?.to_string();
     let pname = pname.trim().trim_matches('"');
     let kind = args.get(1).map(|s| {
-        let v = fn_arg_value(app, s);
+        let v = s.to_string();
         v.trim().trim_matches('"').to_string()
     });
     let is_pilot = || {

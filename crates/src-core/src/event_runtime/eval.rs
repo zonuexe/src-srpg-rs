@@ -488,18 +488,13 @@ fn sub_expr_term(app: &App, expr: &str, ety: Ty) -> Val {
 }
 
 /// 項 `expr` 全体が組み込み関数呼び出しなら評価する (原典 `CallFunction`)。
-/// 関数でなければ `None`。引数は既存の関数実装と同じく `expand_vars` 済みで渡す。
+/// 関数でなければ `None`。引数の評価は `eval_script_function` が行う。
 fn call_function(app: &App, expr: &str, ety: Ty) -> Option<Val> {
     let (name, args, total) = take_function_call(expr, 0)?;
     if total != expr.len() {
         return None;
     }
-    let args = if name.eq_ignore_ascii_case("IsVarDefined") {
-        args.to_string()
-    } else {
-        expand_vars(app, args)
-    };
-    let s = eval_script_function(app, name, &args)?;
+    let s = eval_script_function(app, name, args)?;
     let mut v = Val::str(s);
     if ety != Ty::Str {
         v.n = str_to_dbl(&v.s);

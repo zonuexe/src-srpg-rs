@@ -28,7 +28,7 @@ fn fn_nickname(app: &App, c: &FnCall) -> Option<String> {
     // `ItemData` は愛称フィールドを持たないため、第 1 引数からアイテムを
     // 解決し、その名称 (愛称代替) を返す。第 2 引数 (番号) は名称解決で
     // 一意に引けるため無視する。
-    let n = fn_arg_value(app, args.first()?);
+    let n = args.first()?.to_string();
     let n = n.trim().trim_matches('"');
     if let Some(p) = app
         .database()
@@ -59,7 +59,7 @@ fn fn_count_pilot(app: &App, c: &FnCall) -> Option<String> {
     // `CountPilot(unit)` — 指定ユニットに搭乗中のパイロット数。
     // 本実装は単一パイロットのみモデル化しているので、パイロットが
     // 居れば 1、未搭乗 (pilot_name 空 / "パイロット不在") なら 0。
-    let key = fn_arg_value(app, args.first()?);
+    let key = args.first()?.to_string();
     let n = find_unit(app, &key)
         .map(|inst| {
             let p = inst.pilot_name.trim();
@@ -75,7 +75,7 @@ fn fn_pilot_id(app: &App, c: &FnCall) -> Option<String> {
     // 同等: 指定 unit の (index 番目の) pilot 名を返す。
     // 本実装は同名 pilot を区別する uid を持たないので pilot 名そのもの。
     // index = 0 / 省略時は main pilot (= UnitInstance.pilot_name)。
-    let key = fn_arg_value(app, args.first()?);
+    let key = args.first()?.to_string();
     if let Some(inst) = find_unit(app, &key) {
         // index 1 以上は SRC では副パイロットだが、本実装は単一
         // pilot のみ。
@@ -89,15 +89,14 @@ fn fn_pilot(app: &App, c: &FnCall) -> Option<String> {
     let FnCall { args, .. } = *c;
     // `Pilot(unit [, N])` — 当該ユニットに乗っているパイロットの N 番目
     // (1-indexed, 省略時は 1) のパイロット名。未解決 unit は空文字。
-    // 引数は裸の識別子 (`Pilot(選択)` 等) も `fn_arg_value` で
-    // script_var 解決する (`UnitID` / `PilotID` と同じ規約)。
-    let unit_key = fn_arg_value(app, args.first()?);
+    // 引数は評価済み (裸の識別子 `Pilot(選択)` も変数として解決されている)。
+    let unit_key = args.first()?.to_string();
     let Some(inst) = find_unit(app, &unit_key) else {
         return Some(String::new());
     };
     let idx: usize = args
         .get(1)
-        .and_then(|s| fn_arg_value(app, s).parse().ok())
+        .and_then(|s| s.to_string().parse().ok())
         .unwrap_or(1);
     if idx <= 1 {
         Some(inst.pilot_name.clone())
@@ -121,7 +120,7 @@ fn fn_level(app: &App, c: &FnCall) -> Option<String> {
     // 優先度: UnitInstance → PilotInstance → PilotData (level 1) → 0
     // SRC.Sharp: `Pilot.Level` は `PList.Add(name, level, ...)` で設定され
     // `LevelUp` で増加する。Rust では `PilotInstance.level` に対応。
-    let key = fn_arg_value(app, args.first()?);
+    let key = args.first()?.to_string();
     let key = key.trim().trim_matches('"');
     // ① ユニット配置済み → UnitInstance 経由 (total_exp から level を計算)
     if let Some(inst) = app
@@ -154,7 +153,7 @@ fn fn_sp(app: &App, c: &FnCall) -> Option<String> {
     let FnCall { args, .. } = *c;
     // `SP(pilot_or_unit)` — 現在 SP。PilotData.sp - UnitInstance.sp_consumed。
     // 未解決は 0。
-    let key = fn_arg_value(app, args.first()?);
+    let key = args.first()?.to_string();
     let key = key.trim().trim_matches('"');
     if let Some(inst) = app
         .database()
@@ -182,7 +181,7 @@ fn fn_plana(app: &App, c: &FnCall) -> Option<String> {
     // `Plana(pilot)` — パイロットの霊力値。`Plana(pilot) = n` で設定され、
     // `UnitInstance.plana` に格納される。
     // ユニット未配置の場合は PilotInstance にフォールバック。
-    let key = fn_arg_value(app, args.first()?);
+    let key = args.first()?.to_string();
     let key = key.trim().trim_matches('"');
     // ① UnitInstance から引く
     if let Some(u) = find_unit(app, key) {
@@ -208,9 +207,9 @@ fn fn_skill(app: &App, c: &FnCall) -> Option<String> {
     if args.len() < 2 {
         return None;
     }
-    let pilot_key = fn_arg_value(app, args[0]);
+    let pilot_key = args[0].to_string();
     let pilot_key = pilot_key.trim().trim_matches('"');
-    let skill_name = fn_arg_value(app, args[1]);
+    let skill_name = args[1].to_string();
     let skill_name = skill_name.trim().trim_matches('"');
     // 1) PilotInstance.skills をチェック (SetSkill で動的付与されたスキル)
     let inst_level = app

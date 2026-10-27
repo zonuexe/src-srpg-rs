@@ -40,9 +40,8 @@ pub(super) fn eval(app: &App, c: &FnCall) -> Option<Option<String>> {
 fn fn_args(app: &App, c: &FnCall) -> Option<String> {
     let FnCall { args, .. } = *c;
     // Args(N) — 値は Set 時に Args(N) というキーで script_var に格納済み。
-    // N は数値リテラルだけでなく変数でも良い (`Args(配置用乱数)` 等) ため、
-    // まず `fn_arg_value` で解決してから数値判定する。
-    let n = fn_arg_value(app, args.first()?);
+    // N は数値リテラルだけでなく変数でも良い (`Args(配置用乱数)` 等)。引数は評価済み。
+    let n = args.first()?.to_string();
     if !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) {
         Some(app.script_var(&format!("Args({n})")).to_string())
     } else {
@@ -97,7 +96,7 @@ fn fn_year(app: &App, c: &FnCall) -> Option<String> {
     // `Year([time_str])` 等。引数省略時は `Now()` の値を使う。
     // SRC.NET 仕様: 引数が IsDate で解釈できない場合は 0 を返す。
     let epoch_ms = if let Some(arg) = args.first() {
-        let s = fn_arg_value(app, arg);
+        let s = arg.to_string();
         if s.trim().is_empty() {
             app.wall_clock_ms()
         } else {
@@ -130,7 +129,7 @@ fn fn_diff_time(app: &App, c: &FnCall) -> Option<String> {
         return None;
     }
     let resolve = |arg: &str| -> Option<f64> {
-        let s = fn_arg_value(app, arg);
+        let s = arg.to_string();
         let t = s.trim();
         if t.is_empty() || t.eq_ignore_ascii_case("now") {
             return Some(app.wall_clock_ms());
@@ -183,7 +182,7 @@ fn fn_term(app: &App, c: &FnCall) -> Option<String> {
     // `Term(用語[, unitId])` — RenameTerm で設定された用語別名を引く。
     // 別名未設定なら用語名そのものを返す (SRC.Sharp 準拠)。
     // `unitId` は「用語名」特殊能力オーバーライド用だが本実装は無視。
-    let term = fn_arg_value(app, args.first()?);
+    let term = args.first()?.to_string();
     let key = format!("__term_{term}");
     let alias = app.script_var(&key).to_string();
     if alias.is_empty() {
@@ -193,12 +192,12 @@ fn fn_term(app: &App, c: &FnCall) -> Option<String> {
     }
 }
 
-fn fn_text_width(app: &App, c: &FnCall) -> Option<String> {
+fn fn_text_width(_app: &App, c: &FnCall) -> Option<String> {
     let FnCall { args, .. } = *c;
     // `TextWidth(text)` — 描画幅 (ピクセル) の近似値。フォントサイズが
     // ランタイムに保持されていないため、char_count × 14 (14pt 等幅相当) で
     // 概算する。
-    let s = fn_arg_value(app, args.first()?);
+    let s = args.first()?.to_string();
     let s = s.trim_matches('"');
     Some((s.chars().count() as i32 * 14).to_string())
 }
@@ -218,7 +217,7 @@ fn fn_key_state(app: &App, c: &FnCall) -> Option<String> {
     // スルー** する (early-return しない)。`Do While (KeyState(2)=0)` 形式の
     // ビジーループが脱出できず STEP_LIMIT までフリーズするのを防ぐため。
     if let Some(a) = args.first() {
-        if fn_arg_value(app, a).trim() == "2" && app.take_wait_click_right() {
+        if a.to_string().trim() == "2" && app.take_wait_click_right() {
             // ワンショット消費: 直後の `Do While KeyState(2) Loop` (解放待ち) は
             // 0 を見て即脱出する。これをしないと無限ループで STEP_LIMIT に達する。
             return Some("1".to_string());
@@ -259,11 +258,11 @@ fn fn_window_height(_app: &App, c: &FnCall) -> Option<String> {
     Some("600".to_string())
 }
 
-fn fn_font(app: &App, c: &FnCall) -> Option<String> {
+fn fn_font(_app: &App, c: &FnCall) -> Option<String> {
     let FnCall { args, .. } = *c;
     // `Font(属性名)` — 現在のフォント設定を返す。
     // WASM 環境ではフォントをここから取得できないため固定値を返す。
-    let attr = fn_arg_value(app, args.first()?);
+    let attr = args.first()?.to_string();
     match attr.trim().trim_matches('"') {
         "フォント名" => Some("MS ゴシック".to_string()),
         "サイズ" => Some("12".to_string()),
@@ -292,10 +291,7 @@ fn fn_dir(app: &App, c: &FnCall) -> Option<String> {
     // `Dir(path, kind)` — 仮想ファイルシステムに該当ファイルが
     // あれば basename を返す ("見つかった")。無ければ空文字列。
     // 実ファイルシステムへのアクセスは行わない。
-    let path = args
-        .first()
-        .map(|p| fn_arg_value(app, p))
-        .unwrap_or_default();
+    let path = args.first().map(|p| p.to_string()).unwrap_or_default();
     Some(
         app.virtual_file_basename_if_exists(&path)
             .unwrap_or_default(),
@@ -305,10 +301,7 @@ fn fn_dir(app: &App, c: &FnCall) -> Option<String> {
 fn fn_file_exists(app: &App, c: &FnCall) -> Option<String> {
     let FnCall { args, .. } = *c;
     // `FileExists(path)` — VFS に該当ファイルが存在するなら 1、無ければ 0。
-    let path = args
-        .first()
-        .map(|p| fn_arg_value(app, p))
-        .unwrap_or_default();
+    let path = args.first().map(|p| p.to_string()).unwrap_or_default();
     Some(
         if app.virtual_file_exists(&path) {
             "1"
@@ -330,40 +323,28 @@ fn fn_file_len(app: &App, c: &FnCall) -> Option<String> {
     let FnCall { args, .. } = *c;
     // `FileLen(path)` — VFS 上のファイルサイズ (UTF-8 バイト数)。
     // 未登録なら 0。
-    let path = args
-        .first()
-        .map(|p| fn_arg_value(app, p))
-        .unwrap_or_default();
+    let path = args.first().map(|p| p.to_string()).unwrap_or_default();
     Some(app.virtual_file_len(&path).to_string())
 }
 
 fn fn_loc(app: &App, c: &FnCall) -> Option<String> {
     let FnCall { args, .. } = *c;
     // `Loc(handle)` — ファイルハンドルの読取カーソル (行番号)。
-    let handle = args
-        .first()
-        .map(|p| fn_arg_value(app, p))
-        .unwrap_or_default();
+    let handle = args.first().map(|p| p.to_string()).unwrap_or_default();
     Some(app.vfs_loc(&handle).to_string())
 }
 
 fn fn_eof(app: &App, c: &FnCall) -> Option<String> {
     let FnCall { args, .. } = *c;
     // `EOF(handle)` — 末尾に到達していれば 1、まだ読めるなら 0。
-    let handle = args
-        .first()
-        .map(|p| fn_arg_value(app, p))
-        .unwrap_or_default();
+    let handle = args.first().map(|p| p.to_string()).unwrap_or_default();
     Some(if app.vfs_eof(&handle) { "1" } else { "0" }.to_string())
 }
 
 fn fn_lof(app: &App, c: &FnCall) -> Option<String> {
     let FnCall { args, .. } = *c;
     // `LOF(handle)` — 開いているファイルの総行数。
-    let handle = args
-        .first()
-        .map(|p| fn_arg_value(app, p))
-        .unwrap_or_default();
+    let handle = args.first().map(|p| p.to_string()).unwrap_or_default();
     Some(app.vfs_lof(&handle).to_string())
 }
 

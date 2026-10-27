@@ -13,8 +13,8 @@ pub(super) fn info_query(app: &App, args: &[&str]) -> String {
         return String::new();
     }
     // 第 1 引数がデータ区分キーワードか判定。クォートは剥がして比較。
-    // `name` 引数は裸の識別子 (`Info(ユニット,乗せ換えユニット,愛称)` 等) を
-    // 取り得るので `fn_arg_value` で script_var 解決する。
+    // 引数は評価済み (`Info(ユニット,乗せ換えユニット,愛称)` の裸の識別子も変数として
+    // 解決されている)。
     let head = args[0].trim().trim_matches('"');
     let (kind, name, rest): (InfoKind, String, &[&str]) = match info_data_kind(head) {
         Some(kind) => {
@@ -22,13 +22,13 @@ pub(super) fn info_query(app: &App, args: &[&str]) -> String {
             if matches!(kind, InfoKind::Map | InfoKind::Option) {
                 (kind, String::new(), &args[1..])
             } else {
-                let name = fn_arg_value(app, args.get(1).copied().unwrap_or(""));
+                let name = (args.get(1).copied().unwrap_or("")).to_string();
                 (kind, name, &args[2..])
             }
         }
         None => {
             // データ区分省略: name から自動判定
-            let name = fn_arg_value(app, head);
+            let name = head.to_string();
             let kind = detect_info_kind(app, &name);
             (kind, name, &args[1..])
         }
@@ -164,7 +164,7 @@ pub(super) fn info_unit(app: &App, name: &str, info: &str, sub: &[&str]) -> Stri
         "アイテム" => {
             let names = inst.equipped_item_names();
             sub.first()
-                .and_then(|s| fn_arg_value(app, s).parse::<usize>().ok())
+                .and_then(|s| s.to_string().parse::<usize>().ok())
                 .and_then(|n| names.get(n.saturating_sub(1)))
                 .map(|s| s.to_string())
                 .unwrap_or_default()
@@ -243,11 +243,11 @@ pub(super) fn info_unit_data_inner(
     }
 }
 
-pub(super) fn weapon_info(data: &crate::data::unit::UnitData, sub: &[&str], app: &App) -> String {
+pub(super) fn weapon_info(data: &crate::data::unit::UnitData, sub: &[&str], _app: &App) -> String {
     let Some(first) = sub.first() else {
         return String::new();
     };
-    let key = fn_arg_value(app, first);
+    let key = first.to_string();
     let weapon = if let Ok(idx) = key.parse::<usize>() {
         if idx == 0 || idx > data.weapons.len() {
             return String::new();
@@ -285,8 +285,8 @@ pub(super) fn weapon_info(data: &crate::data::unit::UnitData, sub: &[&str], app:
     }
 }
 
-pub(super) fn feature_at(feats: &[(String, String)], sub: Option<&&str>, app: &App) -> String {
-    let Some(idx) = sub.and_then(|s| fn_arg_value(app, s).parse::<usize>().ok()) else {
+pub(super) fn feature_at(feats: &[(String, String)], sub: Option<&&str>, _app: &App) -> String {
+    let Some(idx) = sub.and_then(|s| s.to_string().parse::<usize>().ok()) else {
         return String::new();
     };
     if idx == 0 || idx > feats.len() {
@@ -295,10 +295,10 @@ pub(super) fn feature_at(feats: &[(String, String)], sub: Option<&&str>, app: &A
     feats[idx - 1].0.clone()
 }
 
-pub(super) fn feature_name(feats: &[(String, String)], sub: Option<&&str>, app: &App) -> String {
+pub(super) fn feature_name(feats: &[(String, String)], sub: Option<&&str>, _app: &App) -> String {
     // 番号指定 (n 番目の名称) も 名前指定 (= 名称そのもの) も同じ識別子を返す。
     let Some(arg) = sub else { return String::new() };
-    let key = fn_arg_value(app, arg);
+    let key = arg.to_string();
     if let Ok(idx) = key.parse::<usize>() {
         if idx == 0 || idx > feats.len() {
             return String::new();
@@ -311,9 +311,9 @@ pub(super) fn feature_name(feats: &[(String, String)], sub: Option<&&str>, app: 
     String::new()
 }
 
-pub(super) fn feature_owned(feats: &[(String, String)], sub: Option<&&str>, app: &App) -> String {
+pub(super) fn feature_owned(feats: &[(String, String)], sub: Option<&&str>, _app: &App) -> String {
     let Some(arg) = sub else { return "0".into() };
-    let key = fn_arg_value(app, arg);
+    let key = arg.to_string();
     if feats.iter().any(|(k, _)| k == &key) {
         "1".into()
     } else {
@@ -321,9 +321,9 @@ pub(super) fn feature_owned(feats: &[(String, String)], sub: Option<&&str>, app:
     }
 }
 
-pub(super) fn feature_level(feats: &[(String, String)], sub: Option<&&str>, app: &App) -> String {
+pub(super) fn feature_level(feats: &[(String, String)], sub: Option<&&str>, _app: &App) -> String {
     let Some(arg) = sub else { return "0".into() };
-    let key = fn_arg_value(app, arg);
+    let key = arg.to_string();
     let entry = if let Ok(idx) = key.parse::<usize>() {
         feats.get(idx.saturating_sub(1))
     } else {
@@ -342,9 +342,9 @@ pub(super) fn feature_level(feats: &[(String, String)], sub: Option<&&str>, app:
         .unwrap_or_else(|| "1".into())
 }
 
-pub(super) fn feature_data(feats: &[(String, String)], sub: Option<&&str>, app: &App) -> String {
+pub(super) fn feature_data(feats: &[(String, String)], sub: Option<&&str>, _app: &App) -> String {
     let Some(arg) = sub else { return String::new() };
-    let key = fn_arg_value(app, arg);
+    let key = arg.to_string();
     let entry = if let Ok(idx) = key.parse::<usize>() {
         feats.get(idx.saturating_sub(1))
     } else {
@@ -536,7 +536,7 @@ pub(super) fn info_map(app: &App, info: &str, sub: &[&str]) -> String {
                 Ok(v) => v,
                 Err(_) => return String::new(),
             };
-            let y: u32 = match sub.first().and_then(|s| fn_arg_value(app, s).parse().ok()) {
+            let y: u32 = match sub.first().and_then(|s| s.to_string().parse().ok()) {
                 Some(v) => v,
                 None => return String::new(),
             };

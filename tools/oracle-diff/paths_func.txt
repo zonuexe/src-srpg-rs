@@ -1,0 +1,76 @@
+# 組み込み関数の引数 (原典 GetValueAsString(param, is_term)) の突合コーパス。
+# 引数に変数・式・クォート文字列・入れ子の関数・未定義名・システム変数を渡す。
+Set n 10
+Set m 3
+Set s "abcdef"
+Set sp "a b c"
+Set lst "x y z"
+Set comma "p,q"
+Set idx 2
+Set name "s"
+Set neg -4
+Set fl 2.5
+Set arr[1] "one"
+Set arr[2] "two"
+Money 500
+===PROBES===
+Len(s)
+Len("s")
+Len(sp)
+Len(n + m)
+Len("n + m")
+Len(undefined_q)
+Len(資金)
+Mid(s, idx, m)
+Mid(s, idx + 1, 2)
+Mid(s, (idx + 1), 2)
+Mid("$(s)", 2, 2)
+Left(s, m)
+Right(s, n - 8)
+Max(n, m)
+Max(n + 5, m * 10)
+Max(neg, 0)
+Min(n, m, idx)
+Abs(neg)
+Abs(neg * 2)
+Int(fl)
+Round(fl * 3)
+Lindex(lst, idx)
+Lindex(lst, idx + 1)
+Lindex("q r s", 2)
+Llength(lst)
+Llength(sp & " d")
+List(n, m, s)
+List(n + 1, "a b")
+InStr(s, "cd")
+InStr(s, name)
+Replace(s, "cd", "XY")
+Replace(comma, ",", " ")
+IIf(n > m, s, sp)
+IIf(n < m, s, sp)
+IIf(n > m, n + 1, 0)
+Eval("n + m")
+Eval(name)
+Format(fl, "0.00")
+LCase("ABC")
+UCase(s)
+Trim("  x  ")
+Len(Mid(s, 2, 3))
+Max(Len(s), Len(sp))
+Lindex(List(n, m), 2)
+Mid(s, Len(sp), 2)
+Len(arr[1])
+Len(arr[idx])
+Len(arr[3])
+IsVarDefined(n)
+IsVarDefined(undefined_q)
+IsVarDefined(arr[1])
+IsNumeric(n)
+IsNumeric(s)
+IsNumeric("12")
+Asc(s)
+Chr(65)
+String(m, "x")
+Wide("ab")
+Sgn(neg)
+Sqr(n * 10 - 1 + 1 - 99 + 89)

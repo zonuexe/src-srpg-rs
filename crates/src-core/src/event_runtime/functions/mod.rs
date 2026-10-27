@@ -13,7 +13,7 @@ mod unit;
 struct FnCall<'a> {
     /// スクリプト上の関数名 (大文字小文字は原文のまま)。
     name: &'a str,
-    /// `split_function_args` で分割した引数 (未評価)。
+    /// 評価済みの引数 (`takes_raw_params` の関数だけは原文)。
     args: &'a Vec<&'a str>,
     /// `canonical_function_name` で正規化した関数名 (振り分けキー)。
     canon: &'a String,
@@ -85,8 +85,19 @@ pub(super) fn take_function_call(src: &str, i: usize) -> Option<(&str, &str, usi
 /// 関数呼び出しを評価して文字列値を返す。対応外なら `None`。
 /// 名前は ASCII 範囲で case-insensitive (SRC 流: `Llength` / `LLength` どちらも可)。
 pub(super) fn eval_script_function(app: &App, name: &str, args_str: &str) -> Option<String> {
-    let args: Vec<&str> = split_function_args(args_str);
     let canon = canonical_function_name(name);
+    // 引数は原文から 1 つずつ評価してから各関数へ渡す (原典 `CallFunction` の
+    // `GetValueAsString(params(i), is_term(i))`)。関数側は評価済みの値をそのまま使う。
+    // 原文のまま使う関数 (`takes_raw_params`) は評価しない。
+    let raw: Vec<&str> = split_function_args(args_str);
+    let values: Vec<String> = if takes_raw_params(&canon) {
+        raw.iter().map(|a| a.trim().to_string()).collect()
+    } else {
+        raw.iter()
+            .map(|a| eval::param_value(app, a.trim()))
+            .collect()
+    };
+    let args: Vec<&str> = values.iter().map(String::as_str).collect();
     let c = FnCall {
         name,
         args: &args,
@@ -98,6 +109,13 @@ pub(super) fn eval_script_function(app: &App, name: &str, args_str: &str) -> Opt
         .or_else(|| math::eval(app, &c))
         .or_else(|| system::eval(app, &c))
         .flatten()
+}
+
+/// 引数を評価せず原文のまま受け取る関数か。`IsVarDefined` / `Count` は変数名・配列名そのもの
+/// (原典は `expr` の原文を切り出す)、`IIf` は条件を `If` と同じ規則で判定し、選ばれた側の
+/// 引数だけを評価する (`Random` などを 2 度評価しないため)。
+fn takes_raw_params(canon: &str) -> bool {
+    matches!(canon, "IsVarDefined" | "Count" | "IIF")
 }
 
 /// `args_str` を `,` で分割。ただし `"..."` 内 / `(...)` 内 / `[...]` 内のカンマは

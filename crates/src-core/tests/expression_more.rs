@@ -960,7 +960,7 @@ fn int_and_minmax_resolve_bare_variable_arithmetic() {
 
 #[test]
 fn string_function_bare_arg_unaffected() {
-    // 文字列関数 (Len) は fn_arg_value を直接使うため numeric_arg の裸変数解決に影響されない。
+    // 文字列関数 (Len) の引数も評価器で評価される。
     // `Len($(s))` は従来どおり文字列長を返す ($() 補間)。
     assert_eq!(run("Set s hello\nSet v Len($(s))").script_var("v"), "5");
 }

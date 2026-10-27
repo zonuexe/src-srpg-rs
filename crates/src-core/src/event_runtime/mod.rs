@@ -498,7 +498,7 @@ fn call_label_sync_inner(app: &mut App, pc: usize, args: &[String]) -> String {
 ///
 /// 原典 SRC は式の評価中に未知の関数名をラベルとして解決し、その場で
 /// サブルーチンを呼ぶ (`Expression.function.cs`)。本実装の式展開
-/// (`expand_vars` / `fn_arg_value`) は `&App` (不変) しか持たずサブルーチンを
+/// (`eval` / `expand_vars`) は `&App` (不変) しか持たずサブルーチンを
 /// 実行できないため、`&mut App` を持つ地点で先に解決して文字列へ畳み込む。
 /// 条件式の `Call(<label>)` を先に潰す既存の前処理と同じ方式。
 ///

@@ -124,8 +124,9 @@ fn exec_return(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     // `Returnコマンド.md`: 「*value* の値がサブルーチンコールの返り値」。
     // ここで畳み込まないと `Return (n + 2)` の `n` (サブルーチン
     // ローカル変数) が呼び出し元では解決できず、式のまま漏れる。
+    // 値はコマンド引数としてこのスコープで評価済み (`Return (n + 2)` の n はサブルーチン側)。
+    // 原典の Return は値を取らない。返り値は本移植の拡張。
     let retval = xargs.first().cloned().unwrap_or_default();
-    let retval = eval_arith_value(app, &retval).unwrap_or(retval);
     app.set_last_return_value(retval);
     if let Some((ret, saved)) = app.pop_call_return() {
         restore_call_args(app, saved);

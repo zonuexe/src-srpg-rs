@@ -983,9 +983,8 @@ fn exec_create(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     } = *c;
     // SRC `Create party unit rank pilot level x y [ID option]`
     // (本実装では rank / level / ID / option は無視。)
-    // unit / pilot は裸識別子で渡されることが多いので fn_arg_value
-    // で script_var 解決する (`Create 味方 入手ユニット 0 パイロット不在 ...`
-    // → 入手ユニット の値で実際のユニット名が決まる)。
+    // unit / pilot は裸識別子で渡されることが多く、引数評価で変数の値になる
+    // (`Create 味方 入手ユニット 0 パイロット不在 ...` → 入手ユニット の値)。
     if xargs.len() < 7 {
         return Err(err(
             line,

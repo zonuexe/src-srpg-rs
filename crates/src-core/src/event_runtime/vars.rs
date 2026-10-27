@@ -53,17 +53,8 @@ pub(super) fn expand_vars(app: &App, src: &str) -> String {
         }
         // 関数呼び出し `Name(args)` 形式の検出 (クオート内はスキップ=リテラル扱い)。
         if let Some((fn_name, args_str, total)) = take_function_call(src, i).filter(|_| !in_quote) {
-            // 引数文字列を再帰展開してから評価する。ただし `IsVarDefined` は
-            // 引数を **変数名そのもの** として必要とするため展開しない。
-            // 展開すると `IsVarDefined(配列[1])` が配列要素の値に化け、
-            // 定義済みでも「未定義」と誤判定する (添字 `[expr]` の解決は
-            // `IsVarDefined` 内の `resolve_lhs_name` が行う)。
-            let expanded_args = if fn_name.eq_ignore_ascii_case("IsVarDefined") {
-                args_str.to_string()
-            } else {
-                expand_vars(app, args_str)
-            };
-            if let Some(v) = eval_script_function(app, fn_name, &expanded_args) {
+            // 引数の評価は `eval_script_function` が原典どおり 1 つずつ行う。
+            if let Some(v) = eval_script_function(app, fn_name, args_str) {
                 out.push_str(&v);
             } else {
                 // 未対応 / 評価失敗の関数呼出はトークン全体をそのまま残す。
@@ -136,8 +127,8 @@ pub(super) fn take_indexed_var(app: &App, src: &str, i: usize) -> Option<(String
         // 未定義 / 空はリテラルのまま残す。`expand_vars` は Talk 本文等の
         // 一般テキストにも適用されるため、`アイテム[特殊]` のように偶然
         // `識別子[...]` を含むリテラル文を空に潰さないための保全措置。
-        // 値文脈 (比較 / Set 値 / Switch 等) で未定義 indexed 参照を空に
-        // 解決するのは `fn_arg_value` の責務。
+        // 値文脈 (比較 / Set 値 / 引数等) で未定義 indexed 参照を空に
+        // 解決するのは統一評価器 (`eval`) の責務。
         return None;
     }
     Some((v.to_string(), k - i))
@@ -424,64 +415,21 @@ pub(super) fn expand_dollar_paren(app: &App, name_raw: &str) -> String {
     app.script_var(&key).to_string()
 }
 
-pub(super) fn fn_arg_value(app: &App, arg: &str) -> String {
-    let s = arg.trim();
-    if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
-        return s[1..s.len() - 1].to_string();
-    }
-    // 数値リテラル
-    if s.parse::<f64>().is_ok() {
-        return s.to_string();
-    }
-    // SRC のシステム変数 (動的に評価されるカウンタ等)
-    if let Some(sys) = system_variable_value(app, s) {
-        return sys;
-    }
-    // 変数として引いて見て、定義済みなら値を返す (空文字列の変数も正しく返す)。
-    // SRC.Sharp 準拠: 定義済み変数 `Set v ""` は空文字列を返す。
-    // `!v.is_empty()` ではなく `is_script_var_defined` でチェックすること。
-    if app.is_script_var_defined(s) {
-        return app.script_var(s).to_string();
-    }
-    // `name[expr]` の indexed 参照: 直接キーで引けなくても `resolve_lhs_name`
-    // で添字を評価したキーで再検索する。未定義なら **空文字** を返す
-    // (SRC: 未定義変数は空)。リテラル `name[expr]` を比較式に漏らさない
-    // — 漏らすと `If 配列[1] <> ""` のような未定義チェックが常に真になる。
-    if s.len() > 2 && s.ends_with(']') {
-        if let Some(open) = s.find('[') {
-            if open > 0 {
-                let key = resolve_lhs_name(app, s);
-                return app.script_var(&key).to_string();
-            }
-        }
-    }
-    // 算術式の自動評価は **意図的に行わない**: `"1-2-3"` のような文字列を
-    // -4 と誤評価してしまう (Set msg のような string 文脈で破綻する)。
-    // 算術評価が必要な数学関数 (Abs / Min / Max / Round / Int 等) は
-    // 各 arm 側で `numeric_arg(app, s)` を呼んで明示的に評価する。
-    //
-    // 最終フォールバックは **trim 前の生引数** を返す。`LSet("AB",5)` →
-    // `"AB   "` のような関数評価結果の trailing space を保持するため。
-    arg.to_string()
-}
-
-/// 数学関数引数用の数値評価ヘルパ。`fn_arg_value` の結果を統一評価器で評価する。
-///
-/// SRC `EvalTerm` は関数引数も式評価し**裸の変数を数値解決**するため、数値関数
-/// (`Round`/`Int`/`Min`/`Max`/`Abs`/`Mod` 等、本ヘルパを呼ぶ arm に限定) の引数で
-/// `Round(温泉宿１収入 + 温泉宿２収入)` のような裸変数算術を評価できるようにする。
-/// 文字列関数 (`Left`/`Mid` 等) は `fn_arg_value` を直接使うため影響しない。
-/// ネストした関数呼出は `expand_vars` が事前に値へ展開済みなので、ここに届く時点で
-/// 残るのは裸変数・システム変数・算術演算子・数値リテラルのみ。
-pub(super) fn numeric_arg(app: &App, arg: &str) -> Option<f64> {
-    let s = fn_arg_value(app, arg);
-    if let Ok(v) = s.parse::<f64>() {
+/// 評価済みの値を数値として読む。数値として読めない文字列 (`"AB"` 等) は `None` を返し、
+/// 「数値なら数値・そうでなければ文字列」で扱いを分ける呼出元 (`LSet` / `RSet` 等) の
+/// 契約を守る。引数の評価は呼び出し側 (関数引数・コマンド引数) で済んでいる。
+pub(super) fn numeric_arg(value: &str) -> Option<f64> {
+    let t = value.trim();
+    if let Ok(v) = t.parse::<f64>() {
         return Some(v);
     }
-    // 裸の変数・システム変数を含む算術式 (`温泉宿１収入 + 温泉宿２収入` / `資金 + 100`) を
-    // 統一評価器で評価する。文字列になる値 (`"AB"` 等) は `None` を返し、
-    // 「数値なら数値・そうでなければ文字列」で分岐する呼出元 (LSet/RSet) の契約を守る。
-    eval::try_numeric(app, &s)
+    (!t.is_empty() && !t.contains(char::is_whitespace) && eval::is_numeric(t))
+        .then(|| eval::str_to_dbl(t))
+}
+
+/// 評価済みの値を整数として読む (原典 `GetValueAsLong`: 数値でなければ 0、ゼロ方向へ切り捨て)。
+pub(super) fn int_arg(value: &str) -> i64 {
+    eval::str_to_dbl(value).trunc() as i64
 }
 
 /// 本移植が `AppVersion` で報告する SRC 互換バージョン番号。

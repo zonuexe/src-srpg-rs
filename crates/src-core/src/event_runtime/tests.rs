@@ -682,16 +682,16 @@ fn paren_arith_missing_operand_defaults_to_zero() {
     // `次のレベル(500 - )` / `(500 * 0 - 500 + )` 由来の生式表示の防止)。
     let app = App::new();
     assert_eq!(
-        eval_paren_arith_value(&app, "(500 - )"),
+        eval::try_numeric(&app, "(500 - )").map(format_num),
         Some("500".to_string())
     );
     assert_eq!(
-        eval_paren_arith_value(&app, "(500 * 0 - 500 + )"),
+        eval::try_numeric(&app, "(500 * 0 - 500 + )").map(format_num),
         Some("-500".to_string())
     );
     // 通常の括弧算術は従来どおり評価される (回帰防止)。
     assert_eq!(
-        eval_paren_arith_value(&app, "(2 + 3)"),
+        eval::try_numeric(&app, "(2 + 3)").map(format_num),
         Some("5".to_string())
     );
 }
@@ -2650,7 +2650,7 @@ EndIf
 }
 
 /// 値文脈 (Set 値 / Switch) でも未定義 indexed 参照はリテラルを漏らさず
-/// 空文字に解決する。`fn_arg_value` を通る経路の網羅。
+/// 空文字に解決する。引数評価 (`eval::param_value`) を通る経路の網羅。
 #[test]
 fn undefined_indexed_var_resolves_empty_in_value_contexts() {
     // Set 値: 未定義 indexed → 空文字 (リテラル `配列[9]` を入れない)
@@ -2687,7 +2687,7 @@ Set y 配列[2]
 //
 // バグのクラス: 「変数参照が、解決できないとリテラルのソーステキストを
 // 値文脈へ漏らす / 逆に名前が必要な箇所で値へ過剰展開される」。
-// 値解決の集約点は `fn_arg_value`、LHS 解決の集約点は `resolve_lhs_name`。
+// 値解決の集約点は統一評価器 (`eval`)、LHS 解決の集約点は `resolve_lhs_name`。
 // この 2 つの不変条件を全文脈で固定する。
 // ───────────────────────────────────────────────────────────────────
 
@@ -2721,31 +2721,32 @@ fn party_arg_unknown_still_errors() {
     assert!(e.to_string().contains("Party"), "{e}");
 }
 
-/// `fn_arg_value` の契約を直接固定する。
+/// 引数 1 つの評価 (`eval::param_value`、原典 `GetValueAsString(param, is_term)`) の
+/// 変数参照まわりの契約を直接固定する。
 /// - 未定義 indexed 参照 → 空文字 (リテラル `name[k]` を漏らさない)
 /// - 定義済み indexed → 値
 /// - 未定義の **裸スカラー** → リテラル温存 (SRC 規約: `If 選択 = ランダム`
 ///   の `ランダム` のように未定義識別子はリテラルとして比較される)
 #[test]
-fn fn_arg_value_contract_for_variable_references() {
+fn param_value_contract_for_variable_references() {
     let mut app = App::new();
     app.set_script_var("定義[1]".to_string(), "val".to_string());
     app.set_script_var("空[1]".to_string(), String::new());
     app.set_script_var("scal".to_string(), "5".to_string());
 
     // 未定義 indexed → 空
-    assert_eq!(fn_arg_value(&app, "未定義[1]"), "");
-    assert_eq!(fn_arg_value(&app, "未定義[xyz]"), "");
+    assert_eq!(eval::param_value(&app, "未定義[1]"), "");
+    assert_eq!(eval::param_value(&app, "未定義[xyz]"), "");
     // 定義済み indexed → 値 / 空代入 → 空
-    assert_eq!(fn_arg_value(&app, "定義[1]"), "val");
-    assert_eq!(fn_arg_value(&app, "空[1]"), "");
+    assert_eq!(eval::param_value(&app, "定義[1]"), "val");
+    assert_eq!(eval::param_value(&app, "空[1]"), "");
     // 定義済みスカラー → 値
-    assert_eq!(fn_arg_value(&app, "scal"), "5");
+    assert_eq!(eval::param_value(&app, "scal"), "5");
     // 未定義スカラー → リテラル温存 (SRC 規約)
-    assert_eq!(fn_arg_value(&app, "ランダム"), "ランダム");
+    assert_eq!(eval::param_value(&app, "ランダム"), "ランダム");
     // クオート文字列 / 数値リテラルはそのまま
-    assert_eq!(fn_arg_value(&app, "\"abc\""), "abc");
-    assert_eq!(fn_arg_value(&app, "42"), "42");
+    assert_eq!(eval::param_value(&app, "\"abc\""), "abc");
+    assert_eq!(eval::param_value(&app, "42"), "42");
 }
 
 /// 未定義 indexed 参照は **全ての値文脈** で空に解決する (リテラル不漏れ)。
@@ -6434,7 +6435,7 @@ Money 500
     execute(&mut app, &stmts).unwrap();
     assert_eq!(parse_i32_at(&app, "(味方数 + 1)", 1).unwrap(), 2);
     assert_eq!(
-        eval_paren_arith_value(&app, "(資金 + 100)"),
+        eval::try_numeric(&app, "(資金 + 100)").map(format_num),
         Some("600".to_string())
     );
     let stmts = event::parse("Set m Max(資金 - 100, 0)\nSet p (味方数 * 10)\n").unwrap();
@@ -6567,4 +6568,33 @@ End
         }
         _ => panic!("expected Talk dialog"),
     }
+}
+
+/// 組み込み関数の引数は 1 つずつ評価してから渡す (原典 `GetValueAsString(param, is_term)`)。
+/// 旧実装は `$(...)` と関数呼び出しだけを文字列展開しており、空白を含む式の引数
+/// (`n + m`) は式のまま、変数に入れたユニット名は名前のまま関数に渡っていた。
+#[test]
+fn function_params_are_evaluated_like_the_original() {
+    let src = "\
+Pilot ガロ ガロ 男性 超能力者 AAAA 100 100 100 100 100 100 100
+Unit ゾルダ Mass 1 0 陸 5 M 1000 100 2400 80 900 80 BBBB
+Place ゾルダ ガロ 敵 5 5
+Set n 10
+Set m 3
+Set lst \"x y z\"
+Set idx 2
+Set who ガロ
+Set a Len(n + m)
+Set b Lindex(lst, idx + 1)
+Set c List(n + 1, \"a b\")
+Set d HP(who)
+Set e IsVarDefined(n)
+";
+    let mut app = App::new();
+    execute(&mut app, &event::parse(src).unwrap()).unwrap();
+    assert_eq!(app.script_var("a"), "2");
+    assert_eq!(app.script_var("b"), "z");
+    assert_eq!(app.script_var("c"), "11 a b");
+    assert_eq!(app.script_var("d"), "2400");
+    assert_eq!(app.script_var("e"), "1");
 }
