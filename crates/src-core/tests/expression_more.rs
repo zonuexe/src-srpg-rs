@@ -866,14 +866,11 @@ fn bareword_assign_respects_precedence() {
 }
 
 #[test]
-fn set_form_bareword_arithmetic_not_evaluated() {
-    // `Set var bareword-算術` (= 形でない) は従来どおり数値化しない (SRC では引数過多
-    // エラーになる無効形。括弧付き `Set var (a - b)` か `=` 形を使う)。括弧付き / `=` 形
-    // のみを評価することで、引用符付き文字列や Format 出力の誤数値化を防ぐ。
-    assert_eq!(
-        run("Set a 5\nSet b 3\nSet c a - b").script_var("c"),
-        "a - b"
-    );
+fn set_form_multi_term_value_is_evaluated_as_expression() {
+    // `Set var a - b` は原典では引数過多エラーになる無効形。本移植は `c = a - b` と同じく
+    // 式として評価する。引用符付き文字列は原文トークンで区別できるので数値化されない。
+    assert_eq!(run("Set a 5\nSet b 3\nSet c a - b").script_var("c"), "2");
+    assert_eq!(run(r#"Set c "a - b""#).script_var("c"), "a - b");
 }
 
 #[test]

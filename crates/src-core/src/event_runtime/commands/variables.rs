@@ -21,12 +21,12 @@ fn exec_set(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     let Cmd {
         lname,
         args,
-        xargs,
+        raw_args,
         line,
         pc,
         ..
     } = *c;
-    // Set var value...  (value が複数トークンの場合はスペース連結)
+    // Set var value...
     // `__assign` は `var = expr` 形 (assign sugar が生成する内部コマンド名)。
     // SRC の `=` 代入は RHS が常に式なので括弧無し算術も数値化する (下記)。
     // SRC `Localコマンド` は 2 書式を持つ (C# `LocalCmd.cs`)。
@@ -35,7 +35,6 @@ fn exec_set(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     // 書式2 の `=` は値の一部ではない。従来は `Local p = Args(1)` の値が
     // `"= <値>"` になり、`Create p …` 等で「Party 値が不正」を招いていた。
     let local_assign = lname == "local" && args.len() >= 3 && args[1].trim() == "=";
-    let is_assign_form = lname == "__assign" || local_assign;
     if args.is_empty() {
         return Err(err(line, "Set/Local には変数名が必要。"));
     }
@@ -92,44 +91,25 @@ fn exec_set(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     } else {
         resolve_lhs_name(app, &args[0])
     };
-    let value = if xargs.len() > val_start {
-        // `#` コメントを除去 (SRC.Sharp `SetCmd.cs` 後方互換性):
-        // `Set var value # comment` 形式で `#` 以降を無視する。
-        // 重要: チェック対象は xargs[2] (値の直後のトークン) のみ。
-        // xargs[1] が `#` で始まる場合は色コード (`#3264c8` 等) であり
-        // コメントとは区別する (この場合 xargs.len()==2 で下記 end=2 分岐)。
-        let end = if xargs.len() > val_start + 1 && xargs[val_start + 1].starts_with('#') {
-            val_start + 1 // `#` コメント発見 → 値は 1 トークンのみ
+    // 値は原文トークンを統一評価器で評価する (原典 `ExecSetCmd`: 1 項なら項として、
+    // `var = a b c` の複数項は式として評価し、数値なら数値・それ以外は文字列で代入)。
+    // 原典は `Set var a b` (3 項以上) をエラーとするが、本移植は式として受け付ける。
+    // 例外は値の直後が `#` で始まる場合で、旧版シナリオのコメントとして無視する
+    // (値そのものが `#` で始まる色コード `#3264c8` はコメントではない)。
+    let value = if args.len() > val_start {
+        let raw = &raw_args[val_start..];
+        let end = if raw.len() > 1 && raw[1].starts_with('#') {
+            1
         } else {
-            xargs.len()
+            raw.len()
         };
-        if end == val_start + 1 {
-            // 単一トークン値 (`Set マップ決定 選択` 形式) は SRC 同様に
-            // 裸の識別子を script_var として自動解決する。`fn_arg_value`
-            // は「変数として引いて空でなければ採用、そうでなければ literal」
-            // という SRC 流の値評価セマンティクス。
-            fn_arg_value(app, &xargs[val_start])
-        } else {
-            xargs[val_start..end].join(" ")
-        }
+        eval::assignment_value(app, &raw[..end])
     } else if lname == "set" {
         // SRC `SetCmd`: 値なし `Set var` はフラグとして 1 を代入する
         // (`Set 機体確認` → `If 機体確認` が真)。`Local var` は空文字。
         "1".to_string()
     } else {
         String::new()
-    };
-    // SRC の `Set` (ExecSetCmd) / `=` 代入は値を `EvalTerm` で式評価し、結果が数値型
-    // なら数値代入する。`expand_vars` は関数呼出を評価するが算術式はトークンとして残す。
-    // - `var = expr` 形 (assign sugar → `__assign`): RHS は常に式 (SRC の `=` 代入)。
-    //   括弧無しの算術 (`資本金 = 資本金 - 営業収支` / `HP = HP - 10`) もここで数値化する。
-    // - `Set var value` 形: 値が引用符付き文字列 (`"$(a)-$(b)"`) や Format の整形済み
-    //   出力 (`-05`) でもあり得るため、従来どおり**括弧付き算術のみ**を数値化し、
-    //   それ以外は文字列のまま残す (パーサが引用符を剥がすため形では区別できない)。
-    let value = if is_assign_form {
-        eval_arith_value(app, &value).unwrap_or(value)
-    } else {
-        eval_paren_arith_value(app, &value).unwrap_or(value)
     };
     // 関数左辺値代入 (`HP(unit) = n` 等) を先に処理。
     // 対象を見つけた場合は set_script_var は呼ばない。

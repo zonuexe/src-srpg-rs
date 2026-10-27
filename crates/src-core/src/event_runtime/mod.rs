@@ -277,7 +277,7 @@ fn preprocess_call_expressions_in_condition(app: &mut App, src: &str) -> String 
 /// 引数を自前で (原文トークンから) 評価するコマンドか。`exec_command_pc` はこれらの
 /// 引数を事前展開しない。
 fn evaluates_raw_args(lname: &str) -> bool {
-    matches!(lname, "if" | "do" | "loop")
+    matches!(lname, "if" | "do" | "loop" | "set" | "local" | "__assign")
 }
 
 /// `raw` (原文トークン) が `"..."` / `` `...` `` で囲まれていれば、前処理済みの

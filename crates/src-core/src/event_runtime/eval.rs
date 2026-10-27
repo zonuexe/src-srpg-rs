@@ -27,17 +27,21 @@
 use super::*;
 use crate::util::number::round_half_to_even;
 
-/// 期待する値の型 (原典 `ValueType` の `StringType` / `NumericType`)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 値の型 (原典 `ValueType`)。期待型としての `Undefined` は「どちらでもよい」
+/// (`Set` の値など。演算結果の型がそのまま結果の型になる)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(super) enum Ty {
+    #[default]
+    Undefined,
     Str,
     Num,
 }
 
-/// 評価結果。文字列を期待したときは `s`、数値を期待したときは `n` が意味を持つ
-/// (原典の `str_result` / `num_result` の組)。
+/// 評価結果。`ty` が `Str` なら `s`、`Num` なら `n` が値。期待型が `Num` のときは
+/// 文字列の結果でも `n` に数値換算が入る (原典の `str_result` / `num_result` の組)。
 #[derive(Debug, Clone, Default)]
 pub(super) struct Val {
+    pub ty: Ty,
     pub s: String,
     pub n: f64,
 }
@@ -45,12 +49,14 @@ pub(super) struct Val {
 impl Val {
     fn str(s: impl Into<String>) -> Self {
         Val {
+            ty: Ty::Str,
             s: s.into(),
             n: 0.0,
         }
     }
     fn num(n: f64) -> Self {
         Val {
+            ty: Ty::Num,
             s: String::new(),
             n,
         }
@@ -87,6 +93,31 @@ pub(super) fn value_as_long(app: &App, expr: &str) -> i64 {
 /// 1 項を整数として評価する (原典 `GetValueAsLong(expr, is_term: true)`)。
 pub(super) fn term_as_long(app: &App, term: &str) -> i64 {
     to_long(eval_term(app, term, Ty::Num).n)
+}
+
+/// `Set var value` / `var = 式` の代入値 (原典 `ExecSetCmd`)。1 項なら項として、
+/// 複数項なら式として型を決めずに評価し、数値なら `FormatNum`、文字列ならそのまま返す。
+///
+/// 本移植の拡張: 演算子を含まない複数項 (`Set 名前 山田 太郎` / `Set who Args(1) Args(2)`) は
+/// 各項の値を空白で連結する。原典では `Set` の引数過多エラーになる書き方。
+pub(super) fn assignment_value(app: &App, terms: &[String]) -> String {
+    let v = match terms {
+        [] => return String::new(),
+        [t] => eval_term(app, t, Ty::Undefined),
+        _ if terms.iter().all(|t| operator_of(t).is_none()) => {
+            return terms
+                .iter()
+                .map(|t| eval_term(app, t, Ty::Str).s)
+                .collect::<Vec<_>>()
+                .join(" ");
+        }
+        _ => eval_expr(app, &terms.join(" "), Ty::Undefined),
+    };
+    if v.ty == Ty::Num {
+        format_num(v.n)
+    } else {
+        v.s
+    }
 }
 
 fn to_long(n: f64) -> i64 {
@@ -161,7 +192,12 @@ pub(super) fn eval_expr(app: &App, expr: &str, ety: Ty) -> Val {
         };
     };
     match terms.len() {
-        0 => return Val::default(),
+        0 => {
+            return Val {
+                ty: ety,
+                ..Val::default()
+            }
+        }
         1 => return eval_term(app, &terms[0], ety),
         _ => {}
     }
@@ -323,19 +359,31 @@ pub(super) fn eval_term(app: &App, expr: &str, ety: Ty) -> Val {
         }
         _ => {}
     }
-    // 本移植の拡張: クォートの外の `$(...)` も展開してから項として評価する
+    // 本移植の拡張: クォートの外の `$(...)` もクォート内と同じく展開し、文字列の項とする
     // (`If $(x) = 1`)。原典では `$(x)` という名前の未定義変数 (文字列) になるため、
     // 実シナリオはこの書き方をしない (条件式 16,625 行で 0 件。`"..."` 内だけで使う)。
-    if expr.contains("$(") {
-        let replaced = replace_sub_expression(app, expr);
-        if replaced != expr {
-            return eval_term(app, &replaced, ety);
-        }
+    // 関数呼び出し (`Llength($(x))`) と配列 (`a[$(i)]`) は各経路が `$(...)` を展開する。
+    let is_whole_sub_expr = expr.starts_with("$(")
+        && find_matching_paren(expr, 1).is_some_and(|close| close == expr.len() - 1);
+    if is_whole_sub_expr {
+        return sub_expr_term(app, expr, ety);
     }
     if let Some(v) = call_function(app, expr, ety) {
         return v;
     }
+    if expr.contains("$(") && !expr.ends_with(']') {
+        return sub_expr_term(app, expr, ety);
+    }
     get_variable(app, expr, ety)
+}
+
+/// `$(...)` を展開した文字列の項 (クォート文字列と同じ扱い)。
+fn sub_expr_term(app: &App, expr: &str, ety: Ty) -> Val {
+    let mut v = Val::str(replace_sub_expression(app, expr));
+    if ety != Ty::Str {
+        v.n = str_to_dbl(&v.s);
+    }
+    v
 }
 
 /// 項 `expr` 全体が組み込み関数呼び出しなら評価する (原典 `CallFunction`)。
@@ -381,6 +429,7 @@ fn get_variable(app: &App, name: &str, ety: Ty) -> Val {
         return with_num(app.script_var(&key).to_string());
     }
     Val {
+        ty: Ty::Str,
         s: if is_array {
             String::new()
         } else {

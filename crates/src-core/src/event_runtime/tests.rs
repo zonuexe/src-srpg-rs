@@ -560,11 +560,11 @@ fn set_evaluates_parenthesized_arithmetic_with_variable() {
 }
 
 #[test]
-fn set_paren_with_non_numeric_atom_kept_verbatim() {
-    // 非数値アトムを含む括弧式は算術ではないとみなし、誤って 0 に
-    // 潰さず文字列のまま残す (`Set msg (こんにちは)` を壊さない)。
+fn set_paren_with_non_numeric_atom_is_evaluated_as_expression() {
+    // 括弧で囲った値は式として評価する (原典 EvalTerm)。中身の `こんにちは` は未定義変数
+    // なので名前そのものの文字列になり、0 に潰れない。括弧は残らない (C# oracle で確認)。
     let app = run_script("Set msg (こんにちは)\n");
-    assert_eq!(app.script_var("msg"), "(こんにちは)");
+    assert_eq!(app.script_var("msg"), "こんにちは");
 }
 
 #[test]
