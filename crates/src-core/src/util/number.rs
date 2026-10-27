@@ -102,10 +102,22 @@ pub(crate) fn insert_thousands_separator(s: &str) -> String {
     out
 }
 
+/// 数値の標準表記 (原典 `FormatNum`)。整数は `Format$(n, "0")`、小数は
+/// `Format$(n, "0.###…")` = 有効数字 15 桁・指数表記なし・末尾の 0 は付けない
+/// (例: `10 / 3` → `3.33333333333333`、`0.1 + 0.2` → `0.3`)。
 pub(crate) fn format_num(v: f64) -> String {
-    if v.fract() == 0.0 && v.is_finite() && v.abs() < 1.0e15 {
-        format!("{}", v as i64)
+    if !v.is_finite() {
+        return format!("{v}");
+    }
+    if v.fract() == 0.0 && v.abs() < 1.0e15 {
+        return format!("{}", v as i64);
+    }
+    let int_digits = v.abs().log10().floor() as i32 + 1;
+    let decimals = (15 - int_digits).max(0) as usize;
+    let s = format!("{v:.decimals$}");
+    if s.contains('.') {
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
     } else {
-        format!("{v}")
+        s
     }
 }

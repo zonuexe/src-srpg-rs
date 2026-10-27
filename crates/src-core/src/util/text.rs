@@ -74,7 +74,7 @@ pub(crate) fn like_match(s: &str, pattern: &str) -> bool {
                     if let Some(rel) = close {
                         let class_start = pi + 1;
                         let class_end = class_start + rel; // exclusive
-                        let close_idx = class_end + 1; // position of ']' in p
+                        let close_idx = class_end; // position of ']' in p
                         let class = &p[class_start..class_end];
                         let negate = class.first() == Some(&'!');
                         let class = if negate { &class[1..] } else { class };
@@ -376,4 +376,19 @@ pub(crate) fn str_display_width(s: &str) -> usize {
             }
         })
         .sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn like_char_class_followed_by_more_pattern() {
+        // 旧実装は `]` の次の文字を読み飛ばし、クラスの後に続くパターンが効かなかった。
+        assert!(like_match("abc", "[a-c]*"));
+        assert!(like_match("b1", "[abc]#"));
+        assert!(!like_match("dbc", "[a-c]*"));
+        assert!(like_match("xbc", "[!a-c]bc"));
+        assert!(like_match("a", "[a-c]"));
+    }
 }
