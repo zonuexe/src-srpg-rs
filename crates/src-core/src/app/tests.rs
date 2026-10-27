@@ -5894,6 +5894,58 @@ fn weapon_pull_moves_target_adjacent_to_attacker() {
     assert_eq!(dist, 1, "攻撃側 (5,5) に隣接する位置へ移動");
 }
 
+/// 反撃も本線攻撃と同じ判定を通る (原典の反撃は `Attack w, target, "", ""`)。
+/// 旧実装は命中ロールだけで、クリティカルが出なかった。
+#[test]
+fn counterattack_can_be_critical() {
+    use crate::data::unit::WeaponData;
+    let mut app = App::new();
+    enter_mapview_with_demo_map(&mut app);
+    place_player_unit(&mut app, "Hero", 2, 6);
+    app.database_mut()
+        .units
+        .iter_mut()
+        .find(|d| d.name == "Hero")
+        .unwrap()
+        .hp = 1_000_000;
+    let mut ebot = app.database().unit_by_name("Hero").cloned().unwrap();
+    ebot.name = "EnemyBot".into();
+    ebot.weapons = vec![WeaponData {
+        name: "ビーム".into(),
+        power: 1500,
+        min_range: 1,
+        max_range: 1,
+        precision: 0,
+        bullet: -1,
+        en_consumption: 0,
+        necessary_morale: 0,
+        adaption: "AAAA".into(),
+        critical: 1000,
+        class: String::new(),
+        extras: Vec::new(),
+    }];
+    app.database_mut().units.push(ebot);
+    let enemy = app.database_mut().register_unit(crate::UnitInstance::new(
+        "EnemyBot",
+        "PILOT",
+        crate::Party::Enemy,
+        3,
+        6,
+    ));
+    app.database_mut()
+        .unit_by_uid_mut(&enemy)
+        .unwrap()
+        .add_condition(crate::Condition::new("必中", -1));
+    assert!(app.try_counterattack(3, 6, (2, 6)).is_some());
+    assert!(
+        app.messages()
+            .iter()
+            .any(|m| m.contains("反撃") && m.contains("クリティカル")),
+        "反撃でもクリティカルが出る: {:?}",
+        app.messages()
+    );
+}
+
 /// 反撃武器の特殊効果攻撃属性 (状態異常) が、反撃の命中・生存時に被弾側へ proc する。
 #[test]
 fn counterattack_procs_weapon_special_effect() {
@@ -6183,7 +6235,7 @@ fn support_attack_procs_weapon_special_effect() {
     ));
     let atk_idx = app.database().idx_by_uid(&hero).unwrap();
 
-    let res = app.try_support_attack(atk_idx, 3, 7);
+    let res = app.try_support_attack(atk_idx, 3, 7, "");
     assert!(res.is_some(), "援護攻撃が成立する");
     assert!(
         app.database()
@@ -6192,6 +6244,84 @@ fn support_attack_procs_weapon_special_effect() {
             .has_condition("麻痺"),
         "援護攻撃武器の特殊効果 (麻痺) が防御側へ proc する"
     );
+}
+
+/// 援護攻撃は本線攻撃と同じ判定を通り、固定の ×0.75 は無い (原典 `Unit.Attack` の
+/// `"援護攻撃"`)。ダメージ増加系の精神効果は乗らず、オプション
+/// `サポートアタックダメージ低下` があればダメージ ×0.7 (原典 `Unit.Damage`)。
+#[test]
+fn support_attack_damage_follows_original_rules() {
+    use crate::data::unit::WeaponData;
+    // (援護攻撃役に付ける状態, オプション) で援護攻撃し、防御側の被ダメージを返す。
+    let run = |extra: Option<&str>, option: bool| -> i64 {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6);
+        place_player_unit(&mut app, "Supporter", 3, 6);
+        app.database_mut()
+            .units
+            .iter_mut()
+            .find(|d| d.name == "Supporter")
+            .unwrap()
+            .weapons = vec![WeaponData {
+            name: "ビーム".into(),
+            power: 1500,
+            min_range: 1,
+            max_range: 1,
+            precision: 0,
+            bullet: -1,
+            en_consumption: 0,
+            necessary_morale: 0,
+            adaption: "AAAA".into(),
+            critical: 0,
+            class: String::new(),
+            extras: Vec::new(),
+        }];
+        let hero = first_player_uid(&app);
+        let sup = app
+            .database()
+            .unit_instances
+            .iter()
+            .find(|u| u.unit_data_name == "Supporter")
+            .unwrap()
+            .uid
+            .clone();
+        for c in ["サポートアタック", "必中"].into_iter().chain(extra) {
+            app.database_mut()
+                .unit_by_uid_mut(&sup)
+                .unwrap()
+                .add_condition(crate::Condition::new(c, -1));
+        }
+        if option {
+            app.set_script_var(
+                "Option(サポートアタックダメージ低下)".to_string(),
+                "1".to_string(),
+            );
+        }
+        // 防御側 (Hero データ) は撃破されない HP にする。
+        app.database_mut()
+            .units
+            .iter_mut()
+            .find(|d| d.name == "Hero")
+            .unwrap()
+            .hp = 1_000_000;
+        let enemy = app.database_mut().register_unit(crate::UnitInstance::new(
+            "Hero",
+            "PILOT",
+            crate::Party::Enemy,
+            3,
+            7,
+        ));
+        let atk_idx = app.database().idx_by_uid(&hero).unwrap();
+        assert!(app.try_support_attack(atk_idx, 3, 7, "").is_some());
+        app.database().unit_by_uid(&enemy).map_or(0, |u| u.damage)
+    };
+    let base = run(None, false);
+    assert!(base > 0, "援護攻撃が命中してダメージを与える");
+    // 熱血 (ダメージ増加) は援護攻撃に乗らない。
+    assert_eq!(run(Some("熱血"), false), base);
+    // オプションがあれば減る。
+    assert!(run(None, true) < base);
 }
 
 #[test]

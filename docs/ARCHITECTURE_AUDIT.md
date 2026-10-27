@@ -16,7 +16,7 @@
 | 7. ビューモデル・ジオメトリを scene/ へ | 未 | |
 | 8. B1〜B3 修正 | 済 | 回帰テスト 4 件を追加（すべて修正前に失敗することを確認） |
 | 9. `.eve` コマンドをドメイン経路へ | 一部 | SpecialPower / Mind → `execute_spirit_by_event`、Transform → `set_unit_form`、UseAbility → `execute_ability`、Attack → `script_attack`（`resolve_strike` を本線攻撃と共有）。マップ攻撃は範囲計算を `combat::map_attack_area`、本体を `App::execute_map_attack` へ移動 |
-| 10. 戦闘の一本化 | 一部 | 予測の組み立てを `strike_preview` に一本化（本線・援護攻撃・反撃）。命中後の判定 `resolve_strike` は本線攻撃と `.eve Attack` のみ。援護攻撃・反撃はクリティカル / 切り払い / 即死を判定しない（下記、要検証）。src-web の予測表示は未 |
+| 10. 戦闘の一本化 | 一部 | 予測の組み立てを `strike_preview`、命中後の判定（クリティカル / 即死 / 切り払い / 防御特性）を `resolve_strike` に一本化（本線攻撃・援護攻撃・反撃・先制反撃・`.eve Attack`。攻撃の種類は `StrikeKind`）。src-web の予測表示は未 |
 | 11. シナリオ取り込みの一本化 | 未 | |
 | 12. 式評価器の統一 | 済 | 原典 `EvalExpr` / `EvalTerm` を移植した `event_runtime/eval.rs` に一本化。If / ElseIf / Do / Loop / IIf / Eval / メニュー条件 / Set・`=` 代入 / 数値引数 / 括弧算術 / 配列添字が同じ評価器を通る。旧評価器 (条件用・数値用) は削除。C# oracle の `paths` モードで経路ごとに突合 (下記) |
 | 13. GameDatabase の分割 | 未 | |
@@ -37,7 +37,7 @@
   - 添字 `name[...]` は原典 `GetVariable` どおり `GetValueAsString(添字, is_term)`、`Set Eval(式)` の左辺は `GetValueAsString(式)` で評価する（oracle `paths_index.txt`）。これで `$(...)` の展開は `eval::replace_sub_expression` だけになり、2 つ目の実装だった `expand_vars` を削除した。`Set Eval("t" & "2") 8` が `t2` に入らなかった不具合、`配列["1"]` / `配列[01]` のキーが原典と食い違っていた不具合も直った。C# は `Eval(配列[idx])` / `$(配列[idx])` を文字列のまま返すが、VB6 原典は評価するので本実装は VB6 どおり。
   - コマンドの数値引数も原典どおりにした（`Cmd::long` / `Cmd::double`）。原典が `GetArgAsLong` / `GetArgAsDouble` で読む位置を VB6 `CmdData.cls` から機械的に抜き出して突き合わせ、評価済みの値から数値を求める（引用符付き文字列は 0、値をもう一度評価しない）。`GetArgAsString` の値を `CInt` / `StrToLng` で読む位置（`PaintString` / `PaintPicture` の座標、`Create` のランク等）は `eval::str_to_lng`。`GetValueAsLong` は VB6 どおり偶数丸めにした（C# は切り捨て。`For i = 1 To (7 / 2)` は 4 回）。oracle `args.txt`（`GetArgAsDouble` 列を追加）と `scenario_args.txt` で C# と一致（丸めの差とクォート外の `$(...)` を除く）。併せて直した実バグ: `Wait 変数` が 0 秒、`SetStatus` がターン数を捨て、2 引数形式 `SetStatus 状態 ターン数`（選択中ユニット、実シナリオ 3 箇所）を「ユニット名 状態」と誤解釈、`IncreaseMorale 30` のような値だけの形式（実シナリオ 10 箇所）が効かない、`Hotpoint` / 図形コマンドの座標が評価済みの値をもう一度評価していた。原典に無い `RecoverHP Full` / `50%` は削除した。
   - 未対応（後続）: 原典は `Case` の値が自分自身に評価されたとき文字列型として記憶し、以後は再評価しない（後で同名の変数を定義しても変わらない）が、本実装は毎回評価する。
-- **援護攻撃・反撃の判定差**（要検証）: 本線攻撃はクリティカル・切り払い・即死を判定するが、援護攻撃（ダメージ ×0.75）と反撃は命中ロールだけで、これらを判定しない。原典では反撃も通常の攻撃処理を通るはずなので、C# oracle で確認してから `resolve_strike` に寄せる（乱数の消費列が変わる）。
+- **援護攻撃・反撃の判定差**（修正済）: 原典では援護攻撃（`Attack w2, target, "援護攻撃", def_mode`）も反撃（`Attack w, target, "", ""`）も本線攻撃と同じ `Unit.Attack` を通るので、クリティカル・切り払い・即死を判定する。旧実装はどちらも命中ロールだけで、援護攻撃は固定で ×0.75 にしていた。原典 `Unit.Damage` の援護攻撃は、ダメージ増加 / 被ダメージ増加の精神効果が乗らないだけで、×0.7 はオプション `サポートアタックダメージ低下` があるときのみ。防御側の反撃モード（防御・回避）も援護攻撃に効く。`resolve_strike` に寄せた（回帰テスト 2 件。乱数の消費列は切り払い・即死を持つ組み合わせでだけ変わる）。C# oracle の `placeattack` は単発の予測しか出せないので、VB6 原典で確認した。
 - **`.eve Transform` の変形イベント**（決定: 現状維持）: C# `TransformCmd` は変形イベントを発火しないが、本移植は `Combine` と揃えて発火する（fixture 21 で固定）。2026-10-27 にユーザ判断で確定。
 - **B7**: 援護防御の発動判定 `try_find_support_guard`（app/battle.rs）は、最大 HP に基本値（`unit_by_name(..).hp`）を使っていた。戦闘本体は実効 HP を使うので、改造機や BossRank 機では発動閾値が食い違っていた。修正済（回帰テスト 1 件）。
 

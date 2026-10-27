@@ -16,6 +16,19 @@ struct StrikeSetup<'a> {
     def_damage_mod: i32,
 }
 
+/// 攻撃の種類 (原典 `Unit.Attack` の `attack_mode`)。本線攻撃・反撃・援護攻撃はどれも
+/// 同じ `Attack` を通るので、命中・クリティカル・即死・切り払いの判定は共通。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StrikeKind {
+    /// 本線攻撃 (`""`)・`.eve Attack`。
+    Main,
+    /// 反撃・先制反撃 (`捨て身` は効かない)。
+    Counter,
+    /// 援護攻撃 (`"援護攻撃"`)。ダメージ増加系の精神効果が乗らず、オプション
+    /// `サポートアタックダメージ低下` があればダメージ ×0.7 (原典 `Unit.Damage`)。
+    Support,
+}
+
 /// `resolve_strike` の結果。`damage` は防御選択・クリティカル・即死・切り払い・
 /// 防御特性を反映した最終ダメージ (吸収なら負)。命中しなかった場合は適用しない。
 struct StrikeOutcome {
@@ -294,6 +307,7 @@ impl App {
                 def_damage_mod,
             },
             def_mode,
+            StrikeKind::Main,
         );
         let StrikeOutcome {
             preview,
@@ -602,10 +616,10 @@ impl App {
 
         // 援護攻撃: 攻撃側と同じ陣営の隣接ユニットで `support_attack_remaining > 0`
         // かつ "サポートアタック" / "援護攻撃" 特殊能力を持つユニットが、防御側を
-        // 武器射程内に収めていれば 1 回 75% ダメージで追撃。
+        // 武器射程内に収めていれば 1 回追撃する。
         // 援護防御でガード機が除去された場合 atk_idx がずれ得るため uid で引き直す。
         let support_uid = match (defender_killed, self.database.idx_by_uid(&atk_uid)) {
-            (false, Some(ai)) => self.try_support_attack(ai, def_inst.x, def_inst.y),
+            (false, Some(ai)) => self.try_support_attack(ai, def_inst.x, def_inst.y, def_mode),
             _ => None,
         };
         // 反撃: 防御側が生存しており、攻撃側まで射程内の武器を持っていれば 1 回反撃。
@@ -685,8 +699,9 @@ impl App {
         atk_idx: usize,
         def_idx: usize,
         setup: &StrikeSetup,
-        is_counter: bool,
+        kind: StrikeKind,
     ) -> (combat::CombatPreview, Vec<String>) {
+        let is_counter = kind == StrikeKind::Counter;
         let StrikeSetup {
             atk_pilot,
             atk_unit,
@@ -718,9 +733,14 @@ impl App {
         let def_env = self.terrain_env_at(def_inst.x, def_inst.y);
         // 与/被ダメージ修正 (ダメージ増加/被ダメージ増加/ダメージ低下/被ダメージ低下) を
         // 攻撃側/防御側それぞれの精神効果から sp.txt 経由で解決 (シナリオ固有値を反映)。
-        let dmg_levels = self
+        let mut dmg_levels = self
             .database
             .damage_spirit_levels(&atk_statuses, &def_statuses);
+        if kind == StrikeKind::Support {
+            // 援護攻撃にはダメージ増加 / 被ダメージ増加の精神効果が乗らない (低下系は乗る)。
+            dmg_levels.atk_increase = 0.0;
+            dmg_levels.def_increase_taken = 0.0;
+        }
         let preview = combat::predict_with_status_terrain(
             atk_pilot,
             atk_unit,
@@ -749,12 +769,18 @@ impl App {
                 self.database.unit_instances[def_idx].y,
             ),
         );
-        let preview = preview.apply_scatter(&weapon.class, atk_def_dist);
+        let mut preview = preview.apply_scatter(&weapon.class, atk_def_dist);
+        if kind == StrikeKind::Support
+            && self.is_script_var_defined("Option(サポートアタックダメージ低下)")
+        {
+            preview.damage = (preview.damage as f64 * 0.7) as i64;
+        }
         (preview, atk_statuses)
     }
 
     /// 1 回の攻撃の命中・ダメージ判定。プレイヤー / AI の本線攻撃
-    /// (`attack_resolve_and_run`) と `.eve Attack` (`script_attack`) の共通コア。
+    /// (`attack_resolve_and_run`)・援護攻撃・反撃・`.eve Attack` (`script_attack`) の共通コア
+    /// (原典はどれも `Unit.Attack` を通る)。
     /// 状態異常・精神コマンド・地形・散布補正を反映した予測から、命中 / クリティカル /
     /// 即死 / 切り払い / 防御特性 を判定する。乱数は本線攻撃と同じ順に消費する。
     /// ダメージの適用 (援護防御・みがわり・バリア等) は呼び出し側が行う。
@@ -764,6 +790,7 @@ impl App {
         def_idx: usize,
         setup: &StrikeSetup,
         def_mode: &str,
+        kind: StrikeKind,
     ) -> StrikeOutcome {
         let StrikeSetup {
             atk_pilot,
@@ -772,7 +799,7 @@ impl App {
             def_unit,
             ..
         } = *setup;
-        let (preview, atk_statuses) = self.strike_preview(atk_idx, def_idx, setup, false);
+        let (preview, atk_statuses) = self.strike_preview(atk_idx, def_idx, setup, kind);
 
         // 命中判定。回避を選んだ防御側は命中率が半減する (SRC 反撃モード)。
         let effective_hit = if def_mode == "回避" {
@@ -934,6 +961,7 @@ impl App {
                 def_damage_mod,
             },
             def_mode,
+            StrikeKind::Main,
         );
         if !strike.hit {
             self.push_message(format!(
@@ -1563,6 +1591,7 @@ impl App {
         atk_idx: usize,
         def_x: u32,
         def_y: u32,
+        def_mode: &str,
     ) -> Option<String> {
         let atk_party = self.database.unit_instances[atk_idx].party;
         let atk_pos = (
@@ -1621,7 +1650,9 @@ impl App {
             .unwrap_or(0);
         let def_hit_mod = self.database.terrain_hit_mod(terrain_id);
         let def_damage_mod = self.database.terrain_damage_mod(terrain_id);
-        let (preview, _) = self.strike_preview(
+        // 命中・クリティカル・即死・切り払い・防御特性は本線攻撃と同じ判定 (原典は
+        // `Attack w2, target, "援護攻撃", def_mode`)。防御側の反撃モードも本線攻撃と共通。
+        let strike = self.resolve_strike(
             sup_idx,
             def_idx,
             &StrikeSetup {
@@ -1634,18 +1665,13 @@ impl App {
                 def_hit_mod,
                 def_damage_mod,
             },
-            false,
+            def_mode,
+            StrikeKind::Support,
         );
-        let roll = (self.next_u32() % 100) as i32;
-        // 回避系特殊能力 (B): 援護攻撃も 分身/超回避 で完全回避され得る。
-        let hit =
-            roll < preview.hit_chance && !self.check_dodge_feature(def_idx, sup_idx, &weapon.class);
         // SP コスト消費 (= サポートアタック回数を 1 減らす)
         self.database.unit_instances[sup_idx].support_attack_remaining -= 1;
-        if hit {
-            let base = (preview.damage as f64 * 0.75) as i64;
-            // 防御特性 (耐性÷2 / 無効化0 / 吸収=回復)。弱点の装甲半減は予測前に適用済み。
-            let dmg = self.defense_attribute_damage(def_idx, &weapon.class, base);
+        if strike.hit {
+            let dmg = strike.damage;
             // みがわり (身代わり, 最優先・SRC Unit.cls:14855): 防御側が みがわり を持てば
             // 身代わりが肩代わりし、防御側への被ダメージは 0 になる。
             let dmg = if let Some(sub) = self.apply_migawari(def_idx, sup_idx, &weapon.class, dmg) {
@@ -1664,8 +1690,16 @@ impl App {
             let def_old_dmg = self.database.unit_instances[def_idx].damage;
             self.database.unit_instances[def_idx].damage += dmg;
             self.push_message(format!(
-                "{} のサポートアタック [{}] → {}: {} ダメージ",
-                sup_pilot.nickname, weapon.name, def_pilot.nickname, dmg
+                "{} のサポートアタック [{}] → {}: {} ダメージ{}",
+                sup_pilot.nickname,
+                weapon.name,
+                def_pilot.nickname,
+                dmg,
+                if strike.critical {
+                    " (クリティカル)"
+                } else {
+                    ""
+                }
             ));
             let remaining = def_unit.hp - self.database.unit_instances[def_idx].damage;
             if remaining <= 0 && !self.revive_if_possible(def_idx) {
@@ -1925,8 +1959,7 @@ impl App {
     }
 
     /// `(dx, dy)` の防御側ユニットが `target` へ反撃可能なら 1 度だけ実行。
-    /// 命中処理は通常攻撃と同じだが、反撃で defender を撃破した場合の経験値は
-    /// 与えない（簡略化）。
+    /// 命中・ダメージの判定は本線攻撃と同じ `resolve_strike`。
     /// 戻り値: 反撃に使用した武器の `(名前, 1-based 番号)` / 反撃不能なら `None`。
     pub(super) fn try_counterattack(
         &mut self,
@@ -1984,7 +2017,19 @@ impl App {
         let atk_damage_mod = self.database.terrain_damage_mod(t_id);
         // 反撃側 = defender (def_idx)、被弾側 = attacker (atk_idx)。
         let atk_inst = self.database.unit_instances[atk_idx].clone();
-        let (preview, _) = self.strike_preview(
+        // 反撃武器の 1-based インデックスを取得
+        let weapon_num = def_unit
+            .weapons
+            .iter()
+            .position(|w| w.name == weapon.name)
+            .map(|i| i + 1)
+            .unwrap_or(1);
+        let weapon_name = weapon.name.clone();
+        // 反撃武器の EN・残弾消費 (撃破前=index 失効前に消費)。
+        self.consume_weapon_resources(def_idx, weapon_num - 1);
+        // 命中・クリティカル・即死・切り払い・防御特性は本線攻撃と同じ判定 (原典の反撃は
+        // `Attack w, target, "", ""`)。反撃側 = defender (def_idx)、被弾側 = attacker (atk_idx)。
+        let strike = self.resolve_strike(
             def_idx,
             atk_idx,
             &StrikeSetup {
@@ -1997,26 +2042,11 @@ impl App {
                 def_hit_mod: atk_hit_mod,
                 def_damage_mod: atk_damage_mod,
             },
-            true,
+            "",
+            StrikeKind::Counter,
         );
-        // 反撃武器の 1-based インデックスを取得
-        let weapon_num = def_unit
-            .weapons
-            .iter()
-            .position(|w| w.name == weapon.name)
-            .map(|i| i + 1)
-            .unwrap_or(1);
-        let weapon_name = weapon.name.clone();
-        // 反撃武器の EN・残弾消費 (撃破前=index 失効前に消費)。
-        self.consume_weapon_resources(def_idx, weapon_num - 1);
-        let roll = (self.next_u32() % 100) as i32;
-        // 回避系特殊能力 (B): 反撃を受ける側 (atk_idx) が 分身/超回避 で完全回避し得る
-        // (反撃の攻撃側は def_idx)。
-        let hit =
-            roll < preview.hit_chance && !self.check_dodge_feature(atk_idx, def_idx, &weapon.class);
-        let msg = if hit {
-            // 防御特性 (耐性÷2 / 無効化0 / 吸収=回復)。弱点の装甲半減は予測前に適用済み。
-            let counter_dmg = self.defense_attribute_damage(atk_idx, &weapon.class, preview.damage);
+        let msg = if strike.hit {
+            let counter_dmg = strike.damage;
             // みがわり (身代わり, 最優先・SRC Unit.cls:14855): 反撃を受ける側 (atk_idx) が
             // みがわり を持てば身代わりが肩代わりし、被ダメージは 0 になる。
             let counter_dmg = if let Some(sub) =
@@ -2084,8 +2114,17 @@ impl App {
                     atk_idx, def_idx, &weapon, &def_pilot, &atk_pilot,
                 );
                 let mut m = format!(
-                    "  ↩ 反撃: {} → {} [{}]: 命中 {} ダメージ (残HP {})",
-                    def_pilot.nickname, atk_pilot.nickname, weapon.name, counter_dmg, remaining
+                    "  ↩ 反撃: {} → {} [{}]: 命中 {} ダメージ (残HP {}){}",
+                    def_pilot.nickname,
+                    atk_pilot.nickname,
+                    weapon.name,
+                    counter_dmg,
+                    remaining,
+                    if strike.critical {
+                        " (クリティカル)"
+                    } else {
+                        ""
+                    }
                 );
                 if !inflicted.is_empty() {
                     m.push_str(&format!(" → {}", inflicted.join("・")));
