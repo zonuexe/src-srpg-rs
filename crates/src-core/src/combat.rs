@@ -909,6 +909,112 @@ pub fn is_charge_weapon(w: &WeaponData) -> bool {
     w.class.contains('Ｃ') || w.class.contains('C')
 }
 
+/// マップ攻撃の効果範囲を表す `(x, y)` 集合を計算する。
+/// 武器の `class` 文字列に含まれる SRC の属性記号を解釈する:
+///
+/// - `Ｍ全`             : 全方位 (攻撃者を中心としたマンハッタン菱形 ≤ max_range)
+/// - `Ｍ投L<n>` / `Ｍ投` : 指定地点を中心とした菱形 (半径 = L 値 or max_range)
+/// - `Ｍ直`             : 攻撃者から指定方向へ max_range タイルの直線
+/// - `Ｍ拡`             : 攻撃者から指定方向へ max_range タイル幅 3 の直線
+/// - `Ｍ移` / `Ｍ線`     : 攻撃者と指定地点を結ぶ直線 (近似で軸線優先)
+/// - `Ｍ扇L<n>`         : 簡略実装で `Ｍ拡` 同等 (将来詳細化)
+/// - 不明 / `Ｍ` 接頭辞なし : 指定地点中心の菱形 (半径 = max_range) — 旧挙動互換
+pub fn map_attack_area(
+    weapon: &crate::data::unit::WeaponData,
+    src: (u32, u32),
+    target: (u32, u32),
+) -> Vec<(u32, u32)> {
+    let cls = weapon.class.as_str();
+    let range = weapon.max_range.max(0);
+    let lvl_after = |key: &str| -> Option<i32> {
+        cls.find(key).map(|idx| {
+            let tail = &cls[idx + key.len()..];
+            // 'L' があれば数字を読む
+            if let Some(rest) = tail.strip_prefix('L') {
+                let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                digits.parse::<i32>().unwrap_or(range)
+            } else {
+                range
+            }
+        })
+    };
+
+    let mut out: Vec<(u32, u32)> = Vec::new();
+    if cls.contains("Ｍ全") {
+        // 攻撃者中心の菱形 (max_range)
+        diamond_into(&mut out, src.0 as i32, src.1 as i32, range);
+    } else if let Some(lvl) = lvl_after("Ｍ投") {
+        // ターゲット中心の菱形 (L<lvl> あれば lvl、無ければ max_range)
+        diamond_into(&mut out, target.0 as i32, target.1 as i32, lvl);
+    } else if cls.contains("Ｍ直") {
+        line_into(&mut out, src, target, range, 0);
+    } else if cls.contains("Ｍ拡") || cls.contains("Ｍ扇") {
+        // 簡略実装: 3 マス幅の直線
+        line_into(&mut out, src, target, range, 1);
+    } else if cls.contains("Ｍ移") || cls.contains("Ｍ線") {
+        // 攻撃者からターゲットまでの直線 (距離 ≤ max_range)
+        line_into(&mut out, src, target, range, 0);
+    } else {
+        // フォールバック: 旧挙動 (target 中心の菱形, radius=max_range)
+        diamond_into(&mut out, target.0 as i32, target.1 as i32, range);
+    }
+    out
+}
+
+/// (cx, cy) を中心としたマンハッタン半径 `radius` の菱形領域。
+fn diamond_into(out: &mut Vec<(u32, u32)>, cx: i32, cy: i32, radius: i32) {
+    if radius < 0 {
+        return;
+    }
+    for dy in -radius..=radius {
+        let span = radius - dy.abs();
+        for dx in -span..=span {
+            let x = cx + dx;
+            let y = cy + dy;
+            if x >= 0 && y >= 0 {
+                out.push((x as u32, y as u32));
+            }
+        }
+    }
+}
+
+/// 攻撃者 `src` から `target` へ向かう直線（軸線優先）。
+/// `width_each` = 1 なら線の両側 1 マス（合計 3 マス幅）。
+fn line_into(
+    out: &mut Vec<(u32, u32)>,
+    src: (u32, u32),
+    target: (u32, u32),
+    range: i32,
+    width_each: i32,
+) {
+    let dx = target.0 as i32 - src.0 as i32;
+    let dy = target.1 as i32 - src.1 as i32;
+    let (sx, sy) = if dx.abs() >= dy.abs() {
+        (dx.signum(), 0)
+    } else {
+        (0, dy.signum())
+    };
+    if sx == 0 && sy == 0 {
+        return;
+    }
+    for step in 1..=range {
+        let x = src.0 as i32 + sx * step;
+        let y = src.1 as i32 + sy * step;
+        if x < 0 || y < 0 {
+            continue;
+        }
+        for w in -width_each..=width_each {
+            // 線方向に垂直なオフセット
+            let (ox, oy) = if sx != 0 { (0, w) } else { (w, 0) };
+            let xx = x + ox;
+            let yy = y + oy;
+            if xx >= 0 && yy >= 0 {
+                out.push((xx as u32, yy as u32));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

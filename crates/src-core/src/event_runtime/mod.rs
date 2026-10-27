@@ -1680,7 +1680,7 @@ use functions::*;
 use info::*;
 pub use labels::*;
 pub use library::*;
-pub(crate) use unit_effects::*;
+use unit_effects::*;
 pub use vars::*;
 
 #[cfg(test)]

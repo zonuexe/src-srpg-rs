@@ -525,7 +525,7 @@ impl App {
             // 各敵位置を照準候補に、最も多く敵を巻き込む中心を探す。
             let mut best: Option<((u32, u32), usize)> = None;
             for &center in &enemies {
-                let area = crate::event_runtime::map_attack_area(weapon, pos, center);
+                let area = crate::combat::map_attack_area(weapon, pos, center);
                 let hits = enemies.iter().filter(|e| area.contains(e)).count();
                 if hits >= 2 && best.as_ref().map(|(_, h)| hits > *h).unwrap_or(true) {
                     best = Some((center, hits));
@@ -534,14 +534,7 @@ impl App {
             if let Some((center, _)) = best {
                 // AI 発のマップ攻撃コマンド = 通常戦闘扱い (is_event=false)。
                 // SRC `Unit.MapAttack` 同様、ダメージ適用前に 使用/攻撃 イベントを発火。
-                crate::event_runtime::map_attack(
-                    self,
-                    Some(&caster),
-                    &weapon.name,
-                    center.0,
-                    center.1,
-                    false,
-                );
+                self.execute_map_attack(&caster, &weapon.name, center.0, center.1, false);
                 if let Some(i) = self.database.idx_by_uid(&caster) {
                     self.database.unit_instances[i].has_acted = true;
                 }

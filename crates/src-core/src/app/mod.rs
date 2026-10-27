@@ -660,6 +660,7 @@ mod debug;
 mod dialog;
 mod input;
 mod intermission;
+mod map_attack;
 mod reaction;
 mod script_flow;
 mod spirit;

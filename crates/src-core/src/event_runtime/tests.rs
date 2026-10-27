@@ -182,6 +182,7 @@ fn unknown_function_name_is_left_literal() {
 }
 
 use super::*;
+use crate::combat::map_attack_area;
 use crate::data::event;
 
 /// SRC 互換: 全角英数字を半角と同一視してユニットハンドルを照合する。

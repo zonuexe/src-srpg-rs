@@ -9410,7 +9410,14 @@ fn mapattack_applies_defense_attributes() {
         4,
     ));
     // スクリプト経路 (is_event=true) でマップ攻撃を実行。
-    crate::event_runtime::map_attack(&mut app, None, "FireCannon", 6, 5, true);
+    let shooter = app
+        .database()
+        .unit_instances
+        .iter()
+        .find(|u| u.party == crate::Party::Player)
+        .map(|u| u.uid.clone())
+        .unwrap();
+    app.execute_map_attack(&shooter, "FireCannon", 6, 5, true);
     // 無効化=火 の敵は 0 ダメージで生存。
     let nullified = app.database().unit_by_uid(&nullify_uid);
     assert!(

@@ -42,7 +42,7 @@ fn exec_mapattack(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     } else {
         None
     };
-    map_attack(app, unit_key.as_deref(), &weapon_name, cx, cy, is_event);
+    script_map_attack(app, unit_key.as_deref(), &weapon_name, cx, cy, is_event);
     Ok(pc + 1)
 }
 
@@ -62,7 +62,7 @@ fn exec_mapability(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         None
     };
     // スクリプト経由の MapAbility も既定で is_event=true (イベント非発火)。
-    map_attack(app, unit_key.as_deref(), &weapon_name, cx, cy, true);
+    script_map_attack(app, unit_key.as_deref(), &weapon_name, cx, cy, true);
     Ok(pc + 1)
 }
 
@@ -399,4 +399,28 @@ fn exec_useability(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         _ => {} // unknown ability — 履歴保存のみ
     }
     Ok(pc + 1)
+}
+
+/// `MapAttack` / `MapAbility` の攻撃側を解決して `App::execute_map_attack` に渡す。
+/// `unit_key` が無ければ最初の味方ユニットを攻撃元とみなす。
+fn script_map_attack(
+    app: &mut App,
+    unit_key: Option<&str>,
+    weapon_name: &str,
+    cx: u32,
+    cy: u32,
+    is_event: bool,
+) {
+    let atk = app
+        .database()
+        .unit_instances
+        .iter()
+        .find(|u| match unit_key {
+            Some(k) => matches_unit_handle(u, k),
+            None => u.party == crate::Party::Player,
+        })
+        .map(|u| u.uid.clone());
+    if let Some(uid) = atk {
+        app.execute_map_attack(&uid, weapon_name, cx, cy, is_event);
+    }
 }
