@@ -26,7 +26,7 @@ pub(super) struct Cmd<'a> {
     pub args: &'a Vec<String>,
     /// `args` と同じ並びの原文トークン (クォートを外していない)。式評価器に渡す。
     pub raw_args: &'a Vec<String>,
-    /// 変数展開・`&` 連結の畳み込みを済ませた引数。
+    /// 原典 `GetArgAsString` どおり評価済みの引数 (`eval::arg_as_string`)。
     pub xargs: &'a Vec<String>,
     pub line: usize,
     pub pc: usize,

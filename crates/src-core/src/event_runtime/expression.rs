@@ -1,51 +1,10 @@
-//! 式評価の補助: `Switch` / `Case` の比較と、統一評価器 (`eval`) を使う数値ヘルパ。
+//! 式評価の補助: `If` の項分割に使う比較演算子判定と、統一評価器 (`eval`) を使う数値ヘルパ。
 
 use super::*;
 
 pub(super) fn is_comparison_op(s: &str) -> bool {
     matches!(s, "=" | "==" | "<>" | "!=" | "<" | "<=" | ">" | ">=")
         || s.eq_ignore_ascii_case("like")
-}
-
-pub(super) fn eval_binop(lhs: &str, op: &str, rhs: &str) -> bool {
-    // SRC の比較規則: 両辺とも数値なら数値比較、両辺とも非数値なら文字列
-    // 比較。**一方だけが数値**なら数値比較とし、非数値側 (未設定変数 →
-    // その名前、空文字、`?` 等) は 0 とみなす。これにより
-    // `If 未設定カウンタ <> 0` が `0 <> 0` = 偽になる (SRC 準拠)。
-    let (mut lhs_n, mut rhs_n) = (lhs.parse::<f64>().ok(), rhs.parse::<f64>().ok());
-    if lhs_n.is_none() && rhs_n.is_some() {
-        lhs_n = Some(0.0);
-    } else if rhs_n.is_none() && lhs_n.is_some() {
-        rhs_n = Some(0.0);
-    }
-    match op {
-        "=" | "==" => match (lhs_n, rhs_n) {
-            (Some(a), Some(b)) => (a - b).abs() < f64::EPSILON,
-            _ => lhs == rhs,
-        },
-        "<>" | "!=" => match (lhs_n, rhs_n) {
-            (Some(a), Some(b)) => (a - b).abs() >= f64::EPSILON,
-            _ => lhs != rhs,
-        },
-        "<" => match (lhs_n, rhs_n) {
-            (Some(a), Some(b)) => a < b,
-            _ => lhs < rhs,
-        },
-        "<=" => match (lhs_n, rhs_n) {
-            (Some(a), Some(b)) => a <= b,
-            _ => lhs <= rhs,
-        },
-        ">" => match (lhs_n, rhs_n) {
-            (Some(a), Some(b)) => a > b,
-            _ => lhs > rhs,
-        },
-        ">=" => match (lhs_n, rhs_n) {
-            (Some(a), Some(b)) => a >= b,
-            _ => lhs >= rhs,
-        },
-        op if op.eq_ignore_ascii_case("like") => like_match(lhs, rhs),
-        _ => false,
-    }
 }
 
 /// 式を整数として評価する (原典 `GetValueAsLong`、統一評価器)。i32 範囲へ飽和させる。

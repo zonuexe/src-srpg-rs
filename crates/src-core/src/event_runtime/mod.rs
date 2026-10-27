@@ -498,7 +498,7 @@ fn call_label_sync_inner(app: &mut App, pc: usize, args: &[String]) -> String {
 ///
 /// 原典 SRC は式の評価中に未知の関数名をラベルとして解決し、その場で
 /// サブルーチンを呼ぶ (`Expression.function.cs`)。本実装の式展開
-/// (`eval` / `expand_vars`) は `&App` (不変) しか持たずサブルーチンを
+/// (`eval`) は `&App` (不変) しか持たずサブルーチンを
 /// 実行できないため、`&mut App` を持つ地点で先に解決して文字列へ畳み込む。
 /// 条件式の `Call(<label>)` を先に潰す既存の前処理と同じ方式。
 ///
@@ -1410,7 +1410,7 @@ fn is_black_fade_color(c: &str) -> bool {
 /// 残余トークンが空でなければ結合して `resolve_color` で CSS カラーへ。
 /// 空（色省略）なら `None` を返し、呼び出し側は現在の線色を据え置く。
 /// SRC は color を `#rrggbb` 形式で受けるが、本移植では `RGB(...)` が
-/// `expand_vars` で `#rrggbb` に評価済み・`resolve_color` が日本語色名/変数色も解決する。
+/// 引数評価で `#rrggbb` に評価済み・`resolve_color` が日本語色名/変数色も解決する。
 fn optional_draw_color(app: &App, rest: &[String]) -> Option<String> {
     let joined = rest
         .iter()

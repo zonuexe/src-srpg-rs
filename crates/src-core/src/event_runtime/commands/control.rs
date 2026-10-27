@@ -148,7 +148,7 @@ fn exec_call(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     jump_to(app, pc, target, line)
 }
 
-fn exec_switch(_app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
+fn exec_switch(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     let Cmd {
         xargs,
         line,
@@ -156,20 +156,12 @@ fn exec_switch(_app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         stmts,
         ..
     } = *c;
-    // `Switch value` の value 解決:
-    //   - 単一トークン (`Switch 選択`) は裸識別子を script_var として
-    //     解決する。SRC では Switch の値は式評価される。
-    //   - 複数トークン (`Switch $(a) + 1`) は join したものを value にする。
-    // SRC.Sharp 準拠: 引数なしはエラー。
-    if xargs.is_empty() {
+    // 原典 `ExecSwitchCmd`: 引数はちょうど 1 個で、値は `GetArgAsString` (xargs は評価済み)。
+    // 複数の項からなる式は `Switch (i Mod 4)` のように括弧でまとめる。
+    let [value] = xargs.as_slice() else {
         return Err(err(line, "Switchコマンドの引数の数が違います"));
-    }
-    let value = if xargs.len() == 1 {
-        xargs[0].to_string()
-    } else {
-        xargs.join(" ")
     };
-    find_matching_case(pc, stmts, &value, line)
+    find_matching_case(app, pc, stmts, value, line)
 }
 
 fn exec_case(_app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {

@@ -59,37 +59,14 @@ fn exec_set(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
             app.record_sublocal(&key);
         }
     }
-    // LHS は `name[expr]` の `expr` を eval して実際のキーに解決する。
-    // expand_vars 後の xargs[0] は「変数値」展開済みで Set には使えないので
-    // 元の args[0] から名前を組み立てる。
+    // LHS は `name[expr]` の `expr` を評価して実際のキーに解決する (xargs は値に評価済み
+    // なので原文の args[0] から組み立てる)。
     //
-    // 動的 LHS: `Set Eval(x) value` — Eval(x) は変数 x の値（= 変数名）を
-    // 取り出してそれを実際の LHS として扱う。
-    let var = if let Some(inside) = args[0]
-        .strip_prefix("Eval(")
-        .or_else(|| args[0].strip_prefix("eval("))
-    {
-        if let Some(name_expr) = inside.strip_suffix(')') {
-            // 1) 関数 / `$(...)` を含むなら expand_vars で値を取り出す。
-            // 2) 裸の識別子なら script_var として引く。
-            // 3) いずれも失敗したら literal をキーとして使う。
-            let expanded = expand_vars(app, name_expr.trim());
-            let key = if expanded.trim() != name_expr.trim() {
-                expanded
-            } else {
-                let v = app.script_var(name_expr.trim());
-                if !v.is_empty() {
-                    v.to_string()
-                } else {
-                    name_expr.trim().to_string()
-                }
-            };
-            resolve_lhs_name(app, &key)
-        } else {
-            resolve_lhs_name(app, &args[0])
-        }
-    } else {
-        resolve_lhs_name(app, &args[0])
+    // 動的 LHS `Set Eval(x) value` は括弧内を式として評価した値を変数名とする
+    // (原典 `SetVariable` の `Case "eval"`: `GetValueAsString(括弧内)`)。
+    let var = match eval_lhs_target(&args[0]) {
+        Some(name_expr) => resolve_lhs_name(app, &eval::value_as_string(app, name_expr)),
+        None => resolve_lhs_name(app, &args[0]),
     };
     // 値は原文トークンを統一評価器で評価する (原典 `ExecSetCmd`: 1 項なら項として、
     // `var = a b c` の複数項は式として評価し、数値なら数値・それ以外は文字列で代入)。
@@ -147,9 +124,8 @@ fn exec_incr(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     if args.len() > 2 {
         return Err(err(line, "Incrコマンドの引数の数が違います"));
     }
-    // LHS は Set と同様に raw args[0] から resolve_lhs_name で実キーに
-    // 解決する。expand_vars 済の xargs[0] は indexed 変数だと値へ化けて
-    // しまい、`Incr 配列[i]` が別キー (要素の値) を破壊する。
+    // LHS は Set と同様に原文の args[0] から resolve_lhs_name で実キーに解決する
+    // (評価済みの xargs[0] は配列要素の値になってしまい、別キーを破壊する)。
     let var = resolve_lhs_name(app, &args[0]);
     // delta は f64 で計算 (SRC.Sharp は GetArgAsDouble を使用)
     let delta: f64 = if xargs.len() >= 2 {
@@ -473,4 +449,11 @@ fn exec_upvar(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     }
     // 祖先が存在しない (トップレベルから呼ばれた) 場合は no-op
     Ok(pc + 1)
+}
+
+/// `Eval(式)` 形式の左辺なら括弧内の式を返す (関数名は大文字小文字を区別しない)。
+fn eval_lhs_target(lhs: &str) -> Option<&str> {
+    let head = lhs.get(..5)?;
+    let inner = lhs[5..].strip_suffix(')')?;
+    head.eq_ignore_ascii_case("eval(").then(|| inner.trim())
 }

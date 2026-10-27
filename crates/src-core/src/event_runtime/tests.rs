@@ -1151,7 +1151,7 @@ fn input_array_var_target_resolves_to_key_not_value() {
 }
 
 #[test]
-fn expand_vars_keeps_indexed_var_literal_inside_quotes() {
+fn quoted_indexed_var_stays_literal() {
     // 回帰: クオート内の `name[expr]` は、たまたま同名の配列変数が定義済みでも
     // **値に化けず literal のまま**にする (D データロードの行検出が
     // `Instr(v,"設定[パイロット一覧]")` のリテラル破壊で失敗していた真因)。
@@ -1159,14 +1159,14 @@ fn expand_vars_keeps_indexed_var_literal_inside_quotes() {
     app.set_script_var("設定[パイロット一覧]".to_string(), "VAL".to_string());
     // クオート内は literal。
     assert_eq!(
-        expand_vars(&app, "\"設定[パイロット一覧]\""),
-        "\"設定[パイロット一覧]\""
+        eval::value_as_string(&app, "\"設定[パイロット一覧]\""),
+        "設定[パイロット一覧]"
     );
     // クオート外は従来どおり値に展開。
-    assert_eq!(expand_vars(&app, "設定[パイロット一覧]"), "VAL");
+    assert_eq!(eval::value_as_string(&app, "設定[パイロット一覧]"), "VAL");
     // `$(...)` 明示補間はクオート内でも従来どおり展開。
     app.set_script_var("x".to_string(), "Y".to_string());
-    assert_eq!(expand_vars(&app, "\"$(x)\""), "\"Y\"");
+    assert_eq!(eval::value_as_string(&app, "\"$(x)\""), "Y");
 }
 
 #[test]
@@ -1804,44 +1804,6 @@ EndIf
     let stmts = event::parse(src).unwrap();
     execute(&mut app, &stmts).unwrap();
     assert_eq!(app.messages(), &["has".to_string(), "missing".to_string()]);
-}
-
-#[test]
-fn switch_case_range() {
-    let src = "\
-Set x 5
-Switch $(x)
-Case 1 To 3
-  Message small
-Case 4 To 6
-  Message middle
-Case Is > 10
-  Message big
-EndSw
-";
-    let stmts = event::parse(src).unwrap();
-    let mut app = App::new();
-    execute(&mut app, &stmts).unwrap();
-    assert_eq!(app.messages(), &["middle".to_string()]);
-}
-
-#[test]
-fn switch_case_is_comparison() {
-    let src = "\
-Set x 100
-Switch $(x)
-Case Is < 10
-  Message tiny
-Case Is < 50
-  Message small
-Case Is >= 50
-  Message big
-EndSw
-";
-    let stmts = event::parse(src).unwrap();
-    let mut app = App::new();
-    execute(&mut app, &stmts).unwrap();
-    assert_eq!(app.messages(), &["big".to_string()]);
 }
 
 #[test]
@@ -2876,8 +2838,7 @@ Hotpoint UnitB 100 100 50 50 非表示
 #[test]
 fn hotpoint_coords_resolve_loop_variable() {
     // スパロボ戦記 機体選択開始 と同型: ループ変数 `j` を含む算術式
-    // `(j * 40 - 35)` を Hotpoint 座標に使う。`j` は裸の識別子なので
-    // expand_vars では展開されず、app-aware な eval が必要。
+    // `(j * 40 - 35)` を Hotpoint 座標に使う (裸の識別子 `j` は式中で変数として引く)。
     // 引用符付き数値 `"2"` も座標式に混じる (`("$(i)" * 70 + 15)` 由来)。
     let src = "\
 Set j 3
@@ -3003,39 +2964,39 @@ Weapon ブレイバー ビームライフル 2500 1 5 +15 -1
     let stmts = event::parse(src).unwrap();
     execute(&mut app, &stmts).unwrap();
     assert_eq!(
-        expand_vars(&app, "Info(ユニットデータ, ブレイバー, 名称)"),
+        eval::value_as_string(&app, "Info(ユニットデータ, ブレイバー, 名称)"),
         "ブレイバー"
     );
     assert_eq!(
-        expand_vars(&app, "Info(ユニットデータ, ブレイバー, 最大ＨＰ)"),
+        eval::value_as_string(&app, "Info(ユニットデータ, ブレイバー, 最大ＨＰ)"),
         "3500"
     );
     assert_eq!(
-        expand_vars(&app, "Info(ユニットデータ, ブレイバー, 武器数)"),
+        eval::value_as_string(&app, "Info(ユニットデータ, ブレイバー, 武器数)"),
         "1"
     );
     assert_eq!(
-        expand_vars(&app, "Info(ユニットデータ, ブレイバー, 武器, 1)"),
+        eval::value_as_string(&app, "Info(ユニットデータ, ブレイバー, 武器, 1)"),
         "ビームライフル"
     );
     assert_eq!(
-        expand_vars(
+        eval::value_as_string(
             &app,
             "Info(ユニットデータ, ブレイバー, 武器, ビームライフル, 攻撃力)"
         ),
         "2500"
     );
     assert_eq!(
-        expand_vars(&app, "Info(ユニットデータ, ブレイバー, 武器, 1, 最大射程)"),
+        eval::value_as_string(&app, "Info(ユニットデータ, ブレイバー, 武器, 1, 最大射程)"),
         "5"
     );
     // 最大攻撃力 / 最長射程 集約
     assert_eq!(
-        expand_vars(&app, "Info(ユニットデータ, ブレイバー, 最大攻撃力)"),
+        eval::value_as_string(&app, "Info(ユニットデータ, ブレイバー, 最大攻撃力)"),
         "2500"
     );
     assert_eq!(
-        expand_vars(&app, "Info(ユニットデータ, ブレイバー, 最長射程)"),
+        eval::value_as_string(&app, "Info(ユニットデータ, ブレイバー, 最長射程)"),
         "5"
     );
 }
@@ -3160,7 +3121,7 @@ fn info_returns_features_from_parsed_unit_txt() {
     });
     // 特殊能力データ
     assert_eq!(
-        expand_vars(
+        eval::value_as_string(
             &app,
             "Info(ユニットデータ, マグナＺ, 特殊能力データ, 全身画像)"
         ),
@@ -3168,14 +3129,14 @@ fn info_returns_features_from_parsed_unit_txt() {
     );
     // 特殊能力所有 (0/1)
     assert_eq!(
-        expand_vars(
+        eval::value_as_string(
             &app,
             "Info(ユニットデータ, マグナＺ, 特殊能力所有, 全身画像)"
         ),
         "1"
     );
     assert_eq!(
-        expand_vars(
+        eval::value_as_string(
             &app,
             "Info(ユニットデータ, マグナＺ, 特殊能力所有, 存在しない能力)"
         ),
@@ -3183,16 +3144,16 @@ fn info_returns_features_from_parsed_unit_txt() {
     );
     // 特殊能力数
     assert_eq!(
-        expand_vars(&app, "Info(ユニットデータ, マグナＺ, 特殊能力数)"),
+        eval::value_as_string(&app, "Info(ユニットデータ, マグナＺ, 特殊能力数)"),
         "2"
     );
     // 特殊能力 N (N 番目の名前)
     assert_eq!(
-        expand_vars(&app, "Info(ユニットデータ, マグナＺ, 特殊能力, 1)"),
+        eval::value_as_string(&app, "Info(ユニットデータ, マグナＺ, 特殊能力, 1)"),
         "全身画像"
     );
     assert_eq!(
-        expand_vars(&app, "Info(ユニットデータ, マグナＺ, 特殊能力, 2)"),
+        eval::value_as_string(&app, "Info(ユニットデータ, マグナＺ, 特殊能力, 2)"),
         "ブースト"
     );
 }
@@ -3204,23 +3165,23 @@ fn info_pilot_returns_base_stats() {
     let stmts = event::parse(src).unwrap();
     execute(&mut app, &stmts).unwrap();
     assert_eq!(
-        expand_vars(&app, "Info(パイロットデータ, リオ, 名称)"),
+        eval::value_as_string(&app, "Info(パイロットデータ, リオ, 名称)"),
         "リオ"
     );
     assert_eq!(
-        expand_vars(&app, "Info(パイロットデータ, リオ, 性別)"),
+        eval::value_as_string(&app, "Info(パイロットデータ, リオ, 性別)"),
         "男性"
     );
     assert_eq!(
-        expand_vars(&app, "Info(パイロットデータ, リオ, 格闘)"),
+        eval::value_as_string(&app, "Info(パイロットデータ, リオ, 格闘)"),
         "160"
     );
     assert_eq!(
-        expand_vars(&app, "Info(パイロットデータ, リオ, 技量)"),
+        eval::value_as_string(&app, "Info(パイロットデータ, リオ, 技量)"),
         "200"
     );
     assert_eq!(
-        expand_vars(&app, "Info(パイロットデータ, リオ, 地形適応)"),
+        eval::value_as_string(&app, "Info(パイロットデータ, リオ, 地形適応)"),
         "SSSS"
     );
 }
@@ -3241,7 +3202,7 @@ Exit
 
     // 初期状態 (level 1): 格闘 = base 100 + lv 1 = 101
     // (VB5 `Pilot.cls:582-593` 準拠でレベル 1 でも +lv 成長する)。
-    let initial = expand_vars(&app, "Info(パイロット, リオ, 格闘)")
+    let initial = eval::value_as_string(&app, "Info(パイロット, リオ, 格闘)")
         .parse::<i32>()
         .unwrap_or(0);
     assert_eq!(initial, 101, "初期格闘は base100 + lv1 = 101 のはず");
@@ -3251,7 +3212,7 @@ Exit
     let exp_stmts = event::parse(exp_src).unwrap();
     execute(&mut app, &exp_stmts).unwrap();
 
-    let leveled = expand_vars(&app, "Info(パイロット, リオ, 格闘)")
+    let leveled = eval::value_as_string(&app, "Info(パイロット, リオ, 格闘)")
         .parse::<i32>()
         .unwrap_or(0);
     assert!(
@@ -3271,9 +3232,12 @@ Pilot リオ リオ 男性 超能力者 SSSS 300 160 220 200 220 240 200
     let stmts = event::parse(src).unwrap();
     execute(&mut app, &stmts).unwrap();
     // ブレイバー → UnitData として引かれる
-    assert_eq!(expand_vars(&app, "Info(ブレイバー, 最大ＨＰ)"), "3500");
+    assert_eq!(
+        eval::value_as_string(&app, "Info(ブレイバー, 最大ＨＰ)"),
+        "3500"
+    );
     // リオ → PilotData として引かれる
-    assert_eq!(expand_vars(&app, "Info(リオ, 格闘)"), "160");
+    assert_eq!(eval::value_as_string(&app, "Info(リオ, 格闘)"), "160");
 }
 
 #[test]
@@ -3282,9 +3246,9 @@ fn info_map_returns_dimensions() {
     let src = "MapSize 10 12\n";
     let stmts = event::parse(src).unwrap();
     execute(&mut app, &stmts).unwrap();
-    assert_eq!(expand_vars(&app, "Info(マップ, 幅)"), "10");
-    assert_eq!(expand_vars(&app, "Info(マップ, 高さ)"), "12");
-    assert_eq!(expand_vars(&app, "Info(マップ, 時間帯)"), "昼");
+    assert_eq!(eval::value_as_string(&app, "Info(マップ, 幅)"), "10");
+    assert_eq!(eval::value_as_string(&app, "Info(マップ, 高さ)"), "12");
+    assert_eq!(eval::value_as_string(&app, "Info(マップ, 時間帯)"), "昼");
 }
 
 #[test]
@@ -3375,37 +3339,37 @@ If $(off) Stage B
 #[test]
 fn int_floor_negative_per_src_spec() {
     let app = App::new();
-    assert_eq!(expand_vars(&app, "Int(1.8)"), "1");
-    assert_eq!(expand_vars(&app, "Int(-8.3)"), "-9");
-    assert_eq!(expand_vars(&app, "Int(5)"), "5");
-    assert_eq!(expand_vars(&app, "Int(0)"), "0");
+    assert_eq!(eval::value_as_string(&app, "Int(1.8)"), "1");
+    assert_eq!(eval::value_as_string(&app, "Int(-8.3)"), "-9");
+    assert_eq!(eval::value_as_string(&app, "Int(5)"), "5");
+    assert_eq!(eval::value_as_string(&app, "Int(0)"), "0");
 }
 
 #[test]
 fn eval_evaluates_arithmetic_and_variables() {
     let mut app = App::new();
     app.set_script_var("x".to_string(), "42".to_string());
-    assert_eq!(expand_vars(&app, "Eval(1 + 3)"), "4");
-    assert_eq!(expand_vars(&app, "Eval(x)"), "42");
+    assert_eq!(eval::value_as_string(&app, "Eval(1 + 3)"), "4");
+    assert_eq!(eval::value_as_string(&app, "Eval(x)"), "42");
     // 数値リテラル
-    assert_eq!(expand_vars(&app, "Eval(7)"), "7");
+    assert_eq!(eval::value_as_string(&app, "Eval(7)"), "7");
 }
 
 #[test]
 fn roundup_rounddown_with_digits() {
     let app = App::new();
-    assert_eq!(expand_vars(&app, "RoundUp(1.23, 1)"), "1.3");
-    assert_eq!(expand_vars(&app, "RoundDown(1.29, 1)"), "1.2");
-    assert_eq!(expand_vars(&app, "Round(1.234, 2)"), "1.23");
-    assert_eq!(expand_vars(&app, "Round(1.235, 2)"), "1.24");
+    assert_eq!(eval::value_as_string(&app, "RoundUp(1.23, 1)"), "1.3");
+    assert_eq!(eval::value_as_string(&app, "RoundDown(1.29, 1)"), "1.2");
+    assert_eq!(eval::value_as_string(&app, "Round(1.234, 2)"), "1.23");
+    assert_eq!(eval::value_as_string(&app, "Round(1.235, 2)"), "1.24");
 }
 
 #[test]
 fn isvardefined_checks_existence() {
     let mut app = App::new();
     app.set_script_var("撃墜数".to_string(), "5".to_string());
-    assert_eq!(expand_vars(&app, "IsVarDefined(撃墜数)"), "1");
-    assert_eq!(expand_vars(&app, "IsVarDefined(未定義)"), "0");
+    assert_eq!(eval::value_as_string(&app, "IsVarDefined(撃墜数)"), "1");
+    assert_eq!(eval::value_as_string(&app, "IsVarDefined(未定義)"), "0");
 }
 
 /// indexed 変数に対する `IsVarDefined`。引数を展開すると配列要素の値に
@@ -3421,28 +3385,34 @@ Set idx 1
     let mut app = App::new();
     execute(&mut app, &stmts).unwrap();
     // 値ありの indexed key
-    assert_eq!(expand_vars(&app, "IsVarDefined(配列[1])"), "1");
+    assert_eq!(eval::value_as_string(&app, "IsVarDefined(配列[1])"), "1");
     // 空文字を明示代入した key も「定義済み」
-    assert_eq!(expand_vars(&app, "IsVarDefined(配列[2])"), "1");
+    assert_eq!(eval::value_as_string(&app, "IsVarDefined(配列[2])"), "1");
     // 未定義の indexed key
-    assert_eq!(expand_vars(&app, "IsVarDefined(配列[3])"), "0");
+    assert_eq!(eval::value_as_string(&app, "IsVarDefined(配列[3])"), "0");
     // 添字が変数: 配列[idx] → 配列[1] → 定義済み
-    assert_eq!(expand_vars(&app, "IsVarDefined(配列[idx])"), "1");
+    assert_eq!(eval::value_as_string(&app, "IsVarDefined(配列[idx])"), "1");
 }
 
 #[test]
 fn isnumeric_detects_numbers() {
     let app = App::new();
-    assert_eq!(expand_vars(&app, "IsNumeric(\"125\")"), "1");
-    assert_eq!(expand_vars(&app, "IsNumeric(\"abc\")"), "0");
-    assert_eq!(expand_vars(&app, "IsNumeric(\"-1.5\")"), "1");
+    assert_eq!(eval::value_as_string(&app, "IsNumeric(\"125\")"), "1");
+    assert_eq!(eval::value_as_string(&app, "IsNumeric(\"abc\")"), "0");
+    assert_eq!(eval::value_as_string(&app, "IsNumeric(\"-1.5\")"), "1");
 }
 
 #[test]
 fn instr_finds_substring_1indexed() {
     let app = App::new();
-    assert_eq!(expand_vars(&app, "InStr(\"hello world\", \"world\")"), "7");
-    assert_eq!(expand_vars(&app, "InStr(\"hello\", \"xyz\")"), "0");
+    assert_eq!(
+        eval::value_as_string(&app, "InStr(\"hello world\", \"world\")"),
+        "7"
+    );
+    assert_eq!(
+        eval::value_as_string(&app, "InStr(\"hello\", \"xyz\")"),
+        "0"
+    );
 }
 
 #[test]
@@ -3450,10 +3420,10 @@ fn format_basic_patterns() {
     let app = App::new();
     // 1234.5 → "1,234.50"
     assert_eq!(
-        expand_vars(&app, "Format(1234.5, \"##,##0.00\")"),
+        eval::value_as_string(&app, "Format(1234.5, \"##,##0.00\")"),
         "1,234.50"
     );
-    assert_eq!(expand_vars(&app, "Format(5, \"0\")"), "5");
+    assert_eq!(eval::value_as_string(&app, "Format(5, \"0\")"), "5");
 }
 
 #[test]
@@ -3461,16 +3431,16 @@ fn lsearch_finds_position_or_returns_zero() {
     // SRC.Sharp `Functions/List.cs::LSearch` 仕様: 見つからなければ 0。
     let mut app = App::new();
     app.set_script_var("xs".into(), "alpha beta gamma".into());
-    assert_eq!(expand_vars(&app, "Lsearch(xs, alpha)"), "1");
-    assert_eq!(expand_vars(&app, "Lsearch(xs, gamma)"), "3");
-    assert_eq!(expand_vars(&app, "Lsearch(xs, delta)"), "0");
+    assert_eq!(eval::value_as_string(&app, "Lsearch(xs, alpha)"), "1");
+    assert_eq!(eval::value_as_string(&app, "Lsearch(xs, gamma)"), "3");
+    assert_eq!(eval::value_as_string(&app, "Lsearch(xs, delta)"), "0");
 }
 
 #[test]
 fn lremove_drops_first_match() {
     let mut app = App::new();
     app.set_script_var("xs".into(), "a b c b".into());
-    assert_eq!(expand_vars(&app, "Lremove(xs, b)"), "a c b");
+    assert_eq!(eval::value_as_string(&app, "Lremove(xs, b)"), "a c b");
 }
 
 #[test]
@@ -5210,7 +5180,7 @@ Pilot リオ リオ 男性 超能力者 AAAA 100 100 100 100 100 100 100
 ";
     let stmts = event::parse(src).unwrap();
     execute(&mut app, &stmts).unwrap();
-    assert_eq!(expand_vars(&app, "Nickname(リオ)"), "リオ");
+    assert_eq!(eval::value_as_string(&app, "Nickname(リオ)"), "リオ");
 }
 
 #[test]
@@ -5223,8 +5193,8 @@ Place ゾルダ ガロ 敵 5 5
 ";
     let stmts = event::parse(src).unwrap();
     execute(&mut app, &stmts).unwrap();
-    assert_eq!(expand_vars(&app, "Party(ガロ)"), "敵");
-    assert_eq!(expand_vars(&app, "Party(ゾルダ)"), "敵");
+    assert_eq!(eval::value_as_string(&app, "Party(ガロ)"), "敵");
+    assert_eq!(eval::value_as_string(&app, "Party(ゾルダ)"), "敵");
 }
 
 #[test]
@@ -5842,7 +5812,7 @@ fn nickname_item_resolves_via_index_arg() {
 
     // end-to-end: ネストした関数式が展開され愛称が得られる
     // (`Item(リオ, 1)` は 1 番目の装備アイテム名を返す)。
-    let out = expand_vars(
+    let out = eval::value_as_string(
         &app,
         "Nickname(Item(リオ, 1), 真アイテム番号(Item(リオ, 1)))",
     );

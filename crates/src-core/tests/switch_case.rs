@@ -3,9 +3,8 @@
 //! 実シナリオで頻出するパターン:
 //! - 単一値 Case (`Case ユニット再表示`)
 //! - 空白区切り複数値 (`Case 【START】 【EXハード】`)
-//! - 範囲 Case (`Case 1 To 10`)
-//! - 比較演算子 Case (`Case Is < 5`)
-//! - CaseElse (default)
+//! - `Case Else` / `CaseElse` (default)
+//! - Case の値は 1 つずつ式の項として評価して、文字列として比べる (原典 `ExecSwitchCmd`)
 //! - ネスト Switch
 
 use src_core::data::event;
@@ -67,33 +66,78 @@ EndSw
 }
 
 #[test]
-fn switch_range_case_to_keyword() {
-    // SRC: `Case N To M` で範囲マッチ
+fn switch_case_else_two_words() {
+    // 原典は `Case Else` (引数 1 個が else) を CaseElse として扱う。
     let app = run(r#"
-Set x 5
-Switch $(x)
-Case 1 To 10
-  Set v in_range
-Case 11 To 20
-  Set v out_range
+Set x 99
+Switch x
+Case 1
+  Set v one
+Case Else
+  Set v other
 EndSw
 "#);
-    assert_eq!(app.script_var("v"), "in_range");
+    assert_eq!(app.script_var("v"), "other");
 }
 
 #[test]
-fn switch_case_is_comparison() {
-    // SRC: `Case Is < N` で比較
+fn switch_case_values_are_evaluated_terms() {
+    // Case の各値は変数・関数・括弧式として評価してから比べる。
     let app = run(r#"
-Set x 3
-Switch $(x)
-Case Is < 5
-  Set v less
+Set x 6
+Set 候補 6
+Switch (x Mod 4)
+Case 0 1
+  Set v low
+Case (1 + 1) 3
+  Set v high
+EndSw
+Switch x
+Case "5" 候補
+  Set w var
+EndSw
+"#);
+    assert_eq!(app.script_var("v"), "high");
+    assert_eq!(app.script_var("w"), "var");
+}
+
+#[test]
+fn switch_case_compares_as_strings() {
+    // `Case 1 To 10` / `Case Is < 5` のような範囲・比較は原典に無い。各語が値として
+    // 比べられるだけなので、`To` という値には一致する。
+    let app = run(r#"
+Set x To
+Switch x
+Case 1 To 10
+  Set v word
 CaseElse
   Set v other
 EndSw
 "#);
-    assert_eq!(app.script_var("v"), "less");
+    assert_eq!(app.script_var("v"), "word");
+}
+
+#[test]
+fn switch_case_number_literal_compares_as_written() {
+    // 数値リテラルの Case 値は評価せず書かれたまま比べる (原典 `GetArg`)。
+    let app = run(r#"
+Set x 5
+Set s "05"
+Switch x
+Case 05 5.0
+  Set v padded
+Case 5
+  Set v plain
+EndSw
+Switch s
+Case 5
+  Set w plain
+Case 05
+  Set w padded
+EndSw
+"#);
+    assert_eq!(app.script_var("v"), "plain");
+    assert_eq!(app.script_var("w"), "padded");
 }
 
 #[test]

@@ -65,7 +65,7 @@ pub(super) fn cond_term_len(xargs: &[String], k: usize) -> usize {
 /// 本体が空 → 複数行 If（`EndIf` を期待）。
 /// 本体が非空 → 単一行 If（条件真なら本体を実行、偽なら次行へ）。
 ///
-/// `expand_vars` 後は関数呼出が値に潰れて構造が失われるため、呼び出し側は
+/// 評価後は関数呼出が値に潰れて構造が失われるため、呼び出し側は
 /// **展開前の args** を渡してトークン境界を判定する。
 pub(super) fn split_if_cond_body(xargs: &[String]) -> (Vec<String>, Vec<String>) {
     if let Some(p) = xargs.iter().position(|t| t.eq_ignore_ascii_case("then")) {
@@ -270,11 +270,12 @@ pub(super) fn jump_to(
         .ok_or_else(|| err(line, &format!("Goto 先ラベルが見つかりません: {target:?}")))
 }
 
-/// `Switch` から見て、ネスト深度 0 で `Case "v"` / `CaseElse` / `EndSw` を探索。
-/// `Case` 値と `value` が一致したらその次の PC を返す。
-/// 一致するものが無く `CaseElse` が見つかればそこへ。最終的に `EndSw` まで来れば
-/// その次の PC を返す（マッチ無しで Switch を抜ける）。
+/// `Switch` の値 `value` に一致する `Case` を探し、その次の PC を返す (原典 `ExecSwitchCmd`)。
+/// `Case` の値は 1 つずつ評価し (`eval::case_value`)、文字列として完全一致で比べる
+/// (`Case 1 2 3` は 3 値のいずれか)。一致が無ければ同階層の `Case Else` / `CaseElse`
+/// へ、それも無ければ `EndSw` の次へ進む。
 pub(super) fn find_matching_case(
+    app: &App,
     pc: usize,
     stmts: &[EventStatement],
     value: &str,
@@ -283,106 +284,32 @@ pub(super) fn find_matching_case(
     let mut depth = 0usize;
     let mut i = pc + 1;
     while i < stmts.len() {
-        if let EventStatement::Command { name, args, .. } = &stmts[i] {
+        if let EventStatement::Command { name, raw_args, .. } = &stmts[i] {
             let l = name.to_ascii_lowercase();
             match l.as_str() {
                 "switch" => depth += 1,
                 "endsw" if depth == 0 => return Ok(i + 1),
                 "endsw" => depth -= 1,
-                "case" if depth == 0 => {
-                    // `Case 1 2 3` (空白区切り) と `Case 1, 2, 3` (カンマ区切り)
-                    // の両形式を許容する。各値ごとに比較し、いずれか一致で採用。
-                    // 範囲 (`A To B`) / `Is op N` は複数 token を消費するため、
-                    // まずは joined で評価し、それでもマッチしなければ各 arg を
-                    // 単独で比較する。
-                    let case_v = args.join(" ");
-                    if case_value_matches(&case_v, value) {
-                        return Ok(i + 1);
-                    }
-                    if args.iter().any(|a| case_value_matches(a, value)) {
-                        return Ok(i + 1);
-                    }
+                "case" | "caseelse" if depth == 0 && is_case_else(&l, raw_args) => {
+                    return Ok(i + 1);
                 }
-                "caseelse" if depth == 0 => return Ok(i + 1),
+                "case"
+                    if depth == 0 && raw_args.iter().any(|a| eval::case_value(app, a) == value) =>
+                {
+                    return Ok(i + 1);
+                }
                 _ => {}
             }
         }
         i += 1;
     }
-    Err(err(line, "Switch に対応する EndSw が見つかりません。"))
+    Err(err(line, "SwitchとEndSwが対応していません"))
 }
 
-/// `Case` 値と Switch 値のマッチ。受理する書式:
-/// - `Case "v1"` / `Case v1` — 単純等値
-/// - `Case v1, v2, v3` — カンマ区切り or-リスト
-/// - `Case Is < 5` / `Case Is >= 10` 等 — 比較演算
-/// - `Case 1 To 10` — 数値範囲（両端含む）
-pub(super) fn case_value_matches(case_v: &str, value: &str) -> bool {
-    let c = case_v.trim();
-    if c.contains(',') {
-        for part in c.split(',') {
-            if case_part_matches(part.trim(), value) {
-                return true;
-            }
-        }
-        false
-    } else {
-        case_part_matches(c, value)
-    }
-}
-
-/// `Case` の 1 パートと値の比較。
-pub(super) fn case_part_matches(part: &str, value: &str) -> bool {
-    let p = part.trim().trim_matches('"').trim();
-    // 1) "Is op N" — 比較
-    if let Some(rest) = p.strip_prefix("Is ").or_else(|| p.strip_prefix("is ")) {
-        let rest = rest.trim();
-        // op の長さ順 (`<=` `>=` `<>` `!=` を `<` `>` より先に判定)
-        for op in ["<=", ">=", "<>", "!=", "<", ">", "=", "=="] {
-            if let Some(rhs) = rest.strip_prefix(op) {
-                let rhs = rhs.trim().trim_matches('"').trim();
-                return eval_binop(value, op, rhs);
-            }
-        }
-    }
-    // 2) "A To B" — 範囲
-    if let Some((a, b)) = split_to_range(p) {
-        if let (Ok(v), Ok(lo), Ok(hi)) = (value.parse::<f64>(), a.parse::<f64>(), b.parse::<f64>())
-        {
-            return v >= lo && v <= hi;
-        }
-    }
-    // 3) 単純等値（数値化可能なら数値比較で）
-    if let (Ok(a), Ok(b)) = (p.parse::<f64>(), value.parse::<f64>()) {
-        return (a - b).abs() < f64::EPSILON;
-    }
-    p == value
-}
-
-pub(super) fn split_to_range(s: &str) -> Option<(&str, &str)> {
-    // `A To B` / `A to B` を見つける（大文字小文字混在対応の手書き）。
-    // `to_lowercase()` で得たバイト位置を元の文字列に再利用すると、
-    // 一部の Unicode 文字 (例: `İ` → `i\u{307}`, `ß` → `ss`) で
-    // 大文字小文字変換時にバイト長が変わって char 境界を割るため、
-    // 元の文字列を `char_indices` で走査して直接 " to " / " To " を探す。
-    let bytes = s.as_bytes();
-    let needle_len = 4; // " to " 固定 (ASCII 4 byte)
-    let mut i = 0;
-    while i + needle_len <= bytes.len() {
-        let window = &bytes[i..i + needle_len];
-        if (window[0] == b' ')
-            && (window[1] == b't' || window[1] == b'T')
-            && (window[2] == b'o' || window[2] == b'O')
-            && (window[3] == b' ')
-        {
-            // ASCII の検出位置なので元の str を safe にスライス可能。
-            let a = &s[..i];
-            let b = &s[i + needle_len..];
-            return Some((a.trim(), b.trim()));
-        }
-        i += 1;
-    }
-    None
+/// `Case Else` か (原典は引数 1 個で `else` のときだけ `CaseElseCmd` とする)。本移植は
+/// 1 語の `CaseElse` も受け付ける。
+fn is_case_else(lname: &str, raw_args: &[String]) -> bool {
+    lname == "caseelse" || matches!(raw_args, [a] if a.eq_ignore_ascii_case("else"))
 }
 
 /// 同階層の `EndSw` までスキップ。

@@ -147,10 +147,8 @@ fn fn_is_var_defined(app: &App, c: &FnCall) -> Option<String> {
     // SRC.Sharp `Expression.IsVariableDefined` 同等: 空文字代入でも
     // **定義済 (1)** を返す (`Set var ""` 後の判定が 1)。
     //
-    // 元 SRC は名称を文字通り (式評価せず) 使うが、本実装では
-    // expand_vars 経由で既に解決済の文字列を script_var キーとして引く。
-    // 数値リテラルが来た場合は (= 既に値で置換された) 「定義済み」と
-    // 判定する。
+    // 引数は原典どおり評価せず名称のまま受け取る (`takes_raw_params`)。
+    // 数値リテラルは「定義済み」と判定する。
     // 引数が無い / 空 (`IsVarDefined()`) は「未定義」= 0。
     // `args.first()` が None のときも literal 落ちさせず 0 を返す。
     let raw_orig = args.first().map_or("", |s| s.trim());

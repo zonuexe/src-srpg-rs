@@ -182,6 +182,17 @@ pub(super) fn arg_as_string(app: &App, raw: &str) -> String {
     }
 }
 
+/// `Case` の値 1 つ (原典 `ExecSwitchCmd`)。構文解析で型の決まった引数 (文字列リテラル・
+/// 数値リテラル) は評価せず原文 (`GetArg`) を使うため、`Case 05` は `"05"` としか一致しない。
+/// それ以外は `GetArgAsString` で項として評価する。
+pub(super) fn case_value(app: &App, raw: &str) -> String {
+    match arg_kind(raw) {
+        ArgKind::Literal(s) => s,
+        ArgKind::Number(_) => raw.to_string(),
+        ArgKind::Term => eval_term(app, raw, Ty::Str).s,
+    }
+}
+
 /// コマンド引数 (原文トークン) の整数値 (原典 `CmdData.GetArgAsLong`)。文字列リテラルは 0。
 pub(super) fn arg_as_long(app: &App, raw: &str) -> i64 {
     match arg_kind(raw) {
