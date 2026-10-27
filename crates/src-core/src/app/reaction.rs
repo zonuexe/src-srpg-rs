@@ -199,7 +199,8 @@ impl App {
     ) -> bool {
         let u = &self.database.unit_instances[atk_idx];
         let totsugeki = u.has_condition("突撃");
-        combat::weapon_in_range(weapon, dist)
+        !combat::is_map_weapon(weapon)
+            && combat::weapon_in_range(weapon, dist)
             && (u.charged || !combat::is_charge_weapon(weapon))
             && Self::weapon_usable_post_move(weapon, post_move, totsugeki)
             && self.weapon_firable(atk_idx, weapon)

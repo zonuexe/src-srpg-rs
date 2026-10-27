@@ -245,3 +245,12 @@ mod px_tests {
         assert_eq!(pixel_to_tile(-1, -1), None);
     }
 }
+
+/// マップ攻撃の目標地点選択中に塗るマス (`App::map_attack_select_tiles`)。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MapAttackTiles {
+    /// 目標地点に選べるマス。
+    pub targets: Vec<(u32, u32)>,
+    /// 仮決めした目標地点 (無ければカーソル位置が選べるマスならそこ) を狙ったときの効果範囲。
+    pub area: Vec<(u32, u32)>,
+}

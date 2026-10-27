@@ -909,6 +909,12 @@ pub fn is_charge_weapon(w: &WeaponData) -> bool {
     w.class.contains('Ｃ') || w.class.contains('C')
 }
 
+/// マップ兵器 (`Ｍ` 属性) か。マップ兵器は目標地点を選ぶマップ攻撃でだけ使い、
+/// 単体攻撃・反撃には使わない (原典: 武器一覧で選ぶとマップ攻撃の目標選択になる)。
+pub fn is_map_weapon(w: &WeaponData) -> bool {
+    w.class.contains('Ｍ')
+}
+
 /// マップ攻撃の効果範囲を表す `(x, y)` 集合を計算する。
 /// 武器の `class` 文字列に含まれる SRC の属性記号を解釈する:
 ///

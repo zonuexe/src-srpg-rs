@@ -225,6 +225,25 @@ impl App {
                 }
                 true
             }
+            ActionMode::MapAttackSelect {
+                uid,
+                point,
+                snapshot,
+                weapon,
+            } => {
+                // 仮決めした目標地点があれば取り消すだけ。無ければユニットメニューへ戻る。
+                if point.is_some() {
+                    self.action_mode = ActionMode::MapAttackSelect {
+                        uid,
+                        weapon,
+                        point: None,
+                        snapshot,
+                    };
+                } else {
+                    self.return_to_unit_menu(&uid, snapshot);
+                }
+                true
+            }
             ActionMode::AbilityTarget { caster, .. } => {
                 // アビリティ対象選択キャンセル: 効果なし。発動主体のメニューへ戻る。
                 self.action_mode = ActionMode::Browse;
@@ -323,7 +342,8 @@ impl App {
         skill_ok: impl Fn(&crate::data::unit::WeaponData) -> bool,
     ) -> Option<crate::data::unit::WeaponData> {
         let legal = |w: &crate::data::unit::WeaponData| {
-            combat::weapon_in_range(w, dist)
+            !combat::is_map_weapon(w)
+                && combat::weapon_in_range(w, dist)
                 && (charged || !combat::is_charge_weapon(w))
                 && Self::weapon_usable_post_move(w, post_move, totsugeki)
                 && firable(w)
@@ -737,6 +757,10 @@ impl App {
                 }
                 true
             }
+            ActionMode::MapAttackSelect { .. } => {
+                self.click_map_attack_target(target);
+                true
+            }
             ActionMode::SpiritTarget {
                 caster,
                 spirit,
@@ -869,13 +893,20 @@ impl App {
                 let d = combat::manhattan(pos, (other.x, other.y));
                 // メニュー可否と攻撃実行で同一述語を使い齟齬を防ぐ。
                 def.weapons.iter().any(|w| {
-                    combat::weapon_in_range(w, d)
+                    !combat::is_map_weapon(w)
+                        && combat::weapon_in_range(w, d)
                         && Self::weapon_usable_post_move(w, post_move, totsugeki)
                 })
             });
             if any_in_range {
                 items.push(UnitMenuItem::Builtin(UnitAction::Attack));
             }
+        }
+
+        // マップ攻撃: マップ兵器 (`Ｍ` 属性) を持つ未行動の味方ユニット。使用可否
+        // (EN / 弾数 / 気力 / 移動後) は一覧サブメニュー側で × 表示・判定する。
+        if u.party == crate::Party::Player && !u.has_acted && self.has_map_weapon(&u.uid) {
+            items.push(UnitMenuItem::MapAttack);
         }
 
         // 武装一覧は移動前のみ
@@ -999,7 +1030,8 @@ impl App {
                     | UnitMenuItem::Ability
                     | UnitMenuItem::Launch
                     | UnitMenuItem::Combine
-                    | UnitMenuItem::Separate => None,
+                    | UnitMenuItem::Separate
+                    | UnitMenuItem::MapAttack => None,
                 })
                 .collect();
             let mut seen: std::collections::HashSet<String> =
@@ -1136,6 +1168,11 @@ impl App {
                     UnitMenuItem::Ability => {
                         // アビリティ: 一覧サブメニューを開く。
                         self.open_ability_menu(&uid);
+                        return true;
+                    }
+                    UnitMenuItem::MapAttack => {
+                        // マップ攻撃: マップ兵器の一覧サブメニューを開く。
+                        self.open_map_weapon_menu(&uid, post_move_snapshot);
                         return true;
                     }
                     UnitMenuItem::Launch => {

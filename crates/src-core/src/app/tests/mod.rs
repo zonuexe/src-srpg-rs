@@ -540,6 +540,7 @@ mod ai;
 mod combat;
 mod input;
 mod intermission;
+mod map_attack;
 mod misc;
 mod spirit;
 mod stage_flow;

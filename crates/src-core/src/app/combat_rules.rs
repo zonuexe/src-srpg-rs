@@ -896,7 +896,7 @@ impl App {
     ) -> Option<crate::data::unit::WeaponData> {
         unit.weapons
             .iter()
-            .filter(|w| combat::weapon_in_range(w, dist))
+            .filter(|w| !combat::is_map_weapon(w) && combat::weapon_in_range(w, dist))
             .filter(|w| !combat::is_charge_weapon(w))
             .filter(|w| self.weapon_firable(unit_idx, w))
             .max_by_key(|w| w.power)

@@ -157,6 +157,18 @@ struct PendingLaunch {
     stored: Vec<String>,
 }
 
+/// マップ兵器一覧サブメニューの選択を待つ間 `pending_map_weapon` に保持。
+/// メニュー選択 (1-based) → `entries[idx-1]` の (武器名, 使用可否) を解決する。
+#[derive(Debug, Clone)]
+struct PendingMapWeapon {
+    /// 攻撃側ユニットの uid。
+    uid: String,
+    /// メニュー項目に対応する (マップ兵器名, 使用可否)。
+    entries: Vec<(String, bool)>,
+    /// 移動後からの遷移なら移動前状態 (キャンセルで移動後メニューへ戻る)。
+    snapshot: Option<crate::command_menu::MoveSnapshot>,
+}
+
 /// インターミッション画面のサブモード。`Menu` はメインメニュー、`UnitUpgrade` は
 /// 「機体改造」で資金を払って強化するユニットを選ぶリスト。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -219,6 +231,10 @@ pub struct App {
     database: GameDatabase,
     /// MapView でのカーソル位置（タイル単位）。`None` ならカーソル未配置。
     map_cursor: Option<(u32, u32)>,
+    /// 目標地点 (原典 `SelectedX` / `SelectedY`、内部座標)。マップ攻撃の実行で設定し、
+    /// `X(目標地点)` / `Y(目標地点)` / `WX(目標地点)` / `WY(目標地点)` が返す。
+    #[serde(default)]
+    selected_point: Option<(u32, u32)>,
     /// 現在のターン / フェーズ。
     turn: Turn,
     /// マップビューポートの左上タイル座標。scroll で動かす。
@@ -386,6 +402,9 @@ pub struct App {
     /// 発進サブメニュー選択待ち文脈 (Some のとき格納ユニット選択待ち)。transient。
     #[serde(skip)]
     pending_launch: Option<PendingLaunch>,
+    /// マップ兵器一覧サブメニュー選択待ち文脈 (Some のとき選択待ち)。transient。
+    #[serde(skip)]
+    pending_map_weapon: Option<PendingMapWeapon>,
     /// スクリプト (`Quickload` / `Restart` / ゲームオーバー コンティニュー) が要求した
     /// 再ロード用 JSON。`core` は `self` を置換できないため、フロントエンドが
     /// [`App::take_pending_reload`] で取り出し `from_save_json` で置換 + `fire_resume_event`
@@ -701,6 +720,7 @@ impl App {
             settings_snapshot: None,
             database: GameDatabase::new(),
             map_cursor: None,
+            selected_point: None,
             turn: Turn::new(),
             map_scroll: (0, 0),
             stage: String::new(),
@@ -744,6 +764,7 @@ impl App {
             pending_transform: None,
             pending_ability: None,
             pending_launch: None,
+            pending_map_weapon: None,
             pending_reload: None,
             wall_clock_ms: 0.0,
             intermission_commands: Vec::new(),
@@ -1483,6 +1504,11 @@ impl App {
     /// MapView 上の現在カーソル位置（タイル）。
     pub const fn map_cursor(&self) -> Option<(u32, u32)> {
         self.map_cursor
+    }
+
+    /// 目標地点 (原典 `SelectedX` / `SelectedY`、内部座標)。マップ攻撃で設定される。
+    pub const fn selected_point(&self) -> Option<(u32, u32)> {
+        self.selected_point
     }
 
     /// SRC `Center` コマンド / シナリオロジック向け: マップカーソル (= 表示中心)
