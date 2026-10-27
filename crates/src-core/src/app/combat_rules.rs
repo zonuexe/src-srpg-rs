@@ -548,12 +548,11 @@ impl App {
 
     /// 盗 (`盗`): クリティカル時に相手から資金またはアイテムを奪う (`特殊効果攻撃属性.md`)。
     /// 相手が `アイテム所有=<item>` を持てばそのアイテムを (`レアアイテム所有` があれば 1/8 で
-    /// 代わりにレアアイテムを) 攻撃側へ移す。持たなければ修理費の 1/4 の資金。攻撃側が味方
+    /// 代わりにレアアイテムを) 味方の未装備アイテムに加える (原典 `IList.Add`)。持たなければ修理費の 1/4 の資金。攻撃側が味方
     /// (Player) のときのみ。同じ相手からは 1 度だけ (`被盗` 状態で再取得を抑止)。
     pub(super) fn apply_weapon_crit_steal(
         &mut self,
         def_idx: usize,
-        atk_idx: usize,
         atk_party: crate::Party,
         victim_value: i64,
         weapon: &crate::data::unit::WeaponData,
@@ -583,9 +582,7 @@ impl App {
         };
 
         if let Some(item) = stolen_item {
-            self.database.unit_instances[atk_idx]
-                .equipped_items
-                .push(item.clone());
+            self.database.spare_items.push(item.clone());
             self.database.unit_instances[def_idx].add_condition(crate::Condition::new("被盗", -1));
             return vec![format!("アイテム奪取: {item}")];
         }

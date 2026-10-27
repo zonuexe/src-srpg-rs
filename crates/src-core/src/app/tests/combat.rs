@@ -1157,11 +1157,11 @@ fn weapon_steal_grants_money_once() {
     };
     let money0 = app.money();
     // 修理費 800 → 1/4 = 200。
-    let applied = app.apply_weapon_crit_steal(def_idx, 0, crate::Party::Player, 800, &weapon);
+    let applied = app.apply_weapon_crit_steal(def_idx, crate::Party::Player, 800, &weapon);
     assert_eq!(applied, vec!["資金奪取 +200".to_string()]);
     assert_eq!(app.money(), money0 + 200, "資金 +200");
     // 再取得は不可 (被盗)。
-    let applied2 = app.apply_weapon_crit_steal(def_idx, 0, crate::Party::Player, 800, &weapon);
+    let applied2 = app.apply_weapon_crit_steal(def_idx, crate::Party::Player, 800, &weapon);
     assert!(applied2.is_empty(), "同じ相手から再取得しない");
     assert_eq!(app.money(), money0 + 200, "資金は変わらない");
 }
@@ -1203,17 +1203,15 @@ fn weapon_steal_takes_item_when_target_owns_one() {
         extras: Vec::new(),
     };
     let money0 = app.money();
-    let applied = app.apply_weapon_crit_steal(def_idx, 0, crate::Party::Player, 800, &weapon);
+    let applied = app.apply_weapon_crit_steal(def_idx, crate::Party::Player, 800, &weapon);
     assert_eq!(applied, vec!["アイテム奪取: 賢者の石".to_string()]);
     assert!(
-        app.database().unit_instances[0]
-            .equipped_items
-            .contains(&"賢者の石".to_string()),
-        "攻撃側がアイテムを取得"
+        app.database().spare_items.contains(&"賢者の石".to_string()),
+        "盗んだアイテムは味方の未装備アイテムに入る (原典 IList.Add)"
     );
     assert_eq!(app.money(), money0, "アイテム盗み時は資金を奪わない");
     // 再取得不可 (被盗)。
-    let applied2 = app.apply_weapon_crit_steal(def_idx, 0, crate::Party::Player, 800, &weapon);
+    let applied2 = app.apply_weapon_crit_steal(def_idx, crate::Party::Player, 800, &weapon);
     assert!(applied2.is_empty(), "同じ相手から再取得しない");
 }
 
