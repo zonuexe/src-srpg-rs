@@ -6429,10 +6429,10 @@ fn custom_unit_command_appears_in_menu_and_invokes() {
         _ => panic!("ユニットメニューが開いていない"),
     };
     // 「テスト」項目をクリック → 本体が実行される。
-    let menu_x = crate::command_menu::MENU_X + 40;
-    let item_y = crate::command_menu::MENU_Y
-        + crate::command_menu::MENU_PADDING
-        + crate::command_menu::MENU_ITEM_HEIGHT * idx as i32
+    let menu_x = crate::scene::command_menu::MENU_X + 40;
+    let item_y = crate::scene::command_menu::MENU_Y
+        + crate::scene::command_menu::MENU_PADDING
+        + crate::scene::command_menu::MENU_ITEM_HEIGHT * idx as i32
         + 4;
     app.handle_input(Input::ClickAt {
         x: menu_x,
@@ -6484,8 +6484,8 @@ fn menu_move_then_select_destination_moves_unit() {
     let oy = 12 + 6 * 32 + 16;
     app.handle_input(Input::ClickAt { x: ox, y: oy });
     // メニューの "移動" 項目位置をクリック
-    let menu_x = crate::command_menu::MENU_X + 40;
-    let move_y = crate::command_menu::MENU_Y + crate::command_menu::MENU_PADDING + 4;
+    let menu_x = crate::scene::command_menu::MENU_X + 40;
+    let move_y = crate::scene::command_menu::MENU_Y + crate::scene::command_menu::MENU_PADDING + 4;
     app.handle_input(Input::ClickAt {
         x: menu_x,
         y: move_y,
@@ -6536,10 +6536,10 @@ fn wait_marks_unit_acted() {
         crate::CommandMenu::Unit { items, .. } => items.len(),
         _ => panic!("expected Unit menu"),
     };
-    let menu_x = crate::command_menu::MENU_X + 40;
-    let wait_y = crate::command_menu::MENU_Y
-        + crate::command_menu::MENU_PADDING
-        + crate::command_menu::MENU_ITEM_HEIGHT * (item_count as i32 - 1)
+    let menu_x = crate::scene::command_menu::MENU_X + 40;
+    let wait_y = crate::scene::command_menu::MENU_Y
+        + crate::scene::command_menu::MENU_PADDING
+        + crate::scene::command_menu::MENU_ITEM_HEIGHT * (item_count as i32 - 1)
         + 4;
     app.handle_input(Input::ClickAt {
         x: menu_x,
@@ -6560,8 +6560,8 @@ fn post_move_menu_excludes_move_command() {
     let ox = 2 * 32 + 16;
     let oy = 12 + 6 * 32 + 16;
     app.handle_input(Input::ClickAt { x: ox, y: oy });
-    let menu_x = crate::command_menu::MENU_X + 40;
-    let move_y = crate::command_menu::MENU_Y + crate::command_menu::MENU_PADDING + 4;
+    let menu_x = crate::scene::command_menu::MENU_X + 40;
+    let move_y = crate::scene::command_menu::MENU_Y + crate::scene::command_menu::MENU_PADDING + 4;
     app.handle_input(Input::ClickAt {
         x: menu_x,
         y: move_y,
@@ -6618,10 +6618,10 @@ fn click_tile(app: &mut App, c: u32, r: u32) {
 }
 
 fn click_menu_item(app: &mut App, idx: i32) {
-    let menu_x = crate::command_menu::MENU_X + 40;
-    let item_y = crate::command_menu::MENU_Y
-        + crate::command_menu::MENU_PADDING
-        + crate::command_menu::MENU_ITEM_HEIGHT * idx
+    let menu_x = crate::scene::command_menu::MENU_X + 40;
+    let item_y = crate::scene::command_menu::MENU_Y
+        + crate::scene::command_menu::MENU_PADDING
+        + crate::scene::command_menu::MENU_ITEM_HEIGHT * idx
         + 4;
     app.handle_input(Input::ClickAt {
         x: menu_x,
@@ -7459,8 +7459,8 @@ fn cancel_post_move_restores_unit_position() {
     let ox = 2 * 32 + 16;
     let oy = 12 + 6 * 32 + 16;
     app.handle_input(Input::ClickAt { x: ox, y: oy });
-    let menu_x = crate::command_menu::MENU_X + 40;
-    let move_y = crate::command_menu::MENU_Y + crate::command_menu::MENU_PADDING + 4;
+    let menu_x = crate::scene::command_menu::MENU_X + 40;
+    let move_y = crate::scene::command_menu::MENU_Y + crate::scene::command_menu::MENU_PADDING + 4;
     app.handle_input(Input::ClickAt {
         x: menu_x,
         y: move_y,
@@ -7504,8 +7504,9 @@ fn end_phase_via_map_menu_works() {
         Some(crate::CommandMenu::Map { .. })
     ));
     // EndTurn は items[0]
-    let menu_x = crate::command_menu::MENU_X + 40;
-    let endturn_y = crate::command_menu::MENU_Y + crate::command_menu::MENU_PADDING + 4;
+    let menu_x = crate::scene::command_menu::MENU_X + 40;
+    let endturn_y =
+        crate::scene::command_menu::MENU_Y + crate::scene::command_menu::MENU_PADDING + 4;
     app.handle_input(Input::ClickAt {
         x: menu_x,
         y: endturn_y,

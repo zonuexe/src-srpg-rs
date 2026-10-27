@@ -78,27 +78,34 @@ const AI_STEP_SECS: f64 = 0.45;
 /// 反撃手段選択 (反撃/回避/防御) を待つ間 `pending_reaction` に保持する。応答時に
 /// `target_tile` の防御側へ選んだ `def_mode` で攻撃を解決する。
 #[derive(Debug, Clone)]
-struct PendingReaction {
+pub(crate) struct PendingReaction {
     /// 攻撃側 (AI) ユニット uid。
-    atk_uid: String,
+    pub(crate) atk_uid: String,
     /// 防御側 (味方) の居るタイル。
-    target_tile: (u32, u32),
+    pub(crate) target_tile: (u32, u32),
     /// メニュー選択 index(1-based) → def_mode のマップ ("反撃"/"回避"/"防御")。
-    modes: Vec<String>,
+    pub(crate) modes: Vec<String>,
 }
 
 /// 武器選択を待つ間 `pending_weapon_select` に保持する。通常攻撃と、反撃手段
 /// 「反撃」選択後の反撃武器選択の両方に使う (`counter` で区別)。
 #[derive(Debug, Clone)]
-struct PendingWeaponSelect {
+pub(crate) struct PendingWeaponSelect {
     /// 武器を撃つ側 uid (通常攻撃=攻撃側 / 反撃=防御側=反撃する側)。
-    atk_uid: String,
+    pub(crate) atk_uid: String,
     /// 撃つ目標タイル (通常攻撃=防御側 / 反撃=元攻撃側の位置)。
-    target: (u32, u32),
+    pub(crate) target: (u32, u32),
     /// 移動後攻撃か (キャンセル復帰用フラグ)。
-    post_move: bool,
+    pub(crate) post_move: bool,
     /// `Some` なら反撃武器選択。選択後に主攻撃を `def_mode="反撃"` で解決する。
     counter: Option<CounterCtx>,
+}
+
+impl PendingWeaponSelect {
+    /// 反撃武器の選択か (主攻撃の反撃手段で「反撃」を選んだ後)。
+    pub(crate) fn is_counter(&self) -> bool {
+        self.counter.is_some()
+    }
 }
 
 /// 反撃武器選択の文脈 (主攻撃の解決に必要)。
@@ -668,7 +675,6 @@ mod reaction;
 mod script_flow;
 mod spirit;
 mod stage_flow;
-mod status_detail;
 mod unit_commands;
 mod vfs;
 
@@ -771,6 +777,16 @@ impl App {
     pub fn set_last_script_error(&mut self, msg: String) {
         self.last_script_error = Some(msg);
     }
+    /// 反撃手段の選択待ち (ウィンドウのビューモデル組み立て用)。
+    pub(crate) fn pending_reaction(&self) -> Option<&PendingReaction> {
+        self.pending_reaction.as_ref()
+    }
+
+    /// 武器選択待ち (ウィンドウのビューモデル組み立て用)。
+    pub(crate) fn pending_weapon_select(&self) -> Option<&PendingWeaponSelect> {
+        self.pending_weapon_select.as_ref()
+    }
+
     pub fn last_script_error(&self) -> Option<&str> {
         self.last_script_error.as_deref()
     }

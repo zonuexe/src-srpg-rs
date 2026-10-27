@@ -80,7 +80,7 @@ nix --extra-experimental-features 'nix-command flakes' develop --command just <r
 
 | モジュール | 役割 |
 |-----------|------|
-| `app/` | 上位状態機械・ゲーム全体制御 (`App`)。`mod.rs` は構造体とアクセサ、`impl App` は責務別ファイル (`stage_flow` / `battle` / `map_attack` / `combat_rules` / `ai` / `reaction` / `spirit` / `unit_commands` / `input` / `intermission` / `dialog` / `script_flow` / `vfs` / `status_detail` / `debug`) に分割 |
+| `app/` | 上位状態機械・ゲーム全体制御 (`App`)。`mod.rs` は構造体とアクセサ、`impl App` は責務別ファイル (`stage_flow` / `battle` / `map_attack` / `combat_rules` / `ai` / `reaction` / `spirit` / `unit_commands` / `input` / `intermission` / `dialog` / `script_flow` / `vfs` / `debug`) に分割 |
 | `db.rs` | 静的データ (`units` / `pilots` 等) と実行時の盤面 (`unit_instances` / `map` / 位置索引) を持つ `GameDatabase`。ユニット除去は `remove_unit*` / `remove_units_where` 経由 (位置索引の同期) |
 | `data/` | データパーサー（pilot.txt / unit.txt / map.txt 等、`necessary.rs` は `(必要技能)` 切り離し） |
 | `unit_instance.rs` | マップ上のユニット実体（位置・所属勢力・状態） |
@@ -95,7 +95,7 @@ nix --extra-experimental-features 'nix-command flakes' develop --command just <r
 | `necessary_skill.rs` | 必要技能 / 必要条件の評価 (武器ゲート `weapon_usable_by`) |
 | `combat.rs` | 戦闘予測（命中率・ダメージ計算）とマップ攻撃の効果範囲。App 側の実行は `app/battle.rs` (`strike_preview` / `resolve_strike`) と `app/map_attack.rs` |
 | `movement.rs` | 移動範囲計算（Dijkstra） |
-| `scene/` | シーン状態 (`Scene`)・レイアウト・ヒットテスト・ビューモデル型 |
+| `scene/` | シーン状態 (`Scene`)・レイアウト・ヒットテスト・ビューモデル (型と、盤面から組み立てる `build_status_detail` / `reaction_window_data` / `weapon_select_window_data`)。src-web はこれを描くだけ |
 | `turn.rs` | ターン / フェーズ管理 |
 | `stage.rs` | ステージ進行状態（Briefing / Sortie / Battle / Victory） |
 | `dialog.rs` | 対話 UI（Talk / Confirm / Input / Menu） |

@@ -29,7 +29,7 @@ impl App {
                             } else {
                                 0
                             };
-                        return match crate::dialog::reaction_choice_at(n, x, y) {
+                        return match crate::scene::reaction::reaction_choice_at(n, x, y) {
                             Some(c) => self.respond_dialog(c),
                             None => false,
                         };
@@ -44,7 +44,7 @@ impl App {
                             } else {
                                 0
                             };
-                        return match crate::dialog::weapon_select_choice_at(n, x, y) {
+                        return match crate::scene::weapon_select::weapon_select_choice_at(n, x, y) {
                             Some(c) => self.respond_dialog(c),
                             None => false,
                         };
@@ -71,7 +71,12 @@ impl App {
                             ..
                         }) = &self.pending_dialog
                         {
-                            Some(crate::dialog::menu_choice_at(prompt, options.len(), x, y))
+                            Some(crate::scene::dialog::menu_choice_at(
+                                prompt,
+                                options.len(),
+                                x,
+                                y,
+                            ))
                         } else {
                             None
                         };
@@ -521,7 +526,7 @@ impl App {
 
     /// 単機ステータス詳細で巡回対象になる味方ロスター (off_map 含む)。
     /// `intermission_upgrade_units` と同じく Player 陣営の `unit_instances` index 列。
-    pub(super) fn status_roster(&self) -> Vec<usize> {
+    pub(crate) fn status_roster(&self) -> Vec<usize> {
         self.intermission_upgrade_units()
     }
 
@@ -629,9 +634,11 @@ impl App {
         // 1) コマンドメニューが表示中なら、まずメニュー項目クリックを試みる。
         //    メニューは canvas 絶対座標で描画されるので abs_x/abs_y で判定。
         if self.command_menu.is_some() {
-            if let Some(action) =
-                crate::command_menu::hit_test_menu_item(self.command_menu.as_ref(), abs_x, abs_y)
-            {
+            if let Some(action) = crate::scene::command_menu::hit_test_menu_item(
+                self.command_menu.as_ref(),
+                abs_x,
+                abs_y,
+            ) {
                 return self.execute_menu_action(action);
             }
             // メニュー外をクリックしたらメニューを閉じる

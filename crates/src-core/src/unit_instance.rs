@@ -33,17 +33,6 @@ pub enum Party {
 }
 
 impl Party {
-    /// 描画用の塗り色（CSS カラー）。VB5 SRC は HUD の色付けで似た区別をしていた。
-    pub const fn color(self) -> &'static str {
-        match self {
-            Self::Player => "#1e88e5",
-            // ＮＰＣ はプレイヤー側陣営。緑系で味方と区別。
-            Self::Npc => "#43a047",
-            Self::Enemy => "#e53935",
-            Self::Neutral => "#fdd835",
-        }
-    }
-
     pub const fn short_label(self) -> &'static str {
         match self {
             Self::Player => "味",
@@ -506,23 +495,6 @@ mod tests {
         for a in [Player, Npc, Enemy, Neutral] {
             for b in [Player, Npc, Enemy, Neutral] {
                 assert_eq!(a.is_ally_of(b), !a.is_hostile_to(b));
-            }
-        }
-    }
-
-    #[test]
-    fn party_color_is_distinct_per_party() {
-        let colors = [
-            Party::Player.color(),
-            Party::Npc.color(),
-            Party::Enemy.color(),
-            Party::Neutral.color(),
-        ];
-        for (i, a) in colors.iter().enumerate() {
-            for (j, b) in colors.iter().enumerate() {
-                if i != j {
-                    assert_ne!(a, b);
-                }
             }
         }
     }

@@ -13,7 +13,7 @@
 | 4. CLAUDE.md 修正 | 済 | §6 の記述ずれをすべて修正 |
 | 5. `impl App` 分割 | 済 | app/mod.rs 1,564 行 + 子モジュール 14 個 |
 | 6. event_runtime 分割 | 済 | 周辺関数を 8 個の子モジュールへ。`exec_command_pc` の 186 アームを 1 コマンド 1 関数にして `commands/` 以下の 10 カテゴリへ（mod.rs 約 7,000 → 1,687 行）。`eval_script_function` の 133 関数も `functions/` 以下の 5 カテゴリへ |
-| 7. ビューモデル・ジオメトリを scene/ へ | 未 | |
+| 7. ビューモデル・ジオメトリを scene/ へ | 済 | `build_status_detail` / `reaction_window_data` / `weapon_select_window_data` を `scene/{unit_detail,reaction,weapon_select}.rs` へ（戦闘ルールの `attack_hit_forecast` / `build_weapon_rows` は app に残す）。反撃・武器選択・Ask メニューのジオメトリとクリック判定を `dialog.rs` から、コマンドメニューのジオメトリを `command_menu.rs` から `scene/` へ。`Party::color` も `scene::map_view::party_color` へ |
 | 8. B1〜B3 修正 | 済 | 回帰テスト 4 件を追加（すべて修正前に失敗することを確認） |
 | 9. `.eve` コマンドをドメイン経路へ | 一部 | SpecialPower / Mind → `execute_spirit_by_event`、Transform → `set_unit_form`、UseAbility → `execute_ability`、Attack → `script_attack`（`resolve_strike` を本線攻撃と共有）。マップ攻撃は範囲計算を `combat::map_attack_area`、本体を `App::execute_map_attack` へ移動 |
 | 10. 戦闘の一本化 | 一部 | 予測の組み立てを `strike_preview`、命中後の判定（クリティカル / 即死 / 切り払い / 防御特性）を `resolve_strike` に一本化（本線攻撃・援護攻撃・反撃・先制反撃・`.eve Attack`。攻撃の種類は `StrikeKind`）。src-web の予測表示は未 |

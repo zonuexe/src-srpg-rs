@@ -161,7 +161,7 @@ impl App {
     /// 命中予測 (`predict_with_status_terrain` + 散布補正) を使い、反撃ウィンドウの
     /// 命中率表示に用いる (読み取り専用、盤面は変更しない)。射程内に使用可能武器が
     /// 無ければ `None`。
-    pub(super) fn attack_hit_forecast(
+    pub(crate) fn attack_hit_forecast(
         &self,
         atk_idx: usize,
         def_idx: usize,
@@ -221,48 +221,6 @@ impl App {
             weapon.power,
             preview.hit_chance.clamp(0, 100),
         ))
-    }
-
-    /// 反撃手段選択中なら、ウィンドウ表示用データを構築する (front が描画)。
-    /// `pending_reaction` が無い / 攻防ユニットを解決できない場合は `None`。
-    pub fn reaction_window_data(&self) -> Option<crate::scene::reaction::ReactionWindowData> {
-        use crate::scene::reaction::{ReactionOption, ReactionWindowData};
-        let pr = self.pending_reaction.as_ref()?;
-        let atk_idx = self.database.idx_by_uid(&pr.atk_uid)?;
-        let def_idx = self
-            .database
-            .unit_instances
-            .iter()
-            .position(|u| !u.off_map && (u.x, u.y) == pr.target_tile)?;
-        let (weapon, power, base_hit) = self.attack_hit_forecast(atk_idx, def_idx)?;
-        let attacker = {
-            let a = &self.database.unit_instances[atk_idx];
-            (a.x, a.y)
-        };
-        let options = pr
-            .modes
-            .iter()
-            .map(|m| {
-                // 回避は命中半減 (SRC 反撃モード / attack_resolve_and_run の def_mode="回避")。
-                let hit = if m == "回避" {
-                    (base_hit / 2).max(0)
-                } else {
-                    base_hit
-                };
-                ReactionOption {
-                    label: m.clone(),
-                    hit_pct: hit,
-                }
-            })
-            .collect();
-        Some(ReactionWindowData {
-            attacker,
-            defender: pr.target_tile,
-            weapon,
-            power,
-            base_hit,
-            options,
-        })
     }
 
     /// `weapon` を `dist` の目標へ `post_move` 状況で使用可能か (射程 / チャージ /
@@ -403,7 +361,7 @@ impl App {
 
     /// 武器選択窓の行データを構築する (機体の武装順)。命中率は
     /// `predict_with_status_terrain` (+散布補正) を読み取り専用で評価する。
-    pub(super) fn build_weapon_rows(
+    pub(crate) fn build_weapon_rows(
         &self,
         atk_idx: usize,
         def_idx: usize,
@@ -493,30 +451,6 @@ impl App {
                 }
             })
             .collect()
-    }
-
-    /// 武器選択中なら、ウィンドウ表示用データを構築する (front が描画)。
-    pub fn weapon_select_window_data(
-        &self,
-    ) -> Option<crate::scene::weapon_select::WeaponSelectWindowData> {
-        use crate::scene::weapon_select::WeaponSelectWindowData;
-        let pws = self.pending_weapon_select.as_ref()?;
-        let atk_idx = self.database.idx_by_uid(&pws.atk_uid)?;
-        let atk_party = self.database.unit_instances[atk_idx].party;
-        let def_idx = self.database.unit_instances.iter().position(|u| {
-            !u.off_map && (u.x, u.y) == pws.target && u.party.is_hostile_to(atk_party)
-        })?;
-        let attacker = {
-            let a = &self.database.unit_instances[atk_idx];
-            (a.x, a.y)
-        };
-        let rows = self.build_weapon_rows(atk_idx, def_idx, pws.post_move);
-        Some(WeaponSelectWindowData {
-            attacker,
-            defender: pws.target,
-            rows,
-            is_counter: pws.counter.is_some(),
-        })
     }
 
     /// 武器選択メニュー応答を処理する (`respond_dialog` から委譲)。`choice` は

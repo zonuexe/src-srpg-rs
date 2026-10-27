@@ -358,7 +358,9 @@ fn draw_action_overlays(
 
 /// コマンドメニューを画面左上の決まった位置に描画。
 fn draw_command_menu(ctx: &CanvasRenderingContext2d, menu: &src_core::CommandMenu) {
-    use src_core::command_menu::{MENU_ITEM_HEIGHT, MENU_PADDING, MENU_WIDTH, MENU_X, MENU_Y};
+    use src_core::scene::command_menu::{
+        MENU_ITEM_HEIGHT, MENU_PADDING, MENU_WIDTH, MENU_X, MENU_Y,
+    };
     let (labels, title): (Vec<String>, &str) = match menu {
         src_core::CommandMenu::Unit { items, .. } => (
             items.iter().map(|a| a.label().to_string()).collect(),
@@ -1498,14 +1500,14 @@ fn draw_combat_window(
 /// 反撃手段選択ウィンドウ (オリジナル SRC 戦闘窓風)。中央寄せの明色 VB5 窓に、
 /// タイトル (反撃：<武器> 攻撃力=N 命中率=N%) + 攻防 2 機の HUD + 防御側
 /// 「機体 パイロット」+ 各選択肢 (反撃/回避/防御/援護防御) を命中率付きで描く。
-/// 選択肢行のジオメトリは src-core `dialog::reaction_choice_at` と共有する。
+/// 選択肢行のジオメトリは src-core `scene::reaction::reaction_choice_at` と共有する。
 fn draw_reaction_window(
     ctx: &CanvasRenderingContext2d,
     database: &GameDatabase,
     data: &src_core::scene::reaction::ReactionWindowData,
     assets: &Assets,
 ) {
-    use src_core::dialog::{
+    use src_core::scene::reaction::{
         reaction_win_x, REACTION_OPT_H, REACTION_OPT_TOP, REACTION_PAD, REACTION_WIN_H,
         REACTION_WIN_W, REACTION_WIN_Y,
     };
@@ -1592,7 +1594,7 @@ fn draw_reaction_window(
 
 /// 武器選択ウィンドウ (オリジナル SRC 武器選択窓風)。中央寄せの明色 VB5 窓に、
 /// タイトル + 攻防 2 機の HUD + 武器表 (名称/攻撃/命中/CT/弾EN/適応/分類)。
-/// ×=使用不可 (グレー)。行のジオメトリは src-core `dialog::weapon_select_choice_at`
+/// ×=使用不可 (グレー)。行のジオメトリは src-core `scene::weapon_select::weapon_select_choice_at`
 /// と共有する。
 fn draw_weapon_select_window(
     ctx: &CanvasRenderingContext2d,
@@ -1600,7 +1602,7 @@ fn draw_weapon_select_window(
     data: &src_core::scene::weapon_select::WeaponSelectWindowData,
     assets: &Assets,
 ) {
-    use src_core::dialog::{
+    use src_core::scene::weapon_select::{
         weapon_win_x, WEAPON_PAD, WEAPON_ROW_H, WEAPON_ROW_TOP, WEAPON_WIN_H, WEAPON_WIN_W,
         WEAPON_WIN_Y,
     };
@@ -1886,7 +1888,7 @@ fn draw_map_view(
                     cell,
                 );
                 // 勢力色の細枠
-                ctx.set_stroke_style_str(u.party.color());
+                ctx.set_stroke_style_str(src_core::scene::map_view::party_color(u.party));
                 ctx.set_line_width(2.0);
                 ctx.stroke_rect(px as f64 + pad, py as f64 + pad, cell, cell);
                 // 勢力ラベル (右下に小さく)
@@ -2942,7 +2944,7 @@ fn draw_unit_chip(ctx: &CanvasRenderingContext2d, x: i64, y: i64, u: &UnitInstan
     let size = f64::from(TILE_SIZE) - pad * 2.0;
 
     // 角丸風（Canvas2D の rect だけで擬似的に表現: 内側を fill + 外周を stroke）
-    ctx.set_fill_style_str(u.party.color());
+    ctx.set_fill_style_str(src_core::scene::map_view::party_color(u.party));
     ctx.fill_rect(xf, yf, size, size);
     ctx.set_stroke_style_str("rgba(0,0,0,0.55)");
     ctx.set_line_width(1.0);

@@ -21,6 +21,17 @@
 
 pub const TILE_SIZE: u32 = 32;
 
+/// 陣営ごとのユニット枠・塗りの色 (CSS カラー)。
+pub const fn party_color(party: crate::Party) -> &'static str {
+    match party {
+        crate::Party::Player => "#1e88e5",
+        // ＮＰＣ はプレイヤー側陣営。緑系で味方と区別。
+        crate::Party::Npc => "#43a047",
+        crate::Party::Enemy => "#e53935",
+        crate::Party::Neutral => "#fdd835",
+    }
+}
+
 /// ステータスバーは廃止し、ターン/ステージ情報は右パネル先頭に表示する。
 /// 後方互換のため定数だけ残し、0 を割り当てる（render 側でこの値を加算しても
 /// 影響しない）。
@@ -64,6 +75,23 @@ pub const MESSAGE_BOX_Y: u32 = STATUS_PANEL_Y + STATUS_PANEL_H;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn party_color_is_distinct_per_party() {
+        let colors = [
+            party_color(crate::Party::Player),
+            party_color(crate::Party::Npc),
+            party_color(crate::Party::Enemy),
+            party_color(crate::Party::Neutral),
+        ];
+        for (i, a) in colors.iter().enumerate() {
+            for (j, b) in colors.iter().enumerate() {
+                if i != j {
+                    assert_ne!(a, b);
+                }
+            }
+        }
+    }
 
     #[test]
     fn dimensions_match_constants() {
