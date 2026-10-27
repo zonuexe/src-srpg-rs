@@ -40,59 +40,39 @@ fn exec_goto(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
 fn exec_if(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     let Cmd {
         args,
-        xargs,
+        raw_args,
         line,
         pc,
         stmts,
         labels,
         ..
     } = *c;
-    // `If lhs op rhs Then` の Then は省略可。条件が偽なら対応する
-    // ElseIf / Else / EndIf までスキップ。
-    //
-    // 単一行 If 形式もサポート:
-    //   `If cond Then stmt`  / `If (cond) stmt`  / `If lhs op rhs stmt`
-    // この場合は EndIf を持たず、条件が真なら stmt をその場で実行、
-    // 偽なら何もせず次行へ進む。
-    // 条件 / 本体の境界は **展開前** の `args` で判定する。
-    // `expand_vars` 後の `xargs` は `Instr(...)` 等の関数呼出が値に
-    // 潰れており、`If Instr(...) Exit` の「条件 1 トークン + 本体」
-    // 構造が失われてブロック If と誤認されてしまうため。
-    let (raw_cond, raw_body) = split_if_cond_body(args);
-    let cond_len = raw_cond.len();
-    // 本体開始位置 (cond と body の間に `Then` が挟まる場合がある)。
-    let body_start = args.len().saturating_sub(raw_body.len());
-    let (cond_tokens, body_tokens): (Vec<String>, Vec<String>) =
-        if xargs.len() == args.len() && body_start <= xargs.len() {
-            (xargs[..cond_len].to_vec(), xargs[body_start..].to_vec())
-        } else {
-            // `&` 連結等で展開後トークン数がズレた場合は xargs で分割。
-            split_if_cond_body(xargs)
-        };
-    // `Call(<label>)` を含む条件トークンを事前に同期実行で置換する。
-    // `eval_condition_args_with` は `&App` を取るため、その前に処理が必要。
-    let preprocessed_cond_tokens: Vec<String> = {
-        let joined = cond_tokens.join(" ");
-        if joined.to_ascii_lowercase().contains("call(") {
-            let replaced = preprocess_call_expressions_in_condition(app, &joined);
-            split_balanced(&replaced)
-        } else {
-            cond_tokens.clone()
-        }
-    };
-    let cond = eval_condition_args_with(app, &preprocessed_cond_tokens);
-    if body_tokens.is_empty() {
+    // `If cond Then` (ブロック) / `If cond Then stmt` / `If cond Exit` / `If cond Goto label`。
+    // 本移植は `Then` を省いた `If lhs op rhs stmt` も受け付ける。条件が偽なら対応する
+    // ElseIf / Else / EndIf までスキップする。
+    // 条件と本体の境界は引数トークンで判定し、条件は原文トークン (クォート付き) を
+    // 統一評価器 (`eval::if_condition`) で評価する (原典 `ExecIfCmd`)。
+    let (cond, body) = split_if_cond_body(args);
+    let body_start = args.len() - body.len();
+    let cond = condition_with_calls(app, &raw_args[..cond.len()].join(" "));
+    if body.is_empty() {
         if cond {
             Ok(pc + 1)
         } else {
             skip_to_else_or_endif(app, pc, stmts, line)
         }
     } else if cond {
-        // body を inline 実行。args は expand 済なので二重展開を避け
-        // られないが、リテラルは idempotent なので実害は小さい。
-        let body_name = body_tokens[0].clone();
-        let body_rest: Vec<String> = body_tokens[1..].to_vec();
-        exec_command_pc(app, &body_name, &body_rest, line, pc, stmts, labels)
+        // 同じ行の本体 (`Exit` / `Goto label` / 任意のコマンド) を実行する。
+        exec_command_pc(
+            app,
+            &args[body_start],
+            &args[body_start + 1..],
+            &raw_args[body_start + 1..],
+            line,
+            pc,
+            stmts,
+            labels,
+        )
     } else {
         Ok(pc + 1)
     }
@@ -434,6 +414,7 @@ fn exec_skip(_app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
 fn exec_do(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     let Cmd {
         xargs,
+        raw_args,
         line,
         pc,
         stmts,
@@ -446,8 +427,7 @@ fn exec_do(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     if xargs.len() >= 2 {
         let kind = xargs[0].to_ascii_lowercase();
         if kind == "while" || kind == "until" {
-            let cond_text = strip_outer_parens(&xargs[1..].join(" "));
-            let cond = eval_inline_condition_mut(app, &cond_text);
+            let cond = loop_condition(app, &raw_args[1..]);
             let should_skip = (kind == "while" && !cond) || (kind == "until" && cond);
             if should_skip {
                 return skip_to_matching("do", "loop", pc, stmts, line);
@@ -462,6 +442,7 @@ fn exec_do(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
 fn exec_loop(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     let Cmd {
         xargs,
+        raw_args,
         line,
         pc,
         stmts,
@@ -472,8 +453,7 @@ fn exec_loop(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     // SRC.Sharp 準拠: While / Until 以外のキーワードはエラー。
     let goto_back = if xargs.len() >= 2 {
         let kind = xargs[0].to_ascii_lowercase();
-        let cond_text = strip_outer_parens(&xargs[1..].join(" "));
-        let cond = eval_inline_condition_mut(app, &cond_text);
+        let cond = loop_condition(app, &raw_args[1..]);
         if kind == "while" {
             cond
         } else if kind == "until" {
@@ -585,4 +565,16 @@ fn exec_require(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         apply_required_file(app, path);
     }
     Ok(pc + 1)
+}
+
+/// `Do While` / `Loop Until` 等の条件 (原典 `GetArgAsLong(3) <> 0`)。原典は条件を 1 項
+/// (`(n < 10)`) で書くが、本移植は空白を含む `n < 10` も 1 つの式として受け付ける。
+fn loop_condition(app: &mut App, raw: &[String]) -> bool {
+    let text = raw.join(" ");
+    let text = if text.to_ascii_lowercase().contains("call(") {
+        preprocess_call_expressions_in_condition(app, &text)
+    } else {
+        text
+    };
+    eval::value_as_long(app, &text) != 0
 }

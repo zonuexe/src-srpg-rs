@@ -79,21 +79,16 @@ fn fn_int(app: &App, c: &FnCall) -> Option<String> {
 
 fn fn_eval(app: &App, c: &FnCall) -> Option<String> {
     let FnCall { args, .. } = *c;
-    // `Eval(expr)` — 式を評価。SRC では式の左辺としても使えるが
-    // ここでは値式としてのみ実装。
-    // 1) 数値式として評価できれば数値を返す (小数も保持)
-    // 2) 単独識別子なら script_var を引く
-    // 3) いずれにも該当しなければ生文字列をそのまま返す
-    let s = fn_arg_value(app, args.first()?);
-    if let Some(n) = try_eval_num(&s) {
-        return Some(format_num(n));
-    }
-    let t = s.trim();
-    let v = app.script_var(t);
-    if !v.is_empty() {
-        return Some(v.to_string());
-    }
-    Some(s)
+    // `Eval(expr)` (原典 `CallFunction` の "eval"): 引数を評価して得た文字列を、
+    // もう一度式として評価する (`Eval("n + 1")` / `Eval(式を入れた変数)`)。
+    let arg = args.first()?.trim();
+    let is_term = crate::event_runtime::eval::list_split(arg).is_some_and(|t| t.len() == 1);
+    let buf = if is_term {
+        crate::event_runtime::eval::eval_term(app, arg, crate::event_runtime::eval::Ty::Str).s
+    } else {
+        crate::event_runtime::eval::value_as_string(app, arg)
+    };
+    Some(crate::event_runtime::eval::value_as_string(app, buf.trim()))
 }
 
 fn fn_round(app: &App, c: &FnCall) -> Option<String> {
@@ -246,14 +241,16 @@ fn fn_is_numeric(app: &App, c: &FnCall) -> Option<String> {
 fn fn_iif(app: &App, c: &FnCall) -> Option<String> {
     let FnCall { args, .. } = *c;
     // `IIF(cond, a, b)` — 条件式が真なら a、偽なら b。
-    // SRC.Sharp 準拠: cond は比較式 (`5 > 3`, `x = 1` 等) を含む完全な
-    // 条件式として評価する。`eval_inline_condition` を使用。
+    // 原典 `CallFunction` の "iif": 条件は `If` と同じ規則、結果は選んだ側の式の値。
     if args.len() < 3 {
         return None;
     }
-    let cond = eval_inline_condition(app, args[0]);
+    let cond = crate::event_runtime::eval::if_condition(app, args[0].trim());
     let chosen = if cond { args[1] } else { args[2] };
-    Some(fn_arg_value(app, chosen))
+    Some(crate::event_runtime::eval::value_as_string(
+        app,
+        chosen.trim(),
+    ))
 }
 
 fn fn_not(_app: &App, c: &FnCall) -> Option<String> {

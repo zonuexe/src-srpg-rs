@@ -616,7 +616,7 @@ fn exec_setability(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     if xargs.len() < 3 {
         return Ok(pc + 1);
     }
-    exec_command_pc(app, "SetSkill", xargs, line, pc, stmts, labels)
+    exec_command_pc(app, "SetSkill", xargs, xargs, line, pc, stmts, labels)
 }
 
 fn exec_clearability(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
@@ -633,7 +633,7 @@ fn exec_clearability(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     if xargs.len() < 2 {
         return Ok(pc + 1);
     }
-    exec_command_pc(app, "ClearSkill", xargs, line, pc, stmts, labels)
+    exec_command_pc(app, "ClearSkill", xargs, xargs, line, pc, stmts, labels)
 }
 
 fn exec_setstock(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {

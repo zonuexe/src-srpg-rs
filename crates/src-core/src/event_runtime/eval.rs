@@ -17,8 +17,9 @@
 //! 値は「期待する型」(`Ty::Str` / `Ty::Num`) を受け取り、その型で結果を返す
 //! (`GetValueAsString` / `GetValueAsDouble` / `GetValueAsLong` に相当)。
 //!
-//! 原典との意図的な差: なし。C# 移植 (SRC.Sharp) とは `\` / `Mod` の非整数
-//! オペランドの扱いが異なる (VB6 は整数へ丸めてから演算する。本実装は VB6 準拠)。
+//! 原典との意図的な差: クォートの外の `$(...)` も展開する (`eval_term`)。
+//! C# 移植 (SRC.Sharp) とは `\` / `Mod` の非整数オペランドの扱いが異なる
+//! (VB6 は整数へ丸めてから演算する。本実装は VB6 準拠)。
 //!
 //! ユーザ定義関数は `&mut App` を要するため、呼び出し側が事前に
 //! `preprocess_user_functions` で値へ畳み込んでおく。
@@ -322,6 +323,15 @@ pub(super) fn eval_term(app: &App, expr: &str, ety: Ty) -> Val {
         }
         _ => {}
     }
+    // 本移植の拡張: クォートの外の `$(...)` も展開してから項として評価する
+    // (`If $(x) = 1`)。原典では `$(x)` という名前の未定義変数 (文字列) になるため、
+    // 実シナリオはこの書き方をしない (条件式 16,625 行で 0 件。`"..."` 内だけで使う)。
+    if expr.contains("$(") {
+        let replaced = replace_sub_expression(app, expr);
+        if replaced != expr {
+            return eval_term(app, &replaced, ety);
+        }
+    }
     if let Some(v) = call_function(app, expr, ety) {
         return v;
     }
@@ -509,6 +519,15 @@ pub(super) fn if_condition(app: &App, expr: &str) -> bool {
             Some(on_board) => on_board,
             None => term_as_long(app, t) != 0,
         },
+        // 本移植の拡張: `IsDead X` / `Killed X` / `IsAlive X` / `Alive X` (ユニットの生死)。
+        [pred, t] if is_unit_predicate(pred) => {
+            let alive = unit_alive(app, t);
+            if pred.eq_ignore_ascii_case("isalive") || pred.eq_ignore_ascii_case("alive") {
+                alive
+            } else {
+                !alive
+            }
+        }
         [not, t] if not.eq_ignore_ascii_case("not") && !is_expr_head(t) => {
             match pilot_on_board(app, t) {
                 Some(on_board) => !on_board,
@@ -517,6 +536,12 @@ pub(super) fn if_condition(app: &App, expr: &str) -> bool {
         }
         _ => value_as_long(app, expr) != 0,
     }
+}
+
+fn is_unit_predicate(t: &str) -> bool {
+    ["isdead", "killed", "isalive", "alive"]
+        .iter()
+        .any(|p| t.eq_ignore_ascii_case(p))
 }
 
 /// `name` がパイロット名なら、そのパイロットのユニットが盤上にいるかを返す。
@@ -532,4 +557,15 @@ fn pilot_on_board(app: &App, name: &str) -> Option<bool> {
         return None;
     }
     Some(db.unit_instances.iter().any(|u| u.pilot_name == name))
+}
+
+/// `If` / `ElseIf` の条件を評価する。`Call(<label>)` があれば先にサブルーチンを実行して
+/// 返り値へ置き換える (`&mut App` が要るため評価器の外で行う)。
+pub(super) fn condition_with_calls(app: &mut App, text: &str) -> bool {
+    if text.to_ascii_lowercase().contains("call(") {
+        let processed = preprocess_call_expressions_in_condition(app, text);
+        if_condition(app, &processed)
+    } else {
+        if_condition(app, text)
+    }
 }

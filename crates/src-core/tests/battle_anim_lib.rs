@@ -106,7 +106,7 @@ fn battle_anim_resolution_matches_real_lib_labels() {
 #[test]
 fn gba_closeup_is_gated_on_zenshin_setting() {
     // GBA クローズアップ（全身戦闘アニメ）は `設定[全身戦闘アニメ] = オン` で分岐する。
-    // 未設定だと 2D 経路（武器個別サブルーチン `戦闘アニメ_ビームライフル準備` 等を Call）
+    // 未設定だと 2D 経路（武器個別サブルーチン `戦闘アニメ_小ビーム攻撃` 等を Call）
     // を通り、それらは BattleAnime Lib 外なので「Goto 先未検出」で停止する＝
     // クローズアップ経路に入っていない証拠。設定を ON にすると 2D 経路の早期 return /
     // 武器個別 Call を踏まずクローズアップ本体（描画 primitives）へ進む。
@@ -124,8 +124,10 @@ fn gba_closeup_is_gated_on_zenshin_setting() {
     let pc = event_runtime::library_append(&mut app_off, &stmts);
     let off = event_runtime::run_from_pc(&mut app_off, pc);
     let off_err = off.err().map(|e| e.message).unwrap_or_default();
+    // 引数なしの Call なので `Args(2)` は空 (原典: 範囲外の Args は "")。2D 経路の
+    // `If Not Args(2) = "-" And Not Args(2) = ""` は偽になり、`戦闘アニメ_小ビーム攻撃` へ進む。
     assert!(
-        off_err.contains("戦闘アニメ_ビームライフル準備"),
+        off_err.contains("戦闘アニメ_小ビーム攻撃"),
         "全身 OFF では 2D 経路の武器個別ラベルへ Goto するはず: {off_err:?}"
     );
 

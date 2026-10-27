@@ -24,6 +24,8 @@ pub(super) struct Cmd<'a> {
     pub lname: &'a String,
     /// ユーザ定義関数だけを解決した、変数展開前の引数。
     pub args: &'a Vec<String>,
+    /// `args` と同じ並びの原文トークン (クォートを外していない)。式評価器に渡す。
+    pub raw_args: &'a Vec<String>,
     /// 変数展開・`&` 連結の畳み込みを済ませた引数。
     pub xargs: &'a Vec<String>,
     pub line: usize,

@@ -119,7 +119,13 @@ pub(super) fn skip_to_else_or_endif(
     let mut depth = 0usize;
     let mut i = pc + 1;
     while i < stmts.len() {
-        if let EventStatement::Command { name, args, .. } = &stmts[i] {
+        if let EventStatement::Command {
+            name,
+            args,
+            raw_args,
+            ..
+        } = &stmts[i]
+        {
             let l = name.to_ascii_lowercase();
             match l.as_str() {
                 // 単一行 If (`If cond Goto ...` 等) は EndIf を持たないので数えない。
@@ -128,14 +134,19 @@ pub(super) fn skip_to_else_or_endif(
                 "endif" if depth == 0 => return Ok(i + 1),
                 "endif" => depth -= 1,
                 "elseif" if depth == 0 => {
-                    // 変数展開 + `&` 連結 → 条件評価
-                    let pre: Vec<String> = args
+                    // `If` と同じく原文トークンの条件部を統一評価器で評価する。
+                    let raw = if raw_args.len() == args.len() {
+                        raw_args
+                    } else {
+                        args
+                    };
+                    let cond_len = split_if_cond_body(args).0.len();
+                    let cond_text: String = raw[..cond_len]
                         .iter()
                         .map(|a| preprocess_user_functions(app, a))
-                        .collect();
-                    let expanded: Vec<String> = pre.iter().map(|a| expand_arg(app, a)).collect();
-                    let xargs = collapse_concat(expanded);
-                    if eval_condition_args_with(app, &xargs) {
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    if condition_with_calls(app, &cond_text) {
                         return Ok(i + 1);
                     }
                     // ElseIf 偽: 引き続き走査

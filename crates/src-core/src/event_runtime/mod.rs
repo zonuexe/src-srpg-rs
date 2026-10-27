@@ -219,8 +219,7 @@ pub fn eval_if_condition(app: &App, expr: &str) -> bool {
 /// 表示可否を返す (`true` で表示)。原典 SRC: 「*condition* の値が 0 でない
 /// ときにのみコマンドがメニューに表示されます」。`None` は無条件で `true`。
 ///
-/// 条件式は `expand_vars` で関数呼び出し / 変数参照 / 比較演算子を解決後、
-/// `try_eval_int` で整数化する。0 → 非表示、それ以外 (1 / 正の値) → 表示。
+/// 条件式は統一評価器 (`eval`) で整数として評価し、0 → 非表示、それ以外 → 表示。
 pub fn evaluate_command_condition(app: &mut App, condition: Option<&str>) -> bool {
     let Some(cond) = condition else {
         return true;
@@ -238,14 +237,8 @@ pub fn evaluate_command_condition(app: &mut App, condition: Option<&str>) -> boo
         cond.to_string()
     };
     let processed = preprocess_user_functions(app, &processed);
-    let expanded = expand_vars(app, &processed);
-    // 数値ならそのまま 0 判定。expand_vars が `1` / `0` / `False` 等の
-    // 文字列に解決するケースを順に許容する。
-    if let Some(n) = try_eval_int(&expanded) {
-        return n != 0;
-    }
-    let s = expanded.trim().to_ascii_lowercase();
-    !matches!(s.as_str(), "" | "0" | "false" | "no" | "いいえ")
+    // 原典 `Command.bas`: `GetValueAsLong(.Para(4)) <> 0`。
+    eval::value_as_long(app, &processed) != 0
 }
 
 /// 条件式文字列中の `Call(<label>)` パターンを検出し、
@@ -279,6 +272,23 @@ fn preprocess_call_expressions_in_condition(app: &mut App, src: &str) -> String 
         i = ch_end;
     }
     result
+}
+
+/// 引数を自前で (原文トークンから) 評価するコマンドか。`exec_command_pc` はこれらの
+/// 引数を事前展開しない。
+fn evaluates_raw_args(lname: &str) -> bool {
+    matches!(lname, "if" | "do" | "loop")
+}
+
+/// `raw` (原文トークン) が `"..."` / `` `...` `` で囲まれていれば、前処理済みの
+/// `arg` を同じクォートで包んで返す。囲まれていなければ `arg` をそのまま返す。
+fn requote_like(raw: &str, arg: &str) -> String {
+    for q in ['"', '`'] {
+        if raw.len() >= 2 && raw.starts_with(q) && raw.ends_with(q) {
+            return format!("{q}{arg}{q}");
+        }
+    }
+    arg.to_string()
 }
 
 /// ユーザ定義関数の再帰段数上限。相互再帰の暴走を防ぐ番人。
@@ -417,12 +427,15 @@ fn call_label_sync_inner(app: &mut App, pc: usize, args: &[String]) -> String {
                 name,
                 args,
                 line_num,
+                raw_args,
             } => {
                 if canonical_label_full(&name, &args).is_some() {
                     curr_pc += 1;
                     continue;
                 }
-                match exec_command_pc(app, &name, &args, line_num, curr_pc, stmts, labels) {
+                match exec_command_pc(
+                    app, &name, &args, &raw_args, line_num, curr_pc, stmts, labels,
+                ) {
                     Ok(next_pc) => {
                         curr_pc = next_pc;
                     }
@@ -726,6 +739,7 @@ fn run_loop_inner(app: &mut App, mut ctx: ScriptContext) -> Result<ExecOutcome, 
                 name,
                 args,
                 line_num,
+                raw_args,
             } => {
                 // 単一トークン (`プロローグ:` / `@onsen`) も複数トークン
                 // (`ターン 1:` / `Destruction ガロ:`) も canonical_label_full
@@ -746,6 +760,7 @@ fn run_loop_inner(app: &mut App, mut ctx: ScriptContext) -> Result<ExecOutcome, 
                     app,
                     &name,
                     &args,
+                    &raw_args,
                     line_num,
                     ctx.pc,
                     &ctx.statements,
@@ -820,10 +835,12 @@ fn collect_labels(stmts: &[EventStatement]) -> HashMap<String, usize> {
 /// (Goto / Continue のラベル解決は `App::script_library` のファイルスコープ版を
 /// 使うため本パラメタは直接参照しない)。再帰専用なので clippy 警告を抑制する。
 #[allow(clippy::only_used_in_recursion)]
+#[allow(clippy::too_many_arguments)] // 1 行分の実行文脈 (引数・原文・位置・本体・ラベル表) を素直に列挙。
 fn exec_command_pc(
     app: &mut App,
     name: &str,
     args: &[String],
+    raw_args: &[String],
     line: usize,
     pc: usize,
     stmts: &[EventStatement],
@@ -848,10 +865,18 @@ fn exec_command_pc(
         // `__assign` は `Set` と同じハンドラへ流すが「`=` 代入形」であることを伝える
         // 内部コマンド名。`Set var value` と異なり RHS は常に式なので括弧無し算術
         // (`資本金 = 資本金 - 営業収支`) も数値化される。
+        let assign_args = assign_sugar_args(name, &rhs);
+        // 原文トークンも同じ形 (`name` + `=` の右側) に揃える。
+        let assign_raw: Vec<String> = if raw_args.len() == args.len() {
+            assign_sugar_args(name, &raw_args[1..])
+        } else {
+            assign_args.clone()
+        };
         return exec_command_pc(
             app,
             "__assign",
-            &assign_sugar_args(name, &rhs),
+            &assign_args,
+            &assign_raw,
             line,
             pc,
             stmts,
@@ -866,13 +891,31 @@ fn exec_command_pc(
         .iter()
         .map(|a| preprocess_user_functions(app, a))
         .collect();
-    let expanded: Vec<String> = args.iter().map(|a| expand_arg(app, a)).collect();
-    let xargs: Vec<String> = collapse_concat(expanded);
-    // 制御フロー命令を case-insensitive で先に処理。
+    // 原文トークンは、クォートで囲まれていたものだけ前処理済みの引数をクォートで
+    // 包み直す (ユーザ定義関数を 2 度実行しないため)。並びが合わなければ引数で代用。
+    let raw_args: Vec<String> = if raw_args.len() == args.len() {
+        raw_args
+            .iter()
+            .zip(&args)
+            .map(|(raw, a)| requote_like(raw, a))
+            .collect()
+    } else {
+        args.clone()
+    };
     let lname = name.to_ascii_lowercase();
+    // 条件式を原文トークンから統一評価器で評価するコマンドは、ここで引数を展開しない。
+    // 展開すると `KeyState(2)` (ワンショット消費) や `Random()` (乱数を進める) が
+    // 評価器と合わせて 2 度呼ばれてしまう。
+    let xargs: Vec<String> = if evaluates_raw_args(&lname) {
+        args.clone()
+    } else {
+        let expanded: Vec<String> = args.iter().map(|a| expand_arg(app, a)).collect();
+        collapse_concat(expanded)
+    };
     let c = commands::Cmd {
         lname: &lname,
         args: &args,
+        raw_args: &raw_args,
         xargs: &xargs,
         line,
         pc,
@@ -1678,6 +1721,7 @@ fn err(line_num: usize, message: &str) -> ScriptError {
 mod blocks;
 mod commands;
 mod eval;
+use eval::condition_with_calls;
 mod expression;
 mod functions;
 mod info;
