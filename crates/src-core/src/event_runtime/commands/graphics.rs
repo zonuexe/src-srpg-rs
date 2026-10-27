@@ -505,7 +505,7 @@ fn exec_drawwidth(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     let Cmd { xargs, pc, .. } = *c;
     let n: f64 = xargs
         .first()
-        .map(|s| eval_int_expr(s) as f64)
+        .map(|s| eval_int_expr_app(app, s) as f64)
         .unwrap_or(1.0);
     app.script_overlay_mut()
         .push(crate::script_overlay::DrawCmd::SetLineWidth(n.max(0.5)));

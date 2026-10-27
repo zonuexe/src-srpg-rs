@@ -383,8 +383,8 @@ fn exec_useability(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
             if let Some((parent_uid, party, px, py)) = parent_pos {
                 let (sx, sy) = if xargs.len() >= 5 {
                     (
-                        parse_u32(xargs, 3, line).unwrap_or(px),
-                        parse_u32(xargs, 4, line).unwrap_or(py),
+                        parse_u32(app, xargs, 3, line).unwrap_or(px),
+                        parse_u32(app, xargs, 4, line).unwrap_or(py),
                     )
                 } else {
                     (px, py)

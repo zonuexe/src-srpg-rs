@@ -156,7 +156,7 @@ fn exec_incr(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         let s = xargs[1].trim();
         s.parse::<f64>()
             .ok()
-            .or_else(|| try_eval_int(s).map(|v| v as f64))
+            .or_else(|| eval::try_numeric(app, s))
             .unwrap_or(0.0)
     } else {
         1.0

@@ -893,8 +893,8 @@ fn exec_movunit(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         return Err(err(line, "MoveUnit 命令は 3 引数必要 (name x y)。"));
     }
     let target = &xargs[0];
-    let nx = parse_u32(xargs, 1, line)?;
-    let ny = parse_u32(xargs, 2, line)?;
+    let nx = parse_u32(app, xargs, 1, line)?;
+    let ny = parse_u32(app, xargs, 2, line)?;
     let uid = app
         .database()
         .unit_instances
@@ -922,14 +922,14 @@ fn exec_move(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     let (target_key, nx, ny) = match xargs.len() {
         0 | 1 => return Err(err(line, "Move 命令は最低 2 引数必要 (x y)。")),
         2 => {
-            let nx = parse_u32(xargs, 0, line)?;
-            let ny = parse_u32(xargs, 1, line)?;
+            let nx = parse_u32(app, xargs, 0, line)?;
+            let ny = parse_u32(app, xargs, 1, line)?;
             (app.selected_unit_for_event().to_string(), nx, ny)
         }
         _ => {
             let target = xargs[0].clone();
-            let nx = parse_u32(xargs, 1, line)?;
-            let ny = parse_u32(xargs, 2, line)?;
+            let nx = parse_u32(app, xargs, 1, line)?;
+            let ny = parse_u32(app, xargs, 2, line)?;
             (target, nx, ny)
         }
     };

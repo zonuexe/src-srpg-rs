@@ -712,7 +712,7 @@ fn exec_decreasemorale(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         return Err(err(line, "DecreaseMorale には対象名が必要。"));
     }
     let delta = if xargs.len() >= 2 {
-        parse_i32_at(&xargs[1], line)?
+        parse_i32_at(app, &xargs[1], line)?
     } else {
         5
     };
@@ -738,7 +738,7 @@ fn exec_damage(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         return Err(err(line, "Damage 命令は 2 引数必要 (name amount)。"));
     }
     let target = &xargs[0];
-    let amount = parse_i64_at(&xargs[1], line)?;
+    let amount = parse_i64_at(app, &xargs[1], line)?;
     apply_damage(app, target, amount);
     Ok(pc + 1)
 }
@@ -752,7 +752,7 @@ fn exec_heal(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         return Err(err(line, "Heal 命令は 2 引数必要 (name amount)。"));
     }
     let target = &xargs[0];
-    let amount = parse_i64_at(&xargs[1], line)?;
+    let amount = parse_i64_at(app, &xargs[1], line)?;
     apply_damage(app, target, -amount);
     Ok(pc + 1)
 }
@@ -867,7 +867,7 @@ fn exec_increasemorale(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         return Err(err(line, "IncreaseMorale には対象名が必要。"));
     }
     let delta = if xargs.len() >= 2 {
-        parse_i32_at(&xargs[1], line)?
+        parse_i32_at(app, &xargs[1], line)?
     } else {
         5
     };
@@ -891,7 +891,7 @@ fn exec_expup(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     if xargs.len() < 2 {
         return Err(err(line, "ExpUp 命令は 2 引数必要 (name n)。"));
     }
-    let n = parse_i32_at(&xargs[1], line)?;
+    let n = parse_i32_at(app, &xargs[1], line)?;
     let target_idx = app
         .database()
         .unit_instances
@@ -1128,7 +1128,7 @@ fn exec_levelup(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         return Err(err(line, "LevelUp には対象名が必要。"));
     }
     let n = if xargs.len() >= 2 {
-        parse_i32_at(&xargs[1], line)?
+        parse_i32_at(app, &xargs[1], line)?
     } else {
         1
     };

@@ -120,6 +120,19 @@ pub(super) fn assignment_value(app: &App, terms: &[String]) -> String {
     }
 }
 
+/// 式を数値として評価できれば値を返す。結果が数値型、または数値として読める文字列
+/// (前後の空白は可・途中の空白は不可) なら `Some`、それ以外の文字列なら `None`。
+/// 「数値なら数値・そうでなければ文字列」で扱いを分ける呼び出し側 (数値引数の解釈・
+/// 配列添字の正規化・`LSet` 等) が使う。
+pub(super) fn try_numeric(app: &App, expr: &str) -> Option<f64> {
+    let v = eval_expr(app, expr, Ty::Undefined);
+    if v.ty == Ty::Num {
+        return Some(v.n);
+    }
+    let t = v.s.trim();
+    (!t.is_empty() && !t.contains(char::is_whitespace) && is_numeric(t)).then(|| str_to_dbl(t))
+}
+
 fn to_long(n: f64) -> i64 {
     if n.is_finite() {
         n.trunc() as i64

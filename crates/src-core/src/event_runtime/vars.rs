@@ -199,14 +199,8 @@ pub(super) fn resolve_lhs_name(app: &App, raw: &str) -> String {
 /// の特殊ケース (`ターン数` / `総ターン数` / `資金`) に対応。
 /// 書き込みを処理した場合は `true`、対象外なら `false`。
 pub(super) fn try_system_var_assign(app: &mut App, lhs: &str, value: &str) -> bool {
-    let n_i64 = || -> i64 {
-        value
-            .parse::<i64>()
-            .ok()
-            .or_else(|| value.parse::<f64>().ok().map(|f| f.trunc() as i64))
-            .or_else(|| try_eval_int(value))
-            .unwrap_or(0)
-    };
+    let n_i64 = eval::try_numeric(app, value).map_or(0, |v| v.trunc() as i64);
+    let n_i64 = || n_i64;
     match lhs {
         "ターン数" => {
             app.set_turn_number(n_i64().max(0) as u32);
@@ -239,9 +233,7 @@ pub(super) fn try_function_lhs_assign(app: &mut App, lhs: &str, value: &str) -> 
     let lower = func_name.to_ascii_lowercase();
 
     // 数値変換: 非数値は 0 扱い (SRC.Sharp VB5 `Val()` 相当)。
-    let n: i64 = value
-        .parse()
-        .unwrap_or_else(|_| try_eval_int(value).unwrap_or(0));
+    let n: i64 = eval::try_numeric(app, value).map_or(0, |v| v.trunc() as i64);
 
     match lower.as_str() {
         "hp" => {
@@ -361,23 +353,13 @@ pub(super) fn resolve_index_part(app: &App, part: &str) -> String {
             }
         }
     }
-    if let Some(n) = try_eval_int(&val) {
-        return n.to_string();
+    // 数値になる添字 (`3` / `(i + 1)` / `j - 1` / `((Args(2) - 1) * 4 + i)`) は数値へ
+    // 正規化する。演算子は空白で区切られた項のときだけ働くので、`R-1` のようなハイフン付き
+    // の文字列キーは 1 項のまま (原典 GetValueAsString と同じ)。
+    match eval::try_numeric(app, &val) {
+        Some(n) => format_num(n),
+        None => val.trim().to_string(),
     }
-    // 算術式の添字 (`((Args(2) - 1) * 4 + i)` / `j - 1` 等) は、`expand_vars` が
-    // `Args()` や `$(...)` は解決しても、`i` / `j` のような **裸の算術変数**を
-    // 残すため `try_eval_int` が失敗する。演算子を含む場合に限り
-    // `resolve_expr_atoms` で裸変数アトムを数値へ解決してから再評価する。
-    // (`アイテム数` / `ページ数` 等の文字列添字キーは演算子を含まないので
-    // この経路を通らず、リテラルキーのまま保持される。`" - "` は算術の
-    // マイナスを表し、`R-1` のようなハイフン付きキーと区別する。)
-    let looks_arith = val.contains(['(', ')', '+', '*', '/', '\\', '^']) || val.contains(" - ");
-    if looks_arith {
-        if let Some(n) = try_eval_int(&resolve_expr_atoms(app, &val)) {
-            return n.to_string();
-        }
-    }
-    val.trim().to_string()
 }
 
 /// 1 引数トークンを展開する。`expand_vars` (`$(var)` / 関数呼出 /
@@ -605,8 +587,7 @@ pub(super) fn fn_arg_value(app: &App, arg: &str) -> String {
     arg.to_string()
 }
 
-/// 数学関数引数用の数値評価ヘルパ。`fn_arg_value` の結果を `try_eval_num`
-/// で算術式として評価し、失敗したら裸変数を解決してから再評価する。
+/// 数学関数引数用の数値評価ヘルパ。`fn_arg_value` の結果を統一評価器で評価する。
 ///
 /// SRC `EvalTerm` は関数引数も式評価し**裸の変数を数値解決**するため、数値関数
 /// (`Round`/`Int`/`Min`/`Max`/`Abs`/`Mod` 等、本ヘルパを呼ぶ arm に限定) の引数で
@@ -619,15 +600,10 @@ pub(super) fn numeric_arg(app: &App, arg: &str) -> Option<f64> {
     if let Ok(v) = s.parse::<f64>() {
         return Some(v);
     }
-    // 数値リテラルのみの算術 (`3 + 4`) はそのまま評価。
-    if let Some(v) = try_eval_num(&s) {
-        return Some(v);
-    }
-    // 裸の script_var を含む算術式 (`温泉宿１収入 + 温泉宿２収入`) を解決して評価する。
-    // `eval_numeric_atoms` は全アトムが数値 / 数値変数 / キーワードのときのみ評価し、
-    // 非数値トークン (`"AB"` 等の文字列) は `None` を返す。これにより
-    // 「numeric なら数値・else 文字列」で分岐する呼出元 (LSet/RSet) の契約を壊さない。
-    eval_numeric_atoms(app, &s).and_then(|r| r.parse::<f64>().ok())
+    // 裸の変数・システム変数を含む算術式 (`温泉宿１収入 + 温泉宿２収入` / `資金 + 100`) を
+    // 統一評価器で評価する。文字列になる値 (`"AB"` 等) は `None` を返し、
+    // 「数値なら数値・そうでなければ文字列」で分岐する呼出元 (LSet/RSet) の契約を守る。
+    eval::try_numeric(app, &s)
 }
 
 /// 本移植が `AppVersion` で報告する SRC 互換バージョン番号。

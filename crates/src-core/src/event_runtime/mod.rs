@@ -937,8 +937,8 @@ fn exec_command_pc(
             app.push_message(v.to_string());
         }
         "MapSize" => {
-            let w = parse_u32(&xargs, 0, line)?;
-            let h = parse_u32(&xargs, 1, line)?;
+            let w = parse_u32(app, &xargs, 0, line)?;
+            let h = parse_u32(app, &xargs, 1, line)?;
             app.database_mut().replace_map(MapData::new(w, h));
         }
         "SetTile" => {
@@ -981,13 +981,13 @@ fn exec_command_pc(
                     class: xargs[3].clone(),
                     adaption: Adaption::parse(&xargs[4])
                         .ok_or_else(|| err(line, "Pilot.Adaption は 4 文字 ASCII。"))?,
-                    exp_value: parse_i32_at(&xargs[5], line)?,
-                    infight: parse_i32_at(&xargs[6], line)?,
-                    shooting: parse_i32_at(&xargs[7], line)?,
-                    hit: parse_i32_at(&xargs[8], line)?,
-                    dodge: parse_i32_at(&xargs[9], line)?,
-                    intuition: parse_i32_at(&xargs[10], line)?,
-                    technique: parse_i32_at(&xargs[11], line)?,
+                    exp_value: parse_i32_at(app, &xargs[5], line)?,
+                    infight: parse_i32_at(app, &xargs[6], line)?,
+                    shooting: parse_i32_at(app, &xargs[7], line)?,
+                    hit: parse_i32_at(app, &xargs[8], line)?,
+                    dodge: parse_i32_at(app, &xargs[9], line)?,
+                    intuition: parse_i32_at(app, &xargs[10], line)?,
+                    technique: parse_i32_at(app, &xargs[11], line)?,
                     personality: None,
                     sp: None,
                     bgm: None,
@@ -1065,17 +1065,17 @@ fn exec_command_pc(
                 kana_name: xargs[0].clone(),
                 nickname: xargs[0].clone(),
                 class: xargs[1].clone(),
-                pilot_num: parse_i32_at(&xargs[2], line)?,
-                item_num: parse_i32_at(&xargs[3], line)?,
+                pilot_num: parse_i32_at(app, &xargs[2], line)?,
+                item_num: parse_i32_at(app, &xargs[3], line)?,
                 transportation: xargs[4].clone(),
-                speed: parse_i32_at(&xargs[5], line)?,
+                speed: parse_i32_at(app, &xargs[5], line)?,
                 size,
-                value: parse_i64_at(&xargs[7], line)?,
-                exp_value: parse_i32_at(&xargs[8], line)?,
-                hp: parse_i64_at(&xargs[9], line)?,
-                en: parse_i32_at(&xargs[10], line)?,
-                armor: parse_i64_at(&xargs[11], line)?,
-                mobility: parse_i32_at(&xargs[12], line)?,
+                value: parse_i64_at(app, &xargs[7], line)?,
+                exp_value: parse_i32_at(app, &xargs[8], line)?,
+                hp: parse_i64_at(app, &xargs[9], line)?,
+                en: parse_i32_at(app, &xargs[10], line)?,
+                armor: parse_i64_at(app, &xargs[11], line)?,
+                mobility: parse_i32_at(app, &xargs[12], line)?,
                 adaption: Adaption::parse(&xargs[13])
                     .ok_or_else(|| err(line, "Unit.Adaption は 4 文字 ASCII。"))?,
                 bitmap: String::new(),
@@ -1091,11 +1091,11 @@ fn exec_command_pc(
             }
             let wd = crate::data::unit::WeaponData {
                 name: xargs[1].clone(),
-                power: parse_i64_at(&xargs[2], line)?,
-                min_range: parse_i32_at(&xargs[3], line)?,
-                max_range: parse_i32_at(&xargs[4], line)?,
-                precision: parse_i32_at(&xargs[5], line)?,
-                bullet: parse_i32_at(&xargs[6], line)?,
+                power: parse_i64_at(app, &xargs[2], line)?,
+                min_range: parse_i32_at(app, &xargs[3], line)?,
+                max_range: parse_i32_at(app, &xargs[4], line)?,
+                precision: parse_i32_at(app, &xargs[5], line)?,
+                bullet: parse_i32_at(app, &xargs[6], line)?,
                 en_consumption: 0,
                 necessary_morale: 0,
                 adaption: String::new(),
@@ -1127,7 +1127,7 @@ fn exec_command_pc(
             app.database_mut().register_unit(inst);
         }
         "Turn" => {
-            let n = parse_u32(&xargs, 0, line)?;
+            let n = parse_u32(app, &xargs, 0, line)?;
             app.set_turn_number(n);
         }
         "Briefing" => {
@@ -1646,43 +1646,45 @@ fn eval_coord_u32(app: &App, args: &[String], i: usize) -> u32 {
         .unwrap_or(0)
 }
 
-fn parse_u32(args: &[String], i: usize, line: usize) -> Result<u32, ScriptError> {
+fn parse_u32(app: &App, args: &[String], i: usize, line: usize) -> Result<u32, ScriptError> {
     let s = expect_arg(args, i, line, "<u32>")?;
     if let Ok(v) = s.trim().parse::<u32>() {
         return Ok(v);
     }
-    // `(3 + 4 - 4)` のような算術式座標も受理する。SRC は数値引数を式評価する
-    // ため、`Create 敵 … (LIndex(…) + Random(5) - Random(5))` 等の座標式が
-    // 展開後に括弧付き算術として残る。負値は 0 にクランプ。式として評価
-    // できない真の不正値 (`abc` 等) は従来どおりエラーにする。
-    match try_eval_int(s) {
+    // SRC は数値引数を式評価するため、展開後に括弧付き算術 (`(LIndex(…) + Random(5))` 等)
+    // や裸の変数・システム変数 (`(味方レベル平均値 - 1)`) が残る。統一評価器で評価し、
+    // 負値は 0 にクランプする。数値にならない真の不正値 (`abc` 等) はエラー。
+    match numeric_int(app, s) {
         Some(v) => Ok(v.max(0) as u32),
         None => Err(err(line, &format!("u32 として解釈できません: {s:?}"))),
     }
 }
 
-fn parse_i32_at(s: &str, line: usize) -> Result<i32, ScriptError> {
+fn parse_i32_at(app: &App, s: &str, line: usize) -> Result<i32, ScriptError> {
     if let Ok(v) = s.trim().parse::<i32>() {
         return Ok(v);
     }
-    // `parse_u32` と同様、`(味方レベル平均値 - 1)` のような算術式引数も評価する。
-    // SRC は数値引数を式評価するため、展開後に括弧付き算術として残る座標/数値が
-    // ある。i32 範囲外はクランプ。式として評価できない真の不正値はエラー。
-    match try_eval_int(s) {
+    // `parse_u32` と同様に式評価する。i32 範囲外はクランプ。
+    match numeric_int(app, s) {
         Some(v) => Ok(v.clamp(i32::MIN as i64, i32::MAX as i64) as i32),
         None => Err(err(line, &format!("i32 として解釈できません: {s:?}"))),
     }
 }
 
-fn parse_i64_at(s: &str, line: usize) -> Result<i64, ScriptError> {
+fn parse_i64_at(app: &App, s: &str, line: usize) -> Result<i64, ScriptError> {
     if let Ok(v) = s.trim().parse::<i64>() {
         return Ok(v);
     }
-    // `parse_i32_at` と同様、算術式引数を式評価でフォールバック解釈する。
-    match try_eval_int(s) {
+    // `parse_i32_at` と同様に式評価する。
+    match numeric_int(app, s) {
         Some(v) => Ok(v),
         None => Err(err(line, &format!("i64 として解釈できません: {s:?}"))),
     }
+}
+
+/// 数値引数を統一評価器で評価し、ゼロ方向へ切り捨てた整数を返す。数値にならなければ `None`。
+fn numeric_int(app: &App, s: &str) -> Option<i64> {
+    eval::try_numeric(app, s.trim()).map(|v| v.trunc() as i64)
 }
 
 /// 陣営名引数を `Party` に解決する。

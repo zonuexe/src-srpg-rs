@@ -349,12 +349,13 @@ fn logical_not_false_returns_one() {
 
 #[test]
 fn for_loop_end_value_truncated_not_rounded() {
-    // For i = 1 To (7/2) → To 3 (切り捨て), not 4 (四捨五入)
+    // For i = 1 To (7 / 2) → To 3 (切り捨て), not 4 (四捨五入)。演算子は空白で区切る
+    // (原典は `7/2` を 1 項として扱う)。
     // SRC.Sharp `ExpressionGetValueAsLongTests.GetValueAsLong_PositiveDecimal_TruncatesTowardZero`
-    // に対応。`eval_int_expr` が `.trunc()` を使うことを検証する。
+    // に対応 (GetValueAsLong のゼロ方向切り捨て)。
     let app = run(r#"
 Set count 0
-For i = 1 To (7/2)
+For i = 1 To (7 / 2)
   Incr count
 Next
 "#);
@@ -367,7 +368,7 @@ fn for_loop_end_value_negative_decimal_truncated() {
     // ループ自体は start=0 > end=-3 で実行しないが、end値の解釈が正しいか確認。
     let app = run(r#"
 Set count 99
-For i = 0 To (-7/2)
+For i = 0 To (-7 / 2)
   Set count 0
 Next
 "#);

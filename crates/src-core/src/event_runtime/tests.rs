@@ -694,8 +694,6 @@ fn paren_arith_missing_operand_defaults_to_zero() {
         eval_paren_arith_value(&app, "(2 + 3)"),
         Some("5".to_string())
     );
-    // try_eval_num 自体は厳格なまま (配列添字解決の fail→fallback を壊さない)。
-    assert_eq!(try_eval_num("(500 - )"), None);
 }
 
 #[test]
@@ -2393,28 +2391,9 @@ fn paintpicture_dash_position_sets_center_flags() {
 }
 
 #[test]
-fn arith_operator_char_set_matches_tokenizer() {
-    // 抜本対策の要: `tokenize_expr` が算術演算子トークンを生む記号は
-    // すべて `is_arith_operator_char` に含まれること。新演算子を
-    // tokenize_expr に足して SoT 更新を忘れると本テストが落ちる
-    // (VB5 整数除算 `\` / 累乗 `^` 取りこぼし型バグの再発防止)。
-    use ExprTok::*;
-    for c in 0u8..=127u8 {
-        let ch = c as char;
-        let toks = tokenize_expr(&ch.to_string());
-        let produces_arith_op = toks.len() == 1
-            && matches!(
-                toks[0],
-                Plus | Minus | Star | Slash | IntDiv | Caret | LParen | RParen
-            );
-        if produces_arith_op {
-            assert!(
-                is_arith_operator_char(ch),
-                "tokenize_expr は {ch:?} を算術演算子として扱うが is_arith_operator_char が false"
-            );
-        }
-    }
-    // 代表演算子が含まれ、比較/連結/英数字は含まれないこと。
+fn arith_operator_char_set_covers_evaluator_operators() {
+    // `is_arith_operator_char` (式のアトム分割の単一の基準) は、統一評価器が算術演算子
+    // として扱う 1 文字の記号 (`+ - * / \ ^`) と括弧をすべて含むこと。
     for c in ['+', '-', '*', '/', '\\', '^', '(', ')'] {
         assert!(is_arith_operator_char(c), "{c:?} は算術演算子のはず");
     }
@@ -6421,21 +6400,47 @@ Goto loop
 
 #[test]
 fn parse_i32_at_accepts_arithmetic_expression() {
+    let app = App::new();
     // 平文の整数はそのまま解釈する。
-    assert_eq!(parse_i32_at("5", 1).unwrap(), 5);
-    assert_eq!(parse_i32_at("-3", 1).unwrap(), -3);
+    assert_eq!(parse_i32_at(&app, "5", 1).unwrap(), 5);
+    assert_eq!(parse_i32_at(&app, "-3", 1).unwrap(), -3);
     // `(味方レベル平均値 - 1)` 等が展開後に括弧付き算術として残るケース。
-    assert_eq!(parse_i32_at("(4 - 1)", 1).unwrap(), 3);
-    assert_eq!(parse_i32_at("(2 + 3 * 4)", 1).unwrap(), 14);
+    assert_eq!(parse_i32_at(&app, "(4 - 1)", 1).unwrap(), 3);
+    assert_eq!(parse_i32_at(&app, "(2 + 3 * 4)", 1).unwrap(), 14);
     // 真に不正な値は従来どおりエラー。
-    assert!(parse_i32_at("abc", 1).is_err());
+    assert!(parse_i32_at(&app, "abc", 1).is_err());
 }
 
 #[test]
 fn parse_i64_at_accepts_arithmetic_expression() {
-    assert_eq!(parse_i64_at("100", 1).unwrap(), 100);
-    assert_eq!(parse_i64_at("(10 - 4)", 1).unwrap(), 6);
-    assert!(parse_i64_at("xyz", 1).is_err());
+    let app = App::new();
+    assert_eq!(parse_i64_at(&app, "100", 1).unwrap(), 100);
+    assert_eq!(parse_i64_at(&app, "(10 - 4)", 1).unwrap(), 6);
+    assert!(parse_i64_at(&app, "xyz", 1).is_err());
+}
+
+/// B6: 数値引数・括弧算術・数学関数の引数でもシステム変数を解決する。旧実装の
+/// `eval_numeric_atoms` はスクリプト変数しか見ず、`(味方数 + 1)` が評価されなかった。
+#[test]
+fn numeric_contexts_resolve_system_variables() {
+    let src = "\
+Pilot ガロ ガロ 男性 超能力者 AAAA 100 100 100 100 100 100 100
+Unit ゾルダ Mass 1 0 陸 5 M 1000 100 2400 80 900 80 BBBB
+Place ゾルダ ガロ 味方 5 5
+Money 500
+";
+    let stmts = event::parse(src).unwrap();
+    let mut app = App::new();
+    execute(&mut app, &stmts).unwrap();
+    assert_eq!(parse_i32_at(&app, "(味方数 + 1)", 1).unwrap(), 2);
+    assert_eq!(
+        eval_paren_arith_value(&app, "(資金 + 100)"),
+        Some("600".to_string())
+    );
+    let stmts = event::parse("Set m Max(資金 - 100, 0)\nSet p (味方数 * 10)\n").unwrap();
+    execute(&mut app, &stmts).unwrap();
+    assert_eq!(app.script_var("m"), "400");
+    assert_eq!(app.script_var("p"), "10");
 }
 
 const ZOLDA_SETUP: &str = "\
