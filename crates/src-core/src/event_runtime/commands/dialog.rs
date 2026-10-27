@@ -111,7 +111,7 @@ const TALK_IMAGE_OPTIONS: &[&str] = &[
 /// - 話者だけ: 話者のユニットを中央表示する。プロローグ・エピローグ中、画像の描画中、
 ///   マップが無いときは行わない。
 /// - 1 語: `母艦` (味方の母艦)、`中央` (上の条件に関わらず話者)、`固定` (行わない)。
-/// - 2 語: 座標 `X Y`。
+/// - 2 語: 座標 `X Y` (1 始まり。盤外なら行わない)。
 fn center_for_talk(app: &mut App, c: &Cmd) {
     let xargs = c.xargs;
     let mut last = None;
@@ -143,10 +143,15 @@ fn center_for_talk(app: &mut App, c: &Cmd) {
             _ => {}
         },
         Some(2) => {
-            if let (Some(x), Some(y)) = (c.long(app, 1), c.long(app, 2)) {
-                if x >= 0 && y >= 0 {
-                    app.center_map_on(x as u32, y as u32);
+            // 座標は 1 始まり。盤外なら何もしない。X か Y が 0 なら座標指定とみなさず、
+            // Talk は話者を中央表示する (AutoTalk は話者を渡さないので何もしない)。
+            let (x, y) = (c.long(app, 1).unwrap_or(0), c.long(app, 2).unwrap_or(0));
+            if x != 0 && y != 0 {
+                if let Some((x, y)) = coord::checked_from_script(app, x, y) {
+                    app.center_map_on(x, y);
                 }
+            } else if c.lname == "talk" {
+                center_on_speaker(app, speaker);
             }
         }
         _ => {}

@@ -276,7 +276,7 @@ L6 presentation : scene/* (レイアウト, ヒットテスト, ビューモデ�
 
 - **変換するもの（原典どおり 1 始まり）**:
   - 盤内に丸める（原典 `If ux < 1 Then ux = 1 ElseIf ux > MapWidth Then ux = MapWidth`、`coord::clamp_from_script`）: `Create` / `Launch` / `Move` / `Center` / `Organize` / `MapAttack` / `MapAbility`、`UseAbility … 召喚 … X Y`（本移植の互換処理）。
-  - 盤外を拒む（`coord::checked_from_script`）: `ChangeTerrain`（原典は範囲エラー、本実装は no-op）、`Info(マップ, X, Y, …)`（原典どおり空）。
+  - 盤外を拒む（`coord::checked_from_script`）: `ChangeTerrain`（原典は範囲エラー、本実装は no-op）、`Info(マップ, X, Y, …)`（原典どおり空）、`Talk` / `AutoTalk` の `X Y`（中央表示位置。原典 `CenterUnit` どおり盤外は無視、X か Y が 0 なら座標指定とみなさない）。
   - 丸めずに 1 ずらす（`coord::axis_from_script`）: `Explode` の表示位置、`WX` / `WY` の数値引数、`ChangeMode` の座標モード（`ai_mode` には原典どおり 1 始まりの `"X Y"` を保存し、AI が目的地にするときに直す）。
   - 内部 → スクリプト（`coord::to_script`）: `X()` / `Y()` の戻り値、`進入 <unit> <x> <y>:` ラベルの照合。
 - **変換しないもの**:
@@ -285,4 +285,3 @@ L6 presentation : scene/* (レイアウト, ヒットテスト, ビューモデ�
   - `脱出 <unit> <方向>` / `接触` など、座標を受け渡さないラベル。
 - **未実装（変換以前に無いもの）**:
   - `X(目標地点)` / `Y(目標地点)` / `WX(目標地点)`（原典 `SelectedX` / `SelectedY`。`MapAttack` やマップコマンドで選んだ地点）。本実装は選択地点を保持していないので 0 を返す。実装するときは保持値を内部座標で持ち、`coord::to_script` で返す。
-  - `Talk` / `AutoTalk` の `X Y`（中央表示位置）は `fix/leftover-sweep` ブランチで実装中。master に入ったら `coord::checked_from_script`（原典: マップ外の座標指定は無視）を当てる。

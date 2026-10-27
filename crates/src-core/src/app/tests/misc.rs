@@ -64,7 +64,7 @@ Return あり
 
 /// `Talk` の中央表示 (原典 `ExecTalkCmd` / `CenterUnit`) と `Center` のスクロール。
 /// 話者だけなら話者のユニット (プロローグ中は行わない)、`中央` は常に話者、`固定` は
-/// 行わない、`X Y` は座標。中央表示はマップ端でスクロールが範囲内に収まる。
+/// 行わない、`X Y` は座標 (1 始まり、盤外は無視)。中央表示はマップ端でスクロールが範囲内に収まる。
 #[test]
 fn talk_and_center_scroll_map_to_center() {
     let mut app = App::new();
@@ -92,10 +92,15 @@ fn talk_and_center_scroll_map_to_center() {
     assert_eq!(app.map_scroll(), (0, 0), "固定 は中央表示しない");
 
     talk(&mut app, "Talk システム 10 12");
-    assert_eq!(app.map_scroll(), (3, 5), "座標指定");
+    assert_eq!(app.map_cursor(), Some((9, 11)), "座標は 1 始まり");
+    assert_eq!(app.map_scroll(), (2, 4), "座標指定");
 
-    talk(&mut app, "Talk システム 39 39");
+    talk(&mut app, "Talk システム 40 40");
     assert_eq!(app.map_scroll(), (25, 25), "マップ端では範囲内に収まる");
+
+    reset(&mut app);
+    talk(&mut app, "Talk システム 41 41");
+    assert_eq!(app.map_scroll(), (0, 0), "盤外の座標は無視する");
 
     reset(&mut app);
     app.set_stage_state(crate::stage::StageState::Briefing);
