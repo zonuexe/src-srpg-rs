@@ -5,7 +5,6 @@
 
 use web_sys::CanvasRenderingContext2d;
 
-use src_core::combat;
 use src_core::data::terrain;
 use src_core::scene::configuration::{
     ConfigurationLayout, LabelledControl, CAPTION as CFG_CAPTION, CONFIG_HEIGHT, CONFIG_WIDTH,
@@ -62,6 +61,7 @@ pub fn draw_scene(
     unit_detail: Option<&StatusDetail>,
     reaction_data: Option<&src_core::scene::reaction::ReactionWindowData>,
     weapon_select_data: Option<&src_core::scene::weapon_select::WeaponSelectWindowData>,
+    status_panel: Option<&src_core::scene::map_view::StatusPanelView>,
 ) {
     clear(ctx, "#2a2a30"); // 周囲のレターボックスは暗色
     match scene {
@@ -96,6 +96,7 @@ pub fn draw_scene(
                     action_mode.clone(),
                     battle_anim,
                     move_anim,
+                    status_panel,
                 );
                 // 行動済みユニットのグレーアウト + ActionMode 範囲オーバーレイ
                 draw_action_overlays(ctx, database, scroll, action_mode);
@@ -1729,6 +1730,7 @@ fn draw_map_view(
     action_mode: src_core::ActionMode,
     battle_anim: Option<&src_core::BattleAnim>,
     move_anim: Option<&src_core::MoveAnim>,
+    status_panel: Option<&src_core::scene::map_view::StatusPanelView>,
 ) {
     let ox = (i64::from(CANVAS_WIDTH) - i64::from(MAP_VIEW_WIDTH)) / 2;
     let oy = (i64::from(CANVAS_HEIGHT) - i64::from(MAP_VIEW_HEIGHT)) / 2;
@@ -1935,6 +1937,7 @@ fn draw_map_view(
             (sx, sy),
             assets,
             selected_weapon_idx,
+            status_panel,
         );
 
         // サイドバーのメッセージボックスは廃止 (メッセージは Talk / 戦闘窓に集約)。
@@ -2425,6 +2428,7 @@ fn draw_status_panel(
     _scroll: (u32, u32),
     assets: &Assets,
     selected_weapon_idx: usize,
+    view: Option<&src_core::scene::map_view::StatusPanelView>,
 ) {
     let w = f64::from(STATUS_PANEL_WIDTH);
     let h = f64::from(STATUS_PANEL_H);
@@ -2750,7 +2754,16 @@ fn draw_status_panel(
 
     // ===== 武器ブロック (攻撃 / 射程 を右寄せ 2 カラム) =====
     // 戦闘予測行はパネル末尾に出すので、表示される場合のみ 1 行ぶん確保する。
-    let preview = build_combat_preview_line(database, Some(u), cx, cy);
+    // 戦闘予測は src-core が実際の攻撃と同じ組み立てで求める (`App::status_panel_view`)。
+    // 160px パネル幅に収まる短縮形 (相手愛称・命中率・与ダメージ)。
+    let preview = view.and_then(|v| v.forecast.as_ref()).map(|f| {
+        format!(
+            "▶{} 命中{}% 与{}",
+            truncate(&f.target, 5),
+            f.hit_pct,
+            f.damage
+        )
+    });
     if let Some(d) = unit_def {
         if !d.weapons.is_empty() {
             y += 1.0;
@@ -2777,13 +2790,10 @@ fn draw_status_panel(
                     break;
                 }
                 let active = selected_weapon_idx == i + 1;
-                // 現在使用不可 (必要気力未達 / 残弾切れ) → 暗赤。
-                let ammo_out = wd.bullet > 0
-                    && u.weapons
-                        .get(i)
-                        .map(|uw| uw.bullet_remaining <= 0)
-                        .unwrap_or(false);
-                let disabled = wd.necessary_morale > u.morale || ammo_out;
+                // 現在使用不可 (必要技能・気力・EN・残弾。判定は src-core) → 暗赤。
+                let disabled = view
+                    .and_then(|v| v.weapon_firable.get(i))
+                    .is_some_and(|ok| !ok);
                 if active {
                     ctx.set_fill_style_str("rgba(40,90,200,0.14)");
                     ctx.fill_rect(pad_x - 2.0, y - 1.0, w - 8.0, 12.0);
@@ -2856,83 +2866,6 @@ fn wrap_text(s: &str, max_chars_per_line: usize) -> Vec<String> {
         out.push(cur);
     }
     out
-}
-
-fn build_combat_preview_line(
-    database: &GameDatabase,
-    cursor_unit: Option<&UnitInstance>,
-    cx: u32,
-    cy: u32,
-) -> Option<String> {
-    let atk = cursor_unit?;
-    let atk_pilot = database.pilot_by_name(&atk.pilot_name)?;
-    let atk_unit = database.unit_by_name(&atk.unit_data_name)?;
-    let map = database.map.as_ref()?;
-
-    // 全マップから敵対勢力ユニットを線形探索。マンハッタン距離が武器射程に
-    // 入るものから、最大射程までを優先順位なし（最も近い／最も強い武器）で取る。
-    let mut best: Option<(u32, u32, &UnitInstance, &src_core::data::unit::WeaponData)> = None;
-    for def in &database.unit_instances {
-        if def.party == atk.party {
-            continue;
-        }
-        let dist = combat::manhattan((cx, cy), (def.x, def.y));
-        if let Some(w) = combat::best_weapon_in_range(atk_unit, dist) {
-            // より小さい距離を優先、同距離なら power 大
-            let take = match best {
-                None => true,
-                Some((bx, by, _, bw)) => {
-                    let bd = combat::manhattan((cx, cy), (bx, by));
-                    dist < bd || (dist == bd && w.power > bw.power)
-                }
-            };
-            if take {
-                best = Some((def.x, def.y, def, w));
-            }
-        }
-    }
-
-    let (dx, dy, def, weapon) = best?;
-    let def_pilot = database.pilot_by_name(&def.pilot_name)?;
-    let def_unit = database.unit_by_name(&def.unit_data_name)?;
-    let tid = map.cell(dx, dy).terrain_id;
-    let hit_mod = database.terrain_hit_mod(tid);
-    let damage_mod = database.terrain_damage_mod(tid);
-    // 地形適応をプレビューにも反映し、実解決ダメージと表示を一致させる。
-    let env_of = |x: u32, y: u32| {
-        terrain::lookup(map.cell(x, y).terrain_id)
-            .map(|t| combat::terrain_env(t.class))
-            .unwrap_or(1)
-    };
-    let cp = combat::predict_with_status_terrain(
-        atk_pilot,
-        atk_unit,
-        weapon,
-        def_pilot,
-        def_unit,
-        hit_mod,
-        damage_mod,
-        100,
-        100,
-        &[],
-        &[],
-        env_of(cx, cy),
-        env_of(dx, dy),
-        // 状態異常スナップショットなしのプレビュー行 → 与・被ダメージ修正なし。
-        combat::DamageSpiritLevels::default(),
-        // ＥＣＭ エリア補正は HUD プレビュー行では未反映 (盤面走査が要・App ヘルパ依存)。
-        // 実戦闘とその予測 (App::attack_resolve_and_run) では反映される。follow-up。
-        1.0,
-    )
-    // 散 (散布) 属性武器の距離補正 (命中アップ・ダメージダウン) をプレビューにも反映。
-    .apply_scatter(&weapon.class, combat::manhattan((cx, cy), (dx, dy)));
-    // 160px パネル幅に収まる短縮形 (相手愛称・命中率・与ダメージ)。
-    Some(format!(
-        "▶{} 命中{}% 与{}",
-        truncate(&def_pilot.nickname, 5),
-        cp.hit_chance.min(100),
-        cp.damage
-    ))
 }
 
 /// マップタイル上に重ねる小さなユニットチップ。

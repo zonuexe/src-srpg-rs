@@ -778,6 +778,43 @@ impl App {
         (preview, atk_statuses)
     }
 
+    /// `atk_idx` が `weapon` で `def_idx` を攻撃するときの予測 (読み取り専用)。本線攻撃と
+    /// 同じ組み立て (実効データ・防御特性による装甲調整・防御側の地形補正・状態・精神効果・
+    /// ECM・散布補正) なので、反撃ウィンドウ・武器選択窓・ステータスパネルの表示が実際の
+    /// 戦闘と食い違わない。
+    pub(crate) fn forecast_strike(
+        &self,
+        atk_idx: usize,
+        def_idx: usize,
+        weapon: &crate::data::unit::WeaponData,
+    ) -> Option<combat::CombatPreview> {
+        let (atk_pilot, atk_unit) = self.database.effective_combat_data(atk_idx)?;
+        let (def_pilot, mut def_unit) = self.database.effective_combat_data(def_idx)?;
+        self.apply_defense_armor_mod(def_idx, &weapon.class, &mut def_unit);
+        let def_inst = self.database.unit_instances[def_idx].clone();
+        let terrain_id = self
+            .database
+            .map
+            .as_ref()
+            .map_or(0, |m| m.cell(def_inst.x, def_inst.y).terrain_id);
+        let (preview, _) = self.strike_preview(
+            atk_idx,
+            def_idx,
+            &StrikeSetup {
+                atk_pilot: &atk_pilot,
+                atk_unit: &atk_unit,
+                weapon,
+                def_pilot: &def_pilot,
+                def_unit: &def_unit,
+                def_inst: &def_inst,
+                def_hit_mod: self.database.terrain_hit_mod(terrain_id),
+                def_damage_mod: self.database.terrain_damage_mod(terrain_id),
+            },
+            StrikeKind::Main,
+        );
+        Some(preview)
+    }
+
     /// 1 回の攻撃の命中・ダメージ判定。プレイヤー / AI の本線攻撃
     /// (`attack_resolve_and_run`)・援護攻撃・反撃・`.eve Attack` (`script_attack`) の共通コア
     /// (原典はどれも `Unit.Attack` を通る)。

@@ -312,7 +312,7 @@ impl App {
     /// 合法 (射程内・チャージ・移動後制限) なら採用、不可なら `None`。自動選択時は
     /// 合法武器のうち威力最大 (移動後制限なしは従来の `best_weapon_in_range_with_charge`)。
     #[allow(clippy::too_many_arguments)] // 武器選択の制約 (射程/チャージ/移動後/突撃/資源/必要技能) を素直に列挙。
-    pub(super) fn pick_attack_weapon(
+    pub(crate) fn pick_attack_weapon(
         atk_unit: &crate::data::unit::UnitData,
         dist: u32,
         forced: Option<&crate::data::unit::WeaponData>,

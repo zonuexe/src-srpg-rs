@@ -158,7 +158,7 @@ impl App {
 
     /// `atk_idx` が `def_idx` を攻撃するときの使用武器・攻撃力・基準命中率 (%) を
     /// 予測する。`attack_resolve_and_run` と同じ武器選定 (`pick_attack_weapon`) と
-    /// 命中予測 (`predict_with_status_terrain` + 散布補正) を使い、反撃ウィンドウの
+    /// 予測 (`forecast_strike`) を使い、反撃ウィンドウの
     /// 命中率表示に用いる (読み取り専用、盤面は変更しない)。射程内に使用可能武器が
     /// 無ければ `None`。
     pub(crate) fn attack_hit_forecast(
@@ -166,56 +166,21 @@ impl App {
         atk_idx: usize,
         def_idx: usize,
     ) -> Option<(String, i64, i32)> {
-        let (atk_pilot, atk_unit) = self.database.effective_combat_data(atk_idx)?;
-        let (def_pilot, def_unit) = self.database.effective_combat_data(def_idx)?;
-        // 借用を解放するため戦闘文脈をローカルへ複製。
-        let (ax, ay, atk_morale, atk_charged, atk_totsugeki, atk_statuses) = {
-            let a = &self.database.unit_instances[atk_idx];
-            let mut s: Vec<String> = a.conditions.iter().map(|c| c.name.clone()).collect();
-            push_combat_feature_statuses(a, &mut s);
-            (a.x, a.y, a.morale, a.charged, a.has_condition("突撃"), s)
-        };
-        let (dx, dy, def_morale, def_statuses) = {
-            let d = &self.database.unit_instances[def_idx];
-            let mut s: Vec<String> = d.conditions.iter().map(|c| c.name.clone()).collect();
-            push_combat_feature_statuses(d, &mut s);
-            (d.x, d.y, d.morale, s)
-        };
-        let dist = combat::manhattan((ax, ay), (dx, dy));
+        let (_, atk_unit) = self.database.effective_combat_data(atk_idx)?;
+        let a = &self.database.unit_instances[atk_idx];
+        let d = &self.database.unit_instances[def_idx];
+        let dist = combat::manhattan((a.x, a.y), (d.x, d.y));
         let weapon = Self::pick_attack_weapon(
             &atk_unit,
             dist,
             None,
-            atk_charged,
+            a.charged,
             false,
-            atk_totsugeki,
+            a.has_condition("突撃"),
             |w| self.weapon_firable(atk_idx, w),
             |w| self.weapon_skill_ok(atk_idx, w),
         )?;
-        let terrain_id = self.database.map.as_ref()?.cell(dx, dy).terrain_id;
-        let def_hit_mod = self.database.terrain_hit_mod(terrain_id);
-        let def_damage_mod = self.database.terrain_damage_mod(terrain_id);
-        let dmg_levels = self
-            .database
-            .damage_spirit_levels(&atk_statuses, &def_statuses);
-        let preview = combat::predict_with_status_terrain(
-            &atk_pilot,
-            &atk_unit,
-            &weapon,
-            &def_pilot,
-            &def_unit,
-            def_hit_mod,
-            def_damage_mod,
-            atk_morale,
-            def_morale,
-            &atk_statuses,
-            &def_statuses,
-            self.terrain_env_at(ax, ay),
-            self.terrain_env_at(dx, dy),
-            dmg_levels,
-            self.ecm_hit_mult(def_idx, atk_idx, &weapon.class),
-        )
-        .apply_scatter(&weapon.class, dist);
+        let preview = self.forecast_strike(atk_idx, def_idx, &weapon)?;
         Some((
             weapon.name.clone(),
             weapon.power,
@@ -359,8 +324,7 @@ impl App {
         });
     }
 
-    /// 武器選択窓の行データを構築する (機体の武装順)。命中率は
-    /// `predict_with_status_terrain` (+散布補正) を読み取り専用で評価する。
+    /// 武器選択窓の行データを構築する (機体の武装順)。命中率は `forecast_strike`。
     pub(crate) fn build_weapon_rows(
         &self,
         atk_idx: usize,
@@ -368,37 +332,14 @@ impl App {
         post_move: bool,
     ) -> Vec<crate::scene::weapon_select::WeaponSelectRow> {
         use crate::scene::weapon_select::WeaponSelectRow;
-        let (Some((atk_pilot, atk_unit)), Some((def_pilot, def_unit))) = (
-            self.database.effective_combat_data(atk_idx),
-            self.database.effective_combat_data(def_idx),
-        ) else {
+        let Some((_, atk_unit)) = self.database.effective_combat_data(atk_idx) else {
             return Vec::new();
         };
-        let (ax, ay, atk_morale, atk_statuses) = {
-            let a = &self.database.unit_instances[atk_idx];
-            let mut s: Vec<String> = a.conditions.iter().map(|c| c.name.clone()).collect();
-            push_combat_feature_statuses(a, &mut s);
-            (a.x, a.y, a.morale, s)
-        };
-        let (dx, dy, def_morale, def_statuses) = {
-            let d = &self.database.unit_instances[def_idx];
-            let mut s: Vec<String> = d.conditions.iter().map(|c| c.name.clone()).collect();
-            push_combat_feature_statuses(d, &mut s);
-            (d.x, d.y, d.morale, s)
-        };
-        let dist = combat::manhattan((ax, ay), (dx, dy));
-        let terrain_id = self
-            .database
-            .map
-            .as_ref()
-            .map(|m| m.cell(dx, dy).terrain_id);
-        let def_hit_mod = terrain_id.map_or(0, |t| self.database.terrain_hit_mod(t));
-        let def_damage_mod = terrain_id.map_or(0, |t| self.database.terrain_damage_mod(t));
-        let atk_env = self.terrain_env_at(ax, ay);
-        let def_env = self.terrain_env_at(dx, dy);
-        let dmg_levels = self
-            .database
-            .damage_spirit_levels(&atk_statuses, &def_statuses);
+        let (a, d) = (
+            &self.database.unit_instances[atk_idx],
+            &self.database.unit_instances[def_idx],
+        );
+        let dist = combat::manhattan((a.x, a.y), (d.x, d.y));
         let atk_inst = &self.database.unit_instances[atk_idx];
         atk_unit
             .weapons
@@ -407,26 +348,8 @@ impl App {
             .map(|(i, w)| {
                 let usable = self.weapon_usable_vs(atk_idx, w, dist, post_move);
                 let hit_pct = if usable {
-                    combat::predict_with_status_terrain(
-                        &atk_pilot,
-                        &atk_unit,
-                        w,
-                        &def_pilot,
-                        &def_unit,
-                        def_hit_mod,
-                        def_damage_mod,
-                        atk_morale,
-                        def_morale,
-                        &atk_statuses,
-                        &def_statuses,
-                        atk_env,
-                        def_env,
-                        dmg_levels,
-                        self.ecm_hit_mult(def_idx, atk_idx, &w.class),
-                    )
-                    .apply_scatter(&w.class, dist)
-                    .hit_chance
-                    .clamp(0, 100)
+                    self.forecast_strike(atk_idx, def_idx, w)
+                        .map_or(0, |p| p.hit_chance.clamp(0, 100))
                 } else {
                     0
                 };

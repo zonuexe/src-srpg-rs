@@ -16,7 +16,7 @@
 | 7. ビューモデル・ジオメトリを scene/ へ | 済 | `build_status_detail` / `reaction_window_data` / `weapon_select_window_data` を `scene/{unit_detail,reaction,weapon_select}.rs` へ（戦闘ルールの `attack_hit_forecast` / `build_weapon_rows` は app に残す）。反撃・武器選択・Ask メニューのジオメトリとクリック判定を `dialog.rs` から、コマンドメニューのジオメトリを `command_menu.rs` から `scene/` へ。`Party::color` も `scene::map_view::party_color` へ |
 | 8. B1〜B3 修正 | 済 | 回帰テスト 4 件を追加（すべて修正前に失敗することを確認） |
 | 9. `.eve` コマンドをドメイン経路へ | 一部 | SpecialPower / Mind → `execute_spirit_by_event`、Transform → `set_unit_form`、UseAbility → `execute_ability`、Attack → `script_attack`（`resolve_strike` を本線攻撃と共有）。マップ攻撃は範囲計算を `combat::map_attack_area`、本体を `App::execute_map_attack` へ移動 |
-| 10. 戦闘の一本化 | 一部 | 予測の組み立てを `strike_preview`、命中後の判定（クリティカル / 即死 / 切り払い / 防御特性）を `resolve_strike` に一本化（本線攻撃・援護攻撃・反撃・先制反撃・`.eve Attack`。攻撃の種類は `StrikeKind`）。src-web の予測表示は未 |
+| 10. 戦闘の一本化 | 済 | 予測の組み立てを `strike_preview`、命中後の判定（クリティカル / 即死 / 切り払い / 防御特性）を `resolve_strike` に一本化（本線攻撃・援護攻撃・反撃・先制反撃・`.eve Attack`。攻撃の種類は `StrikeKind`）。表示用の予測は `forecast_strike`（本線攻撃と同じ組み立て）に一本化し、反撃ウィンドウ・武器選択窓・src-web のステータスパネル（`App::status_panel_view`）がこれを使う。src-web は戦闘ルールを持たない |
 | 11. シナリオ取り込みの一本化 | 未 | |
 | 12. 式評価器の統一 | 済 | 原典 `EvalExpr` / `EvalTerm` を移植した `event_runtime/eval.rs` に一本化。If / ElseIf / Do / Loop / IIf / Eval / メニュー条件 / Set・`=` 代入 / 数値引数 / 括弧算術 / 配列添字が同じ評価器を通る。旧評価器 (条件用・数値用) は削除。C# oracle の `paths` モードで経路ごとに突合 (下記) |
 | 13. GameDatabase の分割 | 未 | |

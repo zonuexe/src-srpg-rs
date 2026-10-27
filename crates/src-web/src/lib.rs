@@ -1341,5 +1341,6 @@ fn redraw(ctx: &SharedCtx, app: &SharedApp, assets: &SharedAssets) {
         unit_detail.as_ref(),
         reaction_data.as_ref(),
         weapon_select_data.as_ref(),
+        app_ref.status_panel_view().as_ref(),
     );
 }

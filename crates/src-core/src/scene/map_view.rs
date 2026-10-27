@@ -72,6 +72,98 @@ pub const STATUS_PANEL_H: u32 = MAP_AREA_H;
 pub const MESSAGE_BOX_X: u32 = MAP_AREA_W;
 pub const MESSAGE_BOX_Y: u32 = STATUS_PANEL_Y + STATUS_PANEL_H;
 
+/// マップカーソル上のユニットについて、ステータスパネルが表示する判定結果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatusPanelView {
+    /// 武器ごとの現在使用可否 (ユニットデータの武装順)。必要技能・気力・EN・残弾。
+    pub weapon_firable: Vec<bool>,
+    /// 末尾の戦闘予測行。攻撃できる敵対ユニットが居なければ `None`。
+    pub forecast: Option<PanelForecast>,
+}
+
+/// ステータスパネル末尾の戦闘予測行 (`▶相手 命中x% 与y`) の表示データ。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PanelForecast {
+    /// 予測相手の愛称。
+    pub target: String,
+    /// 命中率 (%)。
+    pub hit_pct: i32,
+    /// 与ダメージ。
+    pub damage: i64,
+}
+
+impl crate::App {
+    /// マップカーソル上のユニットのステータスパネル用判定 (武器の使用可否と戦闘予測)。
+    /// カーソル上にユニットが居なければ `None`。
+    pub fn status_panel_view(&self) -> Option<StatusPanelView> {
+        let (cx, cy) = self.map_cursor()?;
+        let db = self.database();
+        let idx = db
+            .unit_instances
+            .iter()
+            .position(|u| !u.off_map && (u.x, u.y) == (cx, cy))?;
+        let weapon_firable = db
+            .unit_by_name(&db.unit_instances[idx].unit_data_name)
+            .map(|d| {
+                d.weapons
+                    .iter()
+                    .map(|w| self.weapon_firable(idx, w))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some(StatusPanelView {
+            weapon_firable,
+            forecast: self.panel_forecast(idx),
+        })
+    }
+
+    /// `atk_idx` が、いまの位置から攻撃できる最も近い敵対ユニットへの戦闘予測 (同距離なら
+    /// 威力の高い武器)。武器の選び方と予測は実際の攻撃と同じ
+    /// (`pick_attack_weapon` / `forecast_strike`)。
+    fn panel_forecast(&self, atk_idx: usize) -> Option<PanelForecast> {
+        let db = self.database();
+        let (_, atk_unit) = db.effective_combat_data(atk_idx)?;
+        let a = &db.unit_instances[atk_idx];
+        let mut best: Option<(u32, usize, crate::data::unit::WeaponData)> = None;
+        for (def_idx, d) in db.unit_instances.iter().enumerate() {
+            if d.off_map || !d.party.is_hostile_to(a.party) {
+                continue;
+            }
+            let dist = crate::combat::manhattan((a.x, a.y), (d.x, d.y));
+            let Some(w) = Self::pick_attack_weapon(
+                &atk_unit,
+                dist,
+                None,
+                a.charged,
+                false,
+                a.has_condition("突撃"),
+                |w| self.weapon_firable(atk_idx, w),
+                |w| self.weapon_skill_ok(atk_idx, w),
+            ) else {
+                continue;
+            };
+            let take = match &best {
+                None => true,
+                Some((bd, _, bw)) => dist < *bd || (dist == *bd && w.power > bw.power),
+            };
+            if take {
+                best = Some((dist, def_idx, w));
+            }
+        }
+        let (_, def_idx, weapon) = best?;
+        let p = self.forecast_strike(atk_idx, def_idx, &weapon)?;
+        let d = &db.unit_instances[def_idx];
+        let target = db
+            .pilot_by_name(&d.pilot_name)
+            .map_or_else(|| d.pilot_name.clone(), |p| p.nickname.clone());
+        Some(PanelForecast {
+            target,
+            hit_pct: p.hit_chance.clamp(0, 100),
+            damage: p.damage,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -833,7 +833,7 @@ impl App {
     /// 該当 UnitWeapon が無い (未 populate) 場合は弾無制限とみなす (= 既存テストへ無影響)。
     /// 武器の必要技能 / 必要条件 ((念力Lv3) 形式の括弧条件) を満たすか。資源 (EN/弾/
     /// 気力) は判定しない使用「資格」のみのゲート。強制武器選択時にも必須。
-    pub(super) fn weapon_skill_ok(
+    pub(crate) fn weapon_skill_ok(
         &self,
         unit_idx: usize,
         wd: &crate::data::unit::WeaponData,
@@ -842,7 +842,7 @@ impl App {
         crate::necessary_skill::weapon_usable_by(wd, u, &self.database)
     }
 
-    pub(super) fn weapon_firable(
+    pub(crate) fn weapon_firable(
         &self,
         unit_idx: usize,
         wd: &crate::data::unit::WeaponData,

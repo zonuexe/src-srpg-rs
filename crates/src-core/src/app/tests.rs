@@ -6587,6 +6587,35 @@ fn post_move_menu_excludes_move_command() {
 }
 
 // ===== REPRO: 移動→攻撃後にユニットが初期位置に戻る不具合の調査 =====
+/// ステータスパネルの判定 (武器の使用可否・戦闘予測) は src-core が実際の攻撃と同じ
+/// 経路で求める。EN 不足の武器は使用不可、予測は射程内の敵へ。
+#[test]
+fn status_panel_view_uses_core_rules() {
+    let mut app = App::new();
+    enter_mapview_with_demo_map(&mut app);
+    place_player_unit(&mut app, "Hero", 2, 6);
+    add_weapon(&mut app, "Hero", 300, 1);
+    add_weapon(&mut app, "Hero", 300, 1);
+    // 2 本目は EN 9999 を要する (使用不可)。
+    app.database_mut()
+        .units
+        .iter_mut()
+        .find(|u| u.name == "Hero")
+        .unwrap()
+        .weapons[1]
+        .en_consumption = 9999;
+    spawn_enemy(&mut app, "Hero", 3, 6);
+    app.set_map_cursor(2, 6);
+    let view = app.status_panel_view().expect("カーソル上にユニットが居る");
+    assert_eq!(view.weapon_firable, vec![true, false]);
+    let f = view.forecast.expect("射程内の敵への予測");
+    assert_eq!(f.target, "P");
+    assert!(f.hit_pct > 0 && f.damage > 0);
+    // カーソル上にユニットが居なければ None。
+    app.set_map_cursor(9, 9);
+    assert!(app.status_panel_view().is_none());
+}
+
 fn add_weapon(app: &mut App, unit_name: &str, power: i64, max_range: i32) {
     app.database_mut()
         .units
