@@ -50,6 +50,10 @@ impl App {
         if self.pending_launch.is_some() {
             return self.resolve_launch(choice);
         }
+        // マップ兵器一覧サブメニューは目標地点選択へ委譲。
+        if self.pending_map_weapon.is_some() {
+            return self.resolve_map_weapon(choice);
+        }
         // 反撃モードのメニューは戦闘解決へ委譲 (script_var ではなく攻撃を実行)。
         if self.pending_reaction.is_some() {
             return self.resolve_reaction(choice);

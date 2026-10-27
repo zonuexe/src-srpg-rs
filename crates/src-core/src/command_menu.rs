@@ -105,6 +105,9 @@ pub enum UnitMenuItem {
     /// 分離（合体形態＝構成ユニットを内包している場合）。構成ユニットを盤上へ戻す。
     /// 行動は消費しない（原典準拠）。
     Separate,
+    /// マップ攻撃（`Ｍ` 属性のマップ兵器を持つ場合）。選択でマップ兵器の一覧を出し、
+    /// 目標地点を選んで効果範囲内のユニットを攻撃する。発動で行動終了。
+    MapAttack,
 }
 
 /// 特殊能力（`修理装置` / `補給装置`）に紐づく組込支援コマンドの種別。
@@ -151,6 +154,7 @@ impl UnitMenuItem {
             Self::Launch => "発進",
             Self::Combine => "合体",
             Self::Separate => "分離",
+            Self::MapAttack => "マップ攻撃",
         }
     }
 }
@@ -218,6 +222,16 @@ pub enum ActionMode {
     /// `UnitData.abilities` のインデックス。射程内の味方ユニットを対象に取り、
     /// 確定すると効果適用 + 消費。キャンセル時は何も起きない。
     AbilityTarget { caster: String, ability_idx: usize },
+    /// マップ攻撃の目標地点選択中。`uid` が攻撃側、`weapon` がマップ兵器名。
+    /// `point` は仮決めした目標地点 (原典: 目標地点を選ぶと効果範囲を表示し、もう一度
+    /// 選ぶと発射)。移動後からの遷移なら `snapshot` に移動前状態 (キャンセルで移動後
+    /// メニューへ戻る)。
+    MapAttackSelect {
+        uid: String,
+        weapon: String,
+        point: Option<(u32, u32)>,
+        snapshot: Option<MoveSnapshot>,
+    },
     /// 発進/分離ユニットの**着地点選択中** (原典: 移動範囲から対話選択)。
     /// `uid` が配置するユニット、`candidates` が着地可能なマス (移動範囲内の空きマス)、
     /// `carrier` は母艦の uid (発進の場合。配置後にメニュー再表示・None なら分離)。

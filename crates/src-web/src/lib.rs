@@ -1373,6 +1373,8 @@ fn redraw(ctx: &SharedCtx, app: &SharedApp, assets: &SharedAssets) {
     let reaction_data = app_ref.reaction_window_data();
     // 武器選択中なら武器窓ビューモデルを構築。
     let weapon_select_data = app_ref.weapon_select_window_data();
+    // マップ攻撃の目標地点選択中なら (選べるマス, 効果範囲)。
+    let map_attack_tiles = app_ref.map_attack_select_tiles();
     render::draw_scene(
         ctx,
         app_ref.scene(),
@@ -1398,5 +1400,6 @@ fn redraw(ctx: &SharedCtx, app: &SharedApp, assets: &SharedAssets) {
         reaction_data.as_ref(),
         weapon_select_data.as_ref(),
         app_ref.status_panel_view().as_ref(),
+        map_attack_tiles.as_ref(),
     );
 }

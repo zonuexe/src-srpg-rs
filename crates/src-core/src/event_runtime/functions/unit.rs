@@ -389,6 +389,12 @@ fn fn_wx(app: &App, c: &FnCall) -> Option<String> {
     if let Ok(n) = arg.parse::<i64>() {
         return Some((coord::axis_from_script(n) * TILE_PX).to_string());
     }
+    // 目標地点 (原典 `SelectedX` / `SelectedY`)
+    if arg == "目標地点" {
+        let (x, y) = app.selected_point().unwrap_or_default();
+        let pos = if name == "WX" { x } else { y };
+        return Some((i64::from(pos) * TILE_PX).to_string());
+    }
     // ユニット参照
     if let Some(u) = find_unit(app, arg) {
         let pos = if name == "WX" { u.x } else { u.y };
@@ -564,20 +570,23 @@ fn fn_relation(app: &App, c: &FnCall) -> Option<String> {
 
 fn fn_x(app: &App, c: &FnCall) -> Option<String> {
     let FnCall { args, .. } = *c;
-    Some(
-        find_unit(app, args.first().copied().unwrap_or(""))
-            .map(|u| coord::to_script(u.x).to_string())
-            .unwrap_or_else(|| "0".to_string()),
-    )
+    Some(unit_or_point_coord(app, args.first().copied().unwrap_or(""), |(x, _)| x).to_string())
 }
 
 fn fn_y(app: &App, c: &FnCall) -> Option<String> {
     let FnCall { args, .. } = *c;
-    Some(
-        find_unit(app, args.first().copied().unwrap_or(""))
-            .map(|u| coord::to_script(u.y).to_string())
-            .unwrap_or_else(|| "0".to_string()),
-    )
+    Some(unit_or_point_coord(app, args.first().copied().unwrap_or(""), |(_, y)| y).to_string())
+}
+
+/// `X(arg)` / `Y(arg)` の値 (1 始まり)。`目標地点` は原典 `SelectedX` / `SelectedY`
+/// (未設定なら 0)、それ以外はユニットの位置 (見つからなければ 0)。
+fn unit_or_point_coord(app: &App, arg: &str, axis: impl Fn((u32, u32)) -> u32) -> i64 {
+    if arg == "目標地点" {
+        return app
+            .selected_point()
+            .map_or(0, |p| coord::to_script(axis(p)));
+    }
+    find_unit(app, arg).map_or(0, |u| coord::to_script(axis((u.x, u.y))))
 }
 
 fn fn_area(app: &App, c: &FnCall) -> Option<String> {

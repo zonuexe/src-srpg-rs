@@ -62,6 +62,7 @@ pub fn draw_scene(
     reaction_data: Option<&src_core::scene::reaction::ReactionWindowData>,
     weapon_select_data: Option<&src_core::scene::weapon_select::WeaponSelectWindowData>,
     status_panel: Option<&src_core::scene::map_view::StatusPanelView>,
+    map_attack_tiles: Option<&src_core::scene::map_view::MapAttackTiles>,
 ) {
     clear(ctx, "#2a2a30"); // 周囲のレターボックスは暗色
     match scene {
@@ -99,7 +100,7 @@ pub fn draw_scene(
                     status_panel,
                 );
                 // 行動済みユニットのグレーアウト + ActionMode 範囲オーバーレイ
-                draw_action_overlays(ctx, database, scroll, action_mode);
+                draw_action_overlays(ctx, database, scroll, action_mode, map_attack_tiles);
                 // .eve スクリプトの蓄積描画コマンドは MapView のみで表示。
                 // 設定画面 / タイトルへの透過を防ぐ。
                 draw_script_overlay(ctx, script_overlay, assets);
@@ -154,6 +155,7 @@ fn draw_action_overlays(
     database: &GameDatabase,
     scroll: (u32, u32),
     action_mode: src_core::ActionMode,
+    map_attack_tiles: Option<&src_core::scene::map_view::MapAttackTiles>,
 ) {
     let Some(map) = database.map.as_ref() else {
         return;
@@ -335,6 +337,29 @@ fn draw_action_overlays(
                         f64::from(TILE_SIZE),
                         f64::from(TILE_SIZE),
                     );
+                }
+            }
+        }
+        ActionMode::MapAttackSelect { .. } => {
+            // マップ攻撃: 目標地点に選べるマスを橙、仮決め / カーソル位置を狙った効果範囲を赤で塗る。
+            if let Some(t) = map_attack_tiles {
+                for (tiles, color) in [
+                    (&t.targets, "rgba(255,152,0,0.30)"),
+                    (&t.area, "rgba(229,57,53,0.50)"),
+                ] {
+                    ctx.set_fill_style_str(color);
+                    for &(rx, ry) in tiles {
+                        if !in_view(rx, ry) {
+                            continue;
+                        }
+                        let (px, py) = to_screen(rx, ry);
+                        ctx.fill_rect(
+                            px as f64,
+                            py as f64,
+                            f64::from(TILE_SIZE),
+                            f64::from(TILE_SIZE),
+                        );
+                    }
                 }
             }
         }
