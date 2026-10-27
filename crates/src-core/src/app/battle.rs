@@ -676,18 +676,17 @@ impl App {
         true
     }
 
-    /// 1 回の攻撃の命中・ダメージ判定。プレイヤー / AI の本線攻撃
-    /// (`attack_resolve_and_run`) と `.eve Attack` (`script_attack`) の共通コア。
-    /// 状態異常・精神コマンド・地形・散布補正を反映した予測から、命中 / クリティカル /
-    /// 即死 / 切り払い / 防御特性 を判定する。乱数は本線攻撃と同じ順に消費する。
-    /// ダメージの適用 (援護防御・みがわり・バリア等) は呼び出し側が行う。
-    fn resolve_strike(
-        &mut self,
+    /// 攻撃 1 回分の予測 (命中率・ダメージ・クリティカル率)。状態異常・精神コマンド・
+    /// 特殊能力・地形適応・与被ダメージ修正・ECM・散布補正を反映する。本線攻撃・援護攻撃・
+    /// 反撃で共通。防御側の状態と位置は `setup.def_inst` (呼び出し側が取ったスナップショット)
+    /// を使い、攻撃側は現在の状態を使う。戻り値の 2 つ目は攻撃側の状態名一覧。
+    fn strike_preview(
+        &self,
         atk_idx: usize,
         def_idx: usize,
         setup: &StrikeSetup,
-        def_mode: &str,
-    ) -> StrikeOutcome {
+        is_counter: bool,
+    ) -> (combat::CombatPreview, Vec<String>) {
         let StrikeSetup {
             atk_pilot,
             atk_unit,
@@ -698,13 +697,14 @@ impl App {
             def_hit_mod,
             def_damage_mod,
         } = *setup;
-        // 状態異常 / 精神コマンド分の補正は predict_with_status に任せる。
         let atk_morale = self.database.unit_instances[atk_idx].morale;
         let def_morale = def_inst.morale;
+        // 反撃では 捨て身 を無効にする (§0.8 / SRC: 自分から攻撃したときのみ ×3)。
         let mut atk_statuses: Vec<String> = self.database.unit_instances[atk_idx]
             .conditions
             .iter()
             .map(|c| c.name.clone())
+            .filter(|n| !(is_counter && n == "捨て身"))
             .collect();
         push_combat_feature_statuses(&self.database.unit_instances[atk_idx], &mut atk_statuses);
         let mut def_statuses: Vec<String> =
@@ -750,6 +750,29 @@ impl App {
             ),
         );
         let preview = preview.apply_scatter(&weapon.class, atk_def_dist);
+        (preview, atk_statuses)
+    }
+
+    /// 1 回の攻撃の命中・ダメージ判定。プレイヤー / AI の本線攻撃
+    /// (`attack_resolve_and_run`) と `.eve Attack` (`script_attack`) の共通コア。
+    /// 状態異常・精神コマンド・地形・散布補正を反映した予測から、命中 / クリティカル /
+    /// 即死 / 切り払い / 防御特性 を判定する。乱数は本線攻撃と同じ順に消費する。
+    /// ダメージの適用 (援護防御・みがわり・バリア等) は呼び出し側が行う。
+    fn resolve_strike(
+        &mut self,
+        atk_idx: usize,
+        def_idx: usize,
+        setup: &StrikeSetup,
+        def_mode: &str,
+    ) -> StrikeOutcome {
+        let StrikeSetup {
+            atk_pilot,
+            weapon,
+            def_pilot,
+            def_unit,
+            ..
+        } = *setup;
+        let (preview, atk_statuses) = self.strike_preview(atk_idx, def_idx, setup, false);
 
         // 命中判定。回避を選んだ防御側は命中率が半減する (SRC 反撃モード)。
         let effective_hit = if def_mode == "回避" {
@@ -1598,55 +1621,21 @@ impl App {
             .unwrap_or(0);
         let def_hit_mod = self.database.terrain_hit_mod(terrain_id);
         let def_damage_mod = self.database.terrain_damage_mod(terrain_id);
-        let sup_morale = self.database.unit_instances[sup_idx].morale;
-        let def_morale_sup = def_inst.morale;
-        let mut sup_statuses: Vec<String> = self.database.unit_instances[sup_idx]
-            .conditions
-            .iter()
-            .map(|c| c.name.clone())
-            .collect();
-        push_combat_feature_statuses(&self.database.unit_instances[sup_idx], &mut sup_statuses);
-        let mut def_statuses: Vec<String> =
-            def_inst.conditions.iter().map(|c| c.name.clone()).collect();
-        push_combat_feature_statuses(&def_inst, &mut def_statuses);
-        let sup_env = self.terrain_env_at(
-            self.database.unit_instances[sup_idx].x,
-            self.database.unit_instances[sup_idx].y,
+        let (preview, _) = self.strike_preview(
+            sup_idx,
+            def_idx,
+            &StrikeSetup {
+                atk_pilot: &sup_pilot,
+                atk_unit: &sup_unit,
+                weapon: &weapon,
+                def_pilot: &def_pilot,
+                def_unit: &def_unit,
+                def_inst: &def_inst,
+                def_hit_mod,
+                def_damage_mod,
+            },
+            false,
         );
-        let def_env = self.terrain_env_at(def_inst.x, def_inst.y);
-        // 援護攻撃側/防御側の与・被ダメージ修正を sp.txt から解決。
-        let dmg_levels = self
-            .database
-            .damage_spirit_levels(&sup_statuses, &def_statuses);
-        let preview = combat::predict_with_status_terrain(
-            &sup_pilot,
-            &sup_unit,
-            &weapon,
-            &def_pilot,
-            &def_unit,
-            def_hit_mod,
-            def_damage_mod,
-            sup_morale,
-            def_morale_sup,
-            &sup_statuses,
-            &def_statuses,
-            sup_env,
-            def_env,
-            dmg_levels,
-            self.ecm_hit_mult(def_idx, sup_idx, &weapon.class),
-        );
-        // 散 属性武器の距離補正 (援護攻撃側 → 防御側)。
-        let sup_def_dist = combat::manhattan(
-            (
-                self.database.unit_instances[sup_idx].x,
-                self.database.unit_instances[sup_idx].y,
-            ),
-            (
-                self.database.unit_instances[def_idx].x,
-                self.database.unit_instances[def_idx].y,
-            ),
-        );
-        let preview = preview.apply_scatter(&weapon.class, sup_def_dist);
         let roll = (self.next_u32() % 100) as i32;
         // 回避系特殊能力 (B): 援護攻撃も 分身/超回避 で完全回避され得る。
         let hit =
@@ -1993,59 +1982,23 @@ impl App {
             .map(|m| m.cell(target.0, target.1).terrain_id)?;
         let atk_hit_mod = self.database.terrain_hit_mod(t_id);
         let atk_damage_mod = self.database.terrain_damage_mod(t_id);
-        // 反撃側 = defender、被弾側 = attacker。状態異常はそれぞれの
-        // UnitInstance.statuses から取り出す。
-        let counter_atk_morale = self.database.unit_instances[def_idx].morale;
-        let counter_def_morale = self.database.unit_instances[atk_idx].morale;
-        // 反撃側の状態。捨て身 は反撃時には無効 (§0.8 / SRC: 自分から攻撃したときのみ
-        // ×3。反撃では適用しない) なので除外する。
-        let mut counter_atk_statuses: Vec<String> = self.database.unit_instances[def_idx]
-            .conditions
-            .iter()
-            .map(|c| c.name.clone())
-            .filter(|n| n != "捨て身")
-            .collect();
-        push_combat_feature_statuses(
-            &self.database.unit_instances[def_idx],
-            &mut counter_atk_statuses,
+        // 反撃側 = defender (def_idx)、被弾側 = attacker (atk_idx)。
+        let atk_inst = self.database.unit_instances[atk_idx].clone();
+        let (preview, _) = self.strike_preview(
+            def_idx,
+            atk_idx,
+            &StrikeSetup {
+                atk_pilot: &def_pilot,
+                atk_unit: &def_unit,
+                weapon: &weapon,
+                def_pilot: &atk_pilot,
+                def_unit: &atk_unit,
+                def_inst: &atk_inst,
+                def_hit_mod: atk_hit_mod,
+                def_damage_mod: atk_damage_mod,
+            },
+            true,
         );
-        let mut counter_def_statuses: Vec<String> = self.database.unit_instances[atk_idx]
-            .conditions
-            .iter()
-            .map(|c| c.name.clone())
-            .collect();
-        push_combat_feature_statuses(
-            &self.database.unit_instances[atk_idx],
-            &mut counter_def_statuses,
-        );
-        // 反撃側 = defender (位置 dx,dy)、被弾側 = attacker (位置 target)。
-        let counter_atk_env = self.terrain_env_at(dx, dy);
-        let counter_def_env = self.terrain_env_at(target.0, target.1);
-        // 反撃側 (= 攻撃側) / 被弾側 (= 防御側) の与・被ダメージ修正を sp.txt から解決。
-        let dmg_levels = self
-            .database
-            .damage_spirit_levels(&counter_atk_statuses, &counter_def_statuses);
-        let preview = combat::predict_with_status_terrain(
-            &def_pilot,
-            &def_unit,
-            &weapon,
-            &atk_pilot,
-            &atk_unit,
-            atk_hit_mod,
-            atk_damage_mod,
-            counter_atk_morale,
-            counter_def_morale,
-            &counter_atk_statuses,
-            &counter_def_statuses,
-            counter_atk_env,
-            counter_def_env,
-            dmg_levels,
-            // 反撃の被弾側は atk_idx、反撃の攻撃側は def_idx。
-            self.ecm_hit_mult(atk_idx, def_idx, &weapon.class),
-        );
-        // 散 属性武器の距離補正 (反撃側 dx,dy → 被弾側 target)。
-        let counter_dist = combat::manhattan((dx, dy), target);
-        let preview = preview.apply_scatter(&weapon.class, counter_dist);
         // 反撃武器の 1-based インデックスを取得
         let weapon_num = def_unit
             .weapons
