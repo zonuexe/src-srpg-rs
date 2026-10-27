@@ -4931,30 +4931,80 @@ fn call_intermission_command_data_save_writes_quicksave() {
     );
 }
 
+/// `SpecialPower` は SP を消費しない (`SpecialPowerコマンド.md`「ＳＰは消費しません」)。
+/// 旧実装は SP を消費し、不足なら効果を出さなかった。
 #[test]
-fn specialpower_consumes_sp_and_recoversp_restores() {
+fn specialpower_does_not_consume_sp() {
     let src = "\
 Pilot ガロ ガロ 男性 超能力者 AAAA 100 100 100 100 100 100 100
 Unit ゾルダ Mass 1 0 陸 5 M 1000 100 2400 80 900 80 BBBB
 Place ゾルダ ガロ 敵 5 5
 ";
-    // PilotData.sp は Pilot 命令経由では設定されないため、直接書き換える。
+    let stmts = event::parse(src).unwrap();
+    let mut app = App::new();
+    execute(&mut app, &stmts).unwrap();
+    app.database_mut().pilots[0].sp = Some(10);
+    // 魂 (cost 60) は残り SP 10 を超えるが、イベントからは発動する。
+    execute(&mut app, &event::parse("SpecialPower ガロ 魂\n").unwrap()).unwrap();
+    let u = &app.database().unit_instances[0];
+    assert_eq!(u.sp_consumed, 0, "SpecialPower で SP が消費された");
+    assert!(u.has_condition("魂"));
+}
+
+/// B4: `SpecialPower` の瞬間効果はプレイヤー発動と同じ経路で適用される。
+/// 旧実装は `信頼` を名前だけの condition として付けるだけで HP を回復しなかった。
+#[test]
+fn specialpower_instant_effect_uses_spirit_effect_path() {
+    let src = "\
+Pilot ガロ ガロ 男性 超能力者 AAAA 100 100 100 100 100 100 100
+Unit ゾルダ Mass 1 0 陸 5 M 1000 100 2400 80 900 80 BBBB
+Place ゾルダ ガロ 敵 5 5
+Damage ガロ 600
+SpecialPower ガロ 信頼
+";
+    let stmts = event::parse(src).unwrap();
+    let mut app = App::new();
+    execute(&mut app, &stmts).unwrap();
+    let u = &app.database().unit_instances[0];
+    assert!(
+        u.damage < 600,
+        "信頼 で HP が回復していない (damage={})",
+        u.damage
+    );
+    assert!(
+        !u.has_condition("信頼"),
+        "瞬間効果が condition として残っている"
+    );
+}
+
+/// `SpecialPower spower` (1 引数) は SelectedUnitForEvent が使用者になる。
+#[test]
+fn specialpower_single_arg_uses_selected_unit() {
+    let src = "\
+Pilot ガロ ガロ 男性 超能力者 AAAA 100 100 100 100 100 100 100
+Unit ゾルダ Mass 1 0 陸 5 M 1000 100 2400 80 900 80 BBBB
+Place ゾルダ ガロ 敵 5 5
+Select ガロ
+SpecialPower 熱血
+";
+    let stmts = event::parse(src).unwrap();
+    let mut app = App::new();
+    execute(&mut app, &stmts).unwrap();
+    assert!(app.database().unit_instances[0].has_condition("熱血"));
+}
+
+#[test]
+fn recoversp_restores_consumed_sp() {
+    let src = "\
+Pilot ガロ ガロ 男性 超能力者 AAAA 100 100 100 100 100 100 100
+Unit ゾルダ Mass 1 0 陸 5 M 1000 100 2400 80 900 80 BBBB
+Place ゾルダ ガロ 敵 5 5
+";
     let stmts = event::parse(src).unwrap();
     let mut app = App::new();
     execute(&mut app, &stmts).unwrap();
     app.database_mut().pilots[0].sp = Some(60);
-    // 熱血 (cost 30) → 残り 30
-    execute(&mut app, &event::parse("SpecialPower ガロ 熱血\n").unwrap()).unwrap();
-    let u = &app.database().unit_instances[0];
-    assert_eq!(u.sp_consumed, 30);
-    assert!(u.has_condition("熱血"));
-    // もう一度 熱血 → 残り 0
-    execute(&mut app, &event::parse("SpecialPower ガロ 熱血\n").unwrap()).unwrap();
-    assert_eq!(app.database().unit_instances[0].sp_consumed, 60);
-    // 魂 (cost 60) → SP 不足で無発動
-    execute(&mut app, &event::parse("SpecialPower ガロ 魂\n").unwrap()).unwrap();
-    assert_eq!(app.database().unit_instances[0].sp_consumed, 60);
-    assert!(!app.database().unit_instances[0].has_condition("魂"));
+    app.database_mut().unit_instances[0].sp_consumed = 60;
     // RecoverSP で全回復 (SRC仕様: pilot + rate の2引数)
     execute(&mut app, &event::parse("RecoverSP ガロ 100\n").unwrap()).unwrap();
     assert_eq!(app.database().unit_instances[0].sp_consumed, 0);

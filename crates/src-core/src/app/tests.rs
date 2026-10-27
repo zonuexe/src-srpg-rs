@@ -6886,7 +6886,8 @@ fn sacrifice_special_power_makes_selected_ally_a_substitute() {
              イベント=生贄ルーチン\n\
              \n\
              みがわり\n\
-             身, 10, 味方, みがわり, -, -, みがわり\n",
+             身, 10, 味方, みがわり, -, -, みがわり\n\
+             みがわり\n",
     )
     .unwrap();
     app.database_mut().extend_special_powers(sp);

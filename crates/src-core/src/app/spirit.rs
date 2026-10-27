@@ -67,7 +67,7 @@ impl App {
                 return sp.sp_consumption;
             }
         }
-        crate::event_runtime::sp_cost_for(name)
+        default_spirit_cost(name)
     }
 
     /// 当該ユニットが現在発動可能な精神コマンドの (名前, 消費SP) 列を返す。
@@ -300,6 +300,64 @@ impl App {
         }
     }
 
+    /// 精神コマンド `name` が対象ユニットの指定を要する (`みがわり` / `挑発` 効果を持つ) か。
+    /// SRC `SpecialPowerCmd` は 2 引数形式 `SpecialPower spower target` の判別に使う。
+    pub(crate) fn spirit_needs_target(&self, name: &str) -> bool {
+        self.spirit_has_effect(name, "みがわり") || self.spirit_has_effect(name, "挑発")
+    }
+
+    /// 精神コマンド `name` が効果種別 `effect` を持つか。sp.txt 未定義なら名前で判定する。
+    pub(super) fn spirit_has_effect(&self, name: &str, effect: &str) -> bool {
+        match self.database.special_powers.iter().find(|s| s.name == name) {
+            Some(sp) => sp.effects.iter().any(|(e, _)| e == effect),
+            None => name == effect,
+        }
+    }
+
+    /// `.eve SpecialPower` / `Mind` の本体。`caster` が精神コマンド `name` を SP を
+    /// 消費せずに発動する (`SpecialPowerコマンド.md`「ＳＰは消費しません」)。
+    /// 効果先は `target` (省略時は `caster`、全体対象のコマンドは `caster` の陣営全体)。
+    /// 効果の適用はプレイヤー発動と同じ `apply_spirit_effect` を通す。
+    ///
+    /// `みがわり` (SRC `Unit.cls:14855`) は保護対象 (`target`、省略時は `caster`) に、
+    /// 身代わりユニット (= `caster`) の uid を data に持つ消費型 condition を付ける。
+    /// 戦闘で 1 回ダメージを肩代わりすると消える (`apply_migawari`)。
+    pub(crate) fn execute_spirit_by_event(
+        &mut self,
+        caster: &str,
+        target: Option<&str>,
+        name: &str,
+    ) {
+        if self.spirit_has_effect(name, "みがわり") {
+            let protected = target.unwrap_or(caster);
+            if let Some(u) = self.database.unit_by_uid_mut(protected) {
+                let mut cond = crate::Condition::new("みがわり", -1);
+                cond.data = caster.to_string();
+                u.conditions.retain(|c| c.name != "みがわり");
+                u.add_condition(cond);
+            }
+            return;
+        }
+        match (self.spirit_target_kind(name), target) {
+            (SpiritTargetKind::AllAllies, None) => {
+                let Some(party) = self.database.unit_by_uid(caster).map(|u| u.party) else {
+                    return;
+                };
+                let targets: Vec<String> = self
+                    .database
+                    .unit_instances
+                    .iter()
+                    .filter(|u| u.party == party)
+                    .map(|u| u.uid.clone())
+                    .collect();
+                for t in &targets {
+                    self.apply_spirit_effect(t, name);
+                }
+            }
+            (_, t) => self.apply_spirit_effect(t.unwrap_or(caster), name),
+        }
+    }
+
     /// `target` に lifetime=1 の condition を付与する (発動陣営の次フェイズ開始で解除)。
     pub(super) fn add_unit_condition(&mut self, uid: &str, name: &str, lifetime: i32) {
         if let Some(u) = self.database.unit_by_uid_mut(uid) {
@@ -444,5 +502,37 @@ impl App {
         self.push_message(format!(
             "精神コマンド【{spirit}】→ {target_nick} (SP -{cost})"
         ));
+    }
+}
+
+/// 精神コマンド名 → 標準 SP コスト。SRC のデフォルト値に近似。
+/// `sp.txt` で上書き対応するのは将来課題。
+fn default_spirit_cost(name: &str) -> i32 {
+    match name {
+        "必中" => 15,
+        "集中" => 20,
+        "ひらめき" => 20,
+        "熱血" => 30,
+        "魂" => 60,
+        "気合" => 5,
+        "不屈" => 25,
+        "鉄壁" => 25,
+        "加速" => 10,
+        "信頼" => 25,
+        "友情" => 30,
+        "補給" => 50,
+        "復活" => 90,
+        "愛" => 90,
+        "幸運" => 15,
+        "祝福" => 40,
+        "応援" => 10,
+        "脱力" => 35,
+        "覚醒" => 65,
+        "再動" => 50,
+        "突撃" => 25,
+        "奇跡" => 75,
+        // SRC 標準以外 (シナリオ独自) の精神コマンドのコストはここに持たない。
+        // 既定 0 にフォールバックし、コストは sp.txt (scenario の SpecialPowerData) で解決する。
+        _ => 0,
     }
 }

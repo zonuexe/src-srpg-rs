@@ -2924,184 +2924,46 @@ fn exec_command_pc(
             }
             return Ok(pc + 1);
         }
-        "specialpower" => {
-            // `SpecialPower unit power_name [target]` — 精神コマンドを発動。
-            // 1) 当該パイロットの PilotInstance.sp_remaining を計算。
-            // 2) `power_name` の SP コストが足りなければ無発動。
-            // 3) 足りれば PilotInstance.sp_remaining を消費し、condition を適用。
-            // 4) lifetime に基づいて condition を付与（永久 or 1ターン）。
-            if xargs.len() < 2 {
-                return Ok(pc + 1);
-            }
-            // SRC はコマンド引数のユニット指定にシステム変数 (相手ユニットＩＤ 等) を許す。
-            // 裸の変数名 (生贄ルーチンの `SpecialPower 相手ユニットＩＤ みがわり 対象ユニットＩＤ`)
-            // は実ユニットに一致しなければ同名 script_var の値 (uid) へフォールバック解決する。
-            let target = resolve_handle_var(app, xargs[0].clone());
-            let power = xargs[1].clone();
-            let target_of_power = xargs.get(2).cloned().map(|t| resolve_handle_var(app, t));
-
-            // Find the unit
-            let unit_idx = match app
-                .database()
-                .unit_instances
-                .iter()
-                .position(|u| matches_unit_handle(u, &target))
-            {
-                Some(i) => i,
-                None => return Ok(pc + 1),
-            };
-
-            // みがわり (身代わり, SRC `Unit.cls:14855` / `特殊効果攻撃属性.md`): SP 使用者
-            // (unit_idx) が、保護対象 (target_of_power、省略時は使用者自身) の身代わりに
-            // なる。保護対象の `みがわり` condition.data に身代わりユニット (= 使用者) の
-            // uid を保持し、戦闘で 1 回ダメージを肩代わりしたら消える消費型 (lifetime=-1)。
-            // サンプルの自作 SP `生贄` が `SpecialPower 相手ユニットＩＤ みがわり
-            // 対象ユニットＩＤ` で発行する (data/include.eve の 生贄ルーチン)。
-            if power == "みがわり" {
-                let sub_uid = app.database().unit_instances[unit_idx].uid.clone();
-                let protected = target_of_power.as_deref().unwrap_or(&target).to_string();
-                // SP 消費 (使用者のパイロット。PilotInstance 優先、無ければ sp_consumed)。
-                let cost = app
-                    .database()
-                    .special_powers
-                    .iter()
-                    .find(|sp| sp.name == "みがわり")
-                    .map(|sp| sp.sp_consumption)
-                    .unwrap_or_else(|| sp_cost_for("みがわり"));
-                let pid = app.database().unit_instances[unit_idx]
-                    .pilot_ids
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| app.database().unit_instances[unit_idx].pilot_name.clone());
-                if let Some(pi) = app
-                    .database()
-                    .pilot_instances
-                    .iter()
-                    .position(|p| p.id == pid || p.pilot_data_name == pid)
-                {
-                    let _ = app.database_mut().pilot_instances[pi].try_consume_sp(cost);
-                } else {
-                    app.database_mut().unit_instances[unit_idx].sp_consumed += cost;
+        "specialpower" | "mind" => {
+            // SRC `SpecialPower [unit] spower [target]` (`SpecialPowerコマンド.md`)。
+            // `Mind pilot spower` は Ver.1.6 までの同等コマンド。SP は消費せず、効果は
+            // App の精神コマンド経路 (`execute_spirit_by_event` → `apply_spirit_effect`)
+            // で適用する。引数の解釈は C# `SpecialPowerCmd` に合わせる:
+            //  - 1 引数: `spower` (使用者 = SelectedUnitForEvent)
+            //  - 2 引数: `spower target` (みがわり/挑発 効果を持つ SP) / `unit spower`
+            //  - 3 引数: `unit spower target`
+            // SRC はユニット指定にシステム変数 (相手ユニットＩＤ 等) を許す。裸の変数名
+            // (生贄ルーチンの `SpecialPower 相手ユニットＩＤ みがわり 対象ユニットＩＤ`) は
+            // 実ユニットに一致しなければ同名 script_var の値 (uid) へフォールバック解決する。
+            let selected = || app.selected_unit_for_event().to_string();
+            let (caster_key, power, target_key) = match xargs.len() {
+                0 => return Err(err(line, "SpecialPowerコマンドの引数の数が違います")),
+                1 => (selected(), xargs[0].clone(), None),
+                2 if app.spirit_needs_target(&xargs[0]) => {
+                    (selected(), xargs[0].clone(), Some(xargs[1].clone()))
                 }
-                // 保護対象に みがわり condition を付与 (data=身代わり uid)。重複は最新で置換。
-                if let Some(pidx) = app
-                    .database()
+                2 => (xargs[0].clone(), xargs[1].clone(), None),
+                _ => (xargs[0].clone(), xargs[1].clone(), Some(xargs[2].clone())),
+            };
+            let uid_of = |app: &App, key: String| {
+                let key = resolve_handle_var(app, key);
+                app.database()
                     .unit_instances
                     .iter()
-                    .position(|u| matches_unit_handle(u, &protected))
-                {
-                    let mut cond = Condition::new("みがわり", -1);
-                    cond.data = sub_uid;
-                    app.database_mut().unit_instances[pidx]
-                        .conditions
-                        .retain(|c| c.name != "みがわり");
-                    app.database_mut().unit_instances[pidx].add_condition(cond);
-                }
+                    .find(|u| matches_unit_handle(u, &key))
+                    .map(|u| u.uid.clone())
+            };
+            let Some(caster) = uid_of(app, caster_key) else {
                 return Ok(pc + 1);
-            }
-
-            // Get pilot ID
-            let pilot_id = app.database().unit_instances[unit_idx]
-                .pilot_ids
-                .first()
-                .map(|s| s.as_str())
-                .unwrap_or(&app.database().unit_instances[unit_idx].pilot_name);
-
-            // Try to find existing pilot instance
-            let pilot_idx = app
-                .database()
-                .pilot_instances
-                .iter()
-                .position(|p| p.id == pilot_id || p.pilot_data_name == pilot_id);
-
-            if let Some(pilot_idx) = pilot_idx {
-                // PilotInstance exists - look up SP cost from special_powers
-                let sp_consumption = app
-                    .database()
-                    .special_powers
-                    .iter()
-                    .find(|sp| sp.name == power)
-                    .map(|sp| sp.sp_consumption)
-                    .unwrap_or_else(|| sp_cost_for(&power));
-
-                if !app.database_mut().pilot_instances[pilot_idx].try_consume_sp(sp_consumption) {
-                    log::warn!("SpecialPower: insufficient SP for '{}'", power);
-                    return Ok(pc + 1);
-                }
-
-                let lifetime = match app
-                    .database()
-                    .special_powers
-                    .iter()
-                    .find(|sp| sp.name == power)
-                {
-                    Some(sp) => match sp.duration.as_str() {
-                        "瞬間" => 0,
-                        "発動ターン" | "1ターン" => 1,
-                        "2ターン" => 2,
-                        "3ターン" => 3,
-                        _ => -1,
-                    },
-                    None => -1,
-                };
-
-                if lifetime >= 0 {
-                    let actual_target = target_of_power.as_deref().unwrap_or(&target);
-                    if let Some(idx) = app
-                        .database()
-                        .unit_instances
-                        .iter()
-                        .position(|u| matches_unit_handle(u, actual_target))
-                    {
-                        let u = &mut app.database_mut().unit_instances[idx];
-                        u.add_condition(Condition::new(
-                            &power,
-                            if lifetime == 0 { 1 } else { lifetime },
-                        ));
-                    }
-                }
-            } else {
-                // Fallback: no PilotInstance - use old behavior with PilotData.sp
-                let max_sp = app
-                    .database()
-                    .pilot_by_name(pilot_id)
-                    .and_then(|p| p.sp)
-                    .unwrap_or(0);
-                let cur_consumed = app.database().unit_instances[unit_idx].sp_consumed;
-                let remaining_sp = max_sp - cur_consumed;
-                let cost = sp_cost_for(&power);
-                if max_sp > 0 && cost > remaining_sp {
-                    return Ok(pc + 1);
-                }
-                let u = &mut app.database_mut().unit_instances[unit_idx];
-                u.sp_consumed += cost;
-                if !u.has_condition(&power) {
-                    u.add_condition(Condition::new(power, -1));
-                }
-            }
-
-            return Ok(pc + 1);
-        }
-        "mind" => {
-            // SRC `Mind pilot sp_name` — SP を消費せずに精神コマンドを強制発動。
-            // イベント演出や NPC 強化でよく使われる。`SpecialPower` と異なり SP 消費なし。
-            // `MindAnime sp_name pilot` は視覚演出のみ (Stub)。
-            if xargs.len() < 2 {
-                return Ok(pc + 1);
-            }
-            let pilot_key = xargs[0].clone();
-            let sp_name = xargs[1].clone();
-            // パイロット名 → UnitInstance を逆引きして Condition を付与。
-            if let Some(u) = app
-                .database_mut()
-                .unit_instances
-                .iter_mut()
-                .find(|u| u.pilot_name == pilot_key || matches_unit_handle(u, &pilot_key))
-            {
-                if !u.has_condition(&sp_name) {
-                    u.add_condition(Condition::new(sp_name, -1));
-                }
-            }
+            };
+            let target = match target_key {
+                Some(k) => match uid_of(app, k) {
+                    Some(t) => Some(t),
+                    None => return Ok(pc + 1),
+                },
+                None => None,
+            };
+            app.execute_spirit_by_event(&caster, target.as_deref(), &power);
             return Ok(pc + 1);
         }
         "clearmind" => {
