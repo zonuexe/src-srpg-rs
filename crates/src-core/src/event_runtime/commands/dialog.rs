@@ -19,17 +19,40 @@ pub(super) fn exec(app: &mut App, c: &Cmd) -> Option<Result<usize, ScriptError>>
 }
 
 fn exec_talk(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
-    let Cmd {
-        xargs, pc, stmts, ..
-    } = *c;
     // Talk [character position option]
     // SRC 仕様: 最初の引数のみがキャラクター名（話者）。
     // それ以降の引数は位置指定 (X Y / 母艦 / 中央 / 固定) や
-    // 表示オプションであり、話者名には含めない。
-    // 例: `Talk システム 8 8` → speaker="システム"、座標 (8,8) は無視。
-    //     `Talk 霊夢 (8,6)`   → speaker="霊夢"、座標 (8,6) は無視。
+    // 表示オプションであり、話者名には含めない (`center_for_talk`)。
+    // 例: `Talk システム 8 8` → speaker="システム"、座標 (8,8) を中央表示。
+    center_for_talk(app, c);
+    let block = talk_block(app, c, "talk");
+    // モーダル表示。先頭ページを Talk に出し、残りは talk_pages に積んで
+    // クリック応答ごとに 1 ページずつ送る。空 body はスキップ。
+    if let Some((first, rest)) = block.pages.split_first() {
+        app.set_talk_pages(block.speaker.clone(), rest.to_vec());
+        app.set_pending_dialog(crate::dialog::PendingDialog::Talk {
+            speaker: block.speaker,
+            body: first.clone(),
+        });
+    }
+    Ok(block.next_pc)
+}
+
+/// `Talk` / `AutoTalk` ブロック (コマンド行から `End` / `Suspend` / 次の同種コマンドまで)。
+struct TalkBlock {
+    speaker: String,
+    /// 段階表示 (`:`) で区切ったページ。
+    pages: Vec<String>,
+    next_pc: usize,
+}
+
+/// `Talk` / `AutoTalk` の本文を集めてページに分け、メッセージログに積む。
+fn talk_block(app: &mut App, c: &Cmd, block_cmd: &str) -> TalkBlock {
+    let Cmd {
+        xargs, pc, stmts, ..
+    } = *c;
     let speaker = xargs.first().cloned().unwrap_or_default();
-    let (raw_body, next_pc) = collect_until_end(app, pc + 1, stmts);
+    let (raw_body, next_pc) = collect_until_end(app, pc + 1, stmts, block_cmd);
     // SRC の Talk ボディに含まれる HTML 書式タグを除去。
     // `<B>...</B>` / `<COLOR=Red>` 等は SRC のリッチテキスト用であり、
     // プレーンテキスト描画では不要。`<LT>` / `<GT>` は `<` / `>` に変換。
@@ -45,24 +68,149 @@ fn exec_talk(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         .collect();
     // メッセージログには段階表示を 1 行に畳んで積む (HUD 一行表示用)。
     let log_body = pages.join(" ").replace('\n', " ");
-    let log_msg = if speaker.is_empty() {
-        log_body.clone()
-    } else {
-        format!("【{speaker}】{log_body}")
-    };
     if !log_body.is_empty() {
-        app.push_message(log_msg);
-    }
-    // モーダル表示。先頭ページを Talk に出し、残りは talk_pages に積んで
-    // クリック応答ごとに 1 ページずつ送る。空 body はスキップ。
-    if let Some((first, rest)) = pages.split_first() {
-        app.set_talk_pages(speaker.clone(), rest.to_vec());
-        app.set_pending_dialog(crate::dialog::PendingDialog::Talk {
-            speaker,
-            body: first.clone(),
+        app.push_message(if speaker.is_empty() {
+            log_body
+        } else {
+            format!("【{speaker}】{log_body}")
         });
     }
-    Ok(next_pc)
+    TalkBlock {
+        speaker,
+        pages,
+        next_pc,
+    }
+}
+
+/// `Talk` / `AutoTalk` でパイロット画像の描画に使うオプション (位置指定ではない)。
+/// 話者の位置 (第 1 引数) に書かれたときは話者扱いになる。
+const TALK_IMAGE_OPTIONS: &[&str] = &[
+    "白黒",
+    "セピア",
+    "明",
+    "暗",
+    "上下反転",
+    "左右反転",
+    "上半分",
+    "下半分",
+    "右半分",
+    "左半分",
+    "右上",
+    "左上",
+    "右下",
+    "左下",
+    "ネガポジ反転",
+    "シルエット",
+    "夕焼け",
+    "水中",
+    "通常",
+];
+
+/// `Talk` / `AutoTalk` の中央表示 (原典 `ExecTalkCmd` / `CenterUnit`)。表示オプションを
+/// 除いた最後の引数の位置で決まる:
+/// - 話者だけ: 話者のユニットを中央表示する。プロローグ・エピローグ中、画像の描画中、
+///   マップが無いときは行わない。
+/// - 1 語: `母艦` (味方の母艦)、`中央` (上の条件に関わらず話者)、`固定` (行わない)。
+/// - 2 語: 座標 `X Y`。
+fn center_for_talk(app: &mut App, c: &Cmd) {
+    let xargs = c.xargs;
+    let mut last = None;
+    let mut k = 0;
+    while k < xargs.len() {
+        match xargs[k].as_str() {
+            "" | "非表示" | "枠外" => {}
+            "右回転" | "左回転" => k += 1,
+            "フィルタ" => k += 2,
+            o if k > 0 && TALK_IMAGE_OPTIONS.contains(&o) => {}
+            _ => last = Some(k),
+        }
+        k += 1;
+    }
+    let speaker = xargs.first().map_or("", String::as_str);
+    match last {
+        Some(0) => {
+            let scenario_running = matches!(
+                app.stage_state(),
+                crate::stage::StageState::Sortie | crate::stage::StageState::Battle
+            );
+            if scenario_running && !app.script_overlay().is_visible() {
+                center_on_speaker(app, speaker);
+            }
+        }
+        Some(1) => match xargs[1].as_str() {
+            "母艦" => center_on_mothership(app),
+            "中央" => center_on_speaker(app, speaker),
+            _ => {}
+        },
+        Some(2) => {
+            if let (Some(x), Some(y)) = (c.long(app, 1), c.long(app, 2)) {
+                if x >= 0 && y >= 0 {
+                    app.center_map_on(x as u32, y as u32);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// 話者 (パイロット名・愛称。`@` 付きや `名前(表情)` も可) が乗るユニットを中央表示する。
+/// 出撃していない味方のパイロットなら母艦を中央表示する (原典 `CenterUnit`)。
+fn center_on_speaker(app: &mut App, speaker: &str) {
+    let name = speaker.trim_start_matches('@');
+    let db = app.database();
+    let pilot_name = |n: &str| {
+        db.catalog
+            .pilots
+            .iter()
+            .find(|p| p.name == n)
+            .or_else(|| db.catalog.pilots.iter().find(|p| p.nickname == n))
+            .map(|p| p.name.clone())
+    };
+    let Some(pname) = pilot_name(name).or_else(|| {
+        let base = name.split_once('(').map_or(name, |(b, _)| b);
+        pilot_name(base)
+    }) else {
+        return;
+    };
+    let carries = |u: &&crate::UnitInstance| u.pilot_name == pname || u.pilot_ids.contains(&pname);
+    match db
+        .unit_instances
+        .iter()
+        .filter(carries)
+        .find(|u| !u.off_map)
+    {
+        Some(u) => {
+            let (x, y) = (u.x, u.y);
+            app.center_map_on(x, y);
+        }
+        None => {
+            let player = db
+                .unit_instances
+                .iter()
+                .filter(carries)
+                .any(|u| u.party == crate::Party::Player);
+            if player {
+                center_on_mothership(app);
+            }
+        }
+    }
+}
+
+/// 出撃中の味方で `母艦` を持つユニットを中央表示する。
+fn center_on_mothership(app: &mut App) {
+    let pos = app
+        .database()
+        .unit_instances
+        .iter()
+        .find(|u| {
+            u.party == crate::Party::Player
+                && !u.off_map
+                && crate::feature::has_feature(&u.active_features, "母艦")
+        })
+        .map(|u| (u.x, u.y));
+    if let Some((x, y)) = pos {
+        app.center_map_on(x, y);
+    }
 }
 
 fn exec_telop(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
@@ -90,48 +238,12 @@ fn exec_telop(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
 }
 
 fn exec_autotalk(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
-    let Cmd { xargs, pc, .. } = *c;
-    // SRC `AutoTalk` (`AutoTalkコマンド.md`):
-    // 自動会話: 隣接した味方/敵同士で `会話` イベントが定義されていれば
-    // 自動的に発火させる。本実装は隣接判定をしつつ `会話 <a> <b>` ラベル
-    // 検索で最初にヒットしたペアを発火する。
-    // 引数 0: 全 unit ペア走査、1+: 起点 unit 指定。
-    let candidates: Vec<usize> = if xargs.is_empty() {
-        (0..app.database().unit_instances.len()).collect()
-    } else {
-        let key = xargs[0].clone();
-        app.database()
-            .unit_instances
-            .iter()
-            .enumerate()
-            .filter(|(_, u)| matches_unit_handle(u, &key))
-            .map(|(i, _)| i)
-            .collect()
-    };
-    for i in candidates {
-        // 隣接ユニットと組合せて `会話 <a> <b>` ラベルを試行
-        let (x, y) = match app.database().unit_instances.get(i) {
-            Some(u) => (u.x, u.y),
-            None => continue,
-        };
-        let neighbors: Vec<usize> = (0..app.database().unit_instances.len())
-            .filter(|&j| {
-                if j == i {
-                    return false;
-                }
-                let v = &app.database().unit_instances[j];
-                let dx = (v.x as i64 - x as i64).abs();
-                let dy = (v.y as i64 - y as i64).abs();
-                dx + dy == 1
-            })
-            .collect();
-        let atk = UnitEventId::from_unit_instance(&app.database().unit_instances[i]);
-        for j in neighbors {
-            let def = UnitEventId::from_unit_instance(&app.database().unit_instances[j]);
-            fire_pair_event_labels(app, &["会話", "Conversation"], &atk, &def);
-        }
-    }
-    Ok(pc + 1)
+    // SRC `AutoTalk [character position option]` ～ `End` (`AutoTalkコマンド.md`):
+    // メッセージが自動で進む Talk。原典は戦闘メッセージと同じ処理で表示するので、
+    // 本実装も戦闘メッセージと同じくメッセージログに積み、応答を待たずに進む。
+    // 中央表示と本文の扱い (段階表示・改行・書式タグ) は Talk と同じ。
+    center_for_talk(app, c);
+    Ok(talk_block(app, c, "autotalk").next_pc)
 }
 
 fn exec_setmessage(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {

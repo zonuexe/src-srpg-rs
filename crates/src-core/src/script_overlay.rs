@@ -165,6 +165,11 @@ impl ScriptOverlay {
         self.current_line_width = 0.0;
     }
 
+    /// 画面に描画内容が出ているか (原典 `GUI.IsPictureVisible`)。`ClearPicture` 後は出ていない。
+    pub fn is_visible(&self) -> bool {
+        !self.cmds.is_empty() && !self.pending_clear
+    }
+
     /// `ClearPicture` 用の遅延クリア。cmds は消さず、次の描画 push / `present` で消す。
     pub fn defer_clear(&mut self) {
         self.pending_clear = true;

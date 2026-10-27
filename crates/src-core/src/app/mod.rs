@@ -1497,6 +1497,25 @@ impl App {
         }
     }
 
+    /// `(x, y)` を画面中央に表示し、カーソルを置く (原典 `GUI.Center`。`Center` コマンドと
+    /// `Talk` の中央表示)。マップ範囲外は no-op。マップ端ではスクロールが範囲内に収まる。
+    /// マップが無いときはカーソルだけ置く (`set_map_cursor` と同じ)。
+    pub fn center_map_on(&mut self, x: u32, y: u32) {
+        let Some(m) = self.database.map.as_ref() else {
+            self.map_cursor = Some((x, y));
+            return;
+        };
+        if x >= m.width || y >= m.height {
+            return;
+        }
+        let (vx, vy) = (map_view::VIEW_TILES_X, map_view::VIEW_TILES_Y);
+        self.map_scroll = (
+            x.saturating_sub(vx / 2).min(m.width.saturating_sub(vx)),
+            y.saturating_sub(vy / 2).min(m.height.saturating_sub(vy)),
+        );
+        self.map_cursor = Some((x, y));
+    }
+
     pub const fn turn(&self) -> Turn {
         self.turn
     }

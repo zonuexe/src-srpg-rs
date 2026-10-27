@@ -605,7 +605,7 @@ pub const COMMAND_CATALOG: &[CommandSpec] = &[
         "AutoTalk",
         &[],
         CommandKind::Implemented,
-        "隣接ユニット自動会話発火",
+        "自動で進む Talk (メッセージログに積む)",
     ),
     sp("BossRank", &[], CommandKind::Implemented, "ボス階級設定"),
     sp(

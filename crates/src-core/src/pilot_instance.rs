@@ -68,15 +68,6 @@ pub struct PilotInstance {
     /// Active skill names (e.g., "格闘L3", "射撃L2").
     #[serde(default)]
     pub skills: Vec<String>,
-    /// This is the main pilot of the unit (vs sub-pilot or support).
-    #[serde(default = "default_true")]
-    pub is_main_pilot: bool,
-    /// This pilot is a support pilot (not main/sub).
-    #[serde(default)]
-    pub is_support: bool,
-    /// Position among pilots on this unit (0 = main, 1+ = sub/support).
-    #[serde(default)]
-    pub pilot_index: i32,
     /// Fixed by `Fix` command — cannot be swapped in the intermission.
     /// Cleared by `Release` command.
     #[serde(default)]
@@ -92,9 +83,6 @@ fn default_level() -> i32 {
 }
 fn default_morale() -> i32 {
     100
-}
-fn default_true() -> bool {
-    true
 }
 
 impl PilotInstance {
@@ -140,9 +128,6 @@ impl PilotInstance {
             intuition: pilot_data.intuition,
             technique: pilot_data.technique,
             skills,
-            is_main_pilot: true,
-            is_support: false,
-            pilot_index: 0,
             is_fixed: false,
             bitmap_override: None,
         };
@@ -279,9 +264,6 @@ mod tests {
         assert_eq!(inst.dodge, 112); // 110 + 2*lv
         assert_eq!(inst.intuition, 141); // 140 + lv
         assert_eq!(inst.technique, 161); // 160 + lv
-        assert!(inst.is_main_pilot);
-        assert!(!inst.is_support);
-        assert_eq!(inst.pilot_index, 0);
     }
 
     #[test]

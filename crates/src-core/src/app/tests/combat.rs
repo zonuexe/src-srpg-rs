@@ -3730,3 +3730,145 @@ fn defense_attr_substring_matching_and_weakness_detection() {
         "有効=水 が吸収を打ち消す"
     );
 }
+
+/// みがわり の肩代わりダメージは、原典どおり身代わりを対象に計算し直す
+/// (`Unit.Attack` の「ダメージを再計算」: `Damage(w, su)`、常に防御扱いで半減)。
+/// 装甲の厚い保護対象に向かっていた小さな値ではなく、装甲の薄い身代わりへの値になる。
+#[test]
+fn migawari_recomputes_damage_against_substitute() {
+    let mut app = App::new();
+    enter_mapview_with_demo_map(&mut app);
+    place_player_unit(&mut app, "Hero", 2, 6);
+    add_weapon(&mut app, "Hero", 1500, 3);
+    register_enemy_data(&mut app, "Caster");
+    register_enemy_data(&mut app, "Sub");
+    for (name, armor, hp) in [("Caster", 5000, 100_000), ("Sub", 0, 100_000)] {
+        let u = app
+            .database_mut()
+            .catalog
+            .units
+            .iter_mut()
+            .find(|u| u.name == name)
+            .unwrap();
+        u.armor = armor;
+        u.hp = hp;
+    }
+    let caster = spawn_enemy(&mut app, "Caster", 3, 6); // 保護対象 (装甲が厚い)
+    let sub = spawn_enemy(&mut app, "Sub", 3, 5); // 身代わり (装甲 0)
+    let hero = first_player_uid(&app);
+    app.database_mut()
+        .unit_by_uid_mut(&hero)
+        .unwrap()
+        .add_condition(crate::Condition::new("必中", -1));
+    app.set_stage_state(crate::stage::StageState::Battle);
+    let script = crate::data::event::parse("SpecialPower Sub みがわり Caster\n").unwrap();
+    crate::event_runtime::execute(&mut app, &script).unwrap();
+
+    let weapon = app
+        .database()
+        .unit_by_name("Hero")
+        .unwrap()
+        .weapons
+        .last()
+        .cloned()
+        .unwrap();
+    let idx = |app: &App, uid: &str| app.database().idx_by_uid(uid).unwrap();
+    let hero_idx = idx(&app, &hero);
+    let vs_caster = app
+        .forecast_strike(hero_idx, idx(&app, &caster), &weapon)
+        .unwrap()
+        .damage;
+    let vs_sub = app
+        .forecast_strike(hero_idx, idx(&app, &sub), &weapon)
+        .unwrap()
+        .damage;
+    assert!(
+        vs_sub > vs_caster * 3,
+        "前提: 身代わりへの予測 {vs_sub} が保護対象への予測 {vs_caster} より十分大きい"
+    );
+
+    click_tile(&mut app, 2, 6);
+    let ai = attack_item_index(&app);
+    click_menu_item(&mut app, ai);
+    click_tile(&mut app, 3, 6);
+
+    let taken = app.database().unit_by_uid(&sub).unwrap().damage;
+    // 防御扱いで半減 (クリティカルなら 1.5 倍してから半減)。
+    assert!(
+        taken == vs_sub / 2 || taken == vs_sub * 3 / 2 / 2,
+        "身代わりの被ダメージ {taken} が身代わり基準の再計算 ({vs_sub} の半分) になっていない"
+    );
+    assert_eq!(app.database().unit_by_uid(&caster).unwrap().damage, 0);
+}
+
+/// `防御` を選んでもダメージが半減しない例外 (原典 `Unit.Attack`「防御＆かばう時は
+/// ダメージを半減」の条件): 殺 属性の武器、`防御不可` を持つ防御側、無防備 (捨て身)
+/// の防御側。乱数列は同じなので、半減する場合のちょうど 2 倍 (端数 1 まで) になる。
+#[test]
+fn defense_does_not_halve_against_exceptions() {
+    fn defended_damage(tweak: impl FnOnce(&mut App, &str)) -> i64 {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6);
+        add_weapon(&mut app, "Hero", 1500, 3);
+        register_enemy_data(&mut app, "Foe");
+        app.database_mut()
+            .catalog
+            .units
+            .iter_mut()
+            .find(|u| u.name == "Foe")
+            .unwrap()
+            .hp = 100_000;
+        let foe = spawn_enemy(&mut app, "Foe", 3, 6);
+        let hero = first_player_uid(&app);
+        app.database_mut()
+            .unit_by_uid_mut(&hero)
+            .unwrap()
+            .add_condition(crate::Condition::new("必中", -1));
+        tweak(&mut app, &foe);
+        app.script_attack(&hero, "テスト砲", &foe, "防御");
+        app.database().unit_by_uid(&foe).unwrap().damage
+    }
+    let halved = defended_damage(|_, _| {});
+    assert!(halved > 0);
+    let assert_full = |label: &str, full: i64| {
+        assert!(
+            full == halved * 2 || full == halved * 2 + 1,
+            "{label}: 防御でも半減しないはず (半減 {halved} / 実際 {full})"
+        );
+    };
+    assert_full(
+        "殺 属性",
+        defended_damage(|app, _| {
+            app.database_mut()
+                .catalog
+                .units
+                .iter_mut()
+                .find(|u| u.name == "Hero")
+                .unwrap()
+                .weapons
+                .last_mut()
+                .unwrap()
+                .class = "殺".into();
+        }),
+    );
+    assert_full(
+        "防御不可",
+        defended_damage(|app, foe| {
+            app.database_mut()
+                .unit_by_uid_mut(foe)
+                .unwrap()
+                .active_features
+                .push(crate::feature::ActiveFeature::new("防御不可", ""));
+        }),
+    );
+    assert_full(
+        "捨て身",
+        defended_damage(|app, foe| {
+            app.database_mut()
+                .unit_by_uid_mut(foe)
+                .unwrap()
+                .add_condition(crate::Condition::new("捨て身", -1));
+        }),
+    );
+}

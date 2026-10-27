@@ -186,15 +186,16 @@ pub(super) fn skip_to_endif(
     Err(err(line, "対応する EndIf が見つかりません。"))
 }
 
-/// `Talk` ブロックの本文を収集する。終端条件:
+/// `Talk` / `AutoTalk` ブロックの本文を収集する。`block_cmd` はブロックを始めたコマンド名
+/// (`talk` / `autotalk`)。終端条件:
 ///
 /// - `End`     → 消費して終了 (next_pc = i+1)。Talk ブロックを閉じる。
 /// - `Suspend` → 消費して終了 (next_pc = i+1)。SRC 仕様ではメッセージウィンドウを
 ///   残したまま続行するが、本実装では End と同等に扱う。
 ///   Talk-context の Suspend を「トップレベル Suspend (タイトル復帰)」
 ///   として実行してしまうことを防ぐため、ここで消費する。
-/// - 内部 `Talk` → 消費しないで終了 (next_pc = i)。次の話者に切り替わる。
-///   メインループが新しい Talk コマンドとして実行する。
+/// - 内部 `Talk` (`AutoTalk` ブロックでは `AutoTalk`) → 消費しないで終了 (next_pc = i)。
+///   次の話者に切り替わる。メインループが新しいコマンドとして実行する。
 ///   `WTalk` は SRC 組み込みコマンドではなく（`WTalk.eve` 等のユーザー定義
 ///   ライブラリ呼び出し）のため、ここではターミネータとして扱わない。
 /// - EOF       → そのまま終了。
@@ -202,6 +203,7 @@ pub(super) fn collect_until_end(
     app: &App,
     start: usize,
     stmts: &[EventStatement],
+    block_cmd: &str,
 ) -> (String, usize) {
     let mut body = String::new();
     let mut i = start;
@@ -226,7 +228,7 @@ pub(super) fn collect_until_end(
             // ライブラリ呼び出しであるため、ここではターミネータとして扱わない。
             // Talk ブロック本文中に `Wtalk BM "..."` が現れてもブロックを
             // 打ち切らず、本文の一部として展開する。
-            if name.eq_ignore_ascii_case("talk") {
+            if name.eq_ignore_ascii_case(block_cmd) {
                 return (body.trim().to_string(), i);
             }
             if !body.is_empty() {
