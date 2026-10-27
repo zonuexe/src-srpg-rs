@@ -557,6 +557,9 @@ struct OpenFileHandle {
     write: bool,
     /// 読み込みカーソル (次に読む行 index)。
     read_cursor: usize,
+    /// 直前の `Print` が改行しなかった (`Print F "…";`) なら `true`。次の `Print` は
+    /// 最終行の続きに書く。
+    line_open: bool,
 }
 
 /// `IntermissionCommand <name> <file>` の登録 1 件。

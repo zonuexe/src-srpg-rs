@@ -1,0 +1,56 @@
+# コマンド引数モード (args) のコーパス。上段で変数を用意し、===PROBES=== 以下の各行を
+# コマンドとして構文解析して、引数ごとの GetArgAsString|GetArgAsLong を突合する。
+Set n 10
+Set m 3
+Set s "abc"
+Set sp "a b"
+Set arr[1] 5
+Set arr[2] "x"
+Set idx 2
+Set fl 2.5
+Set lbl n
+Set 主人公 アムロ
+Money 500
+===PROBES===
+Telop n
+Telop m s sp
+Telop "n"
+Telop "abc def"
+Telop "$(n)"
+Telop "x$(s)y"
+Telop `n`
+Telop 10
+Telop 1.50
+Telop -3
+Telop 2.5
+Telop 3.5
+Telop -abc
+Telop 78-2
+Telop 1-2
+Telop (n + 1)
+Telop (n * m)
+Telop (s & "!")
+Telop (n > m)
+Telop (n)
+Telop ("a" & s)
+Telop undefined_x
+Telop arr[1]
+Telop arr[idx]
+Telop arr[3]
+Telop Len(s)
+Telop Len("abc")
+Telop Mid(s,2,1)
+Telop Max(n,m)
+Telop $(n)
+Telop 資金
+Telop 主人公
+Telop lbl
+Telop #FF0000
+Telop -
+Telop ""
+Telop ガンダム(TV版)
+Telop Zガンダム(改)
+Telop RX-78-2
+Telop (未定義)
+Telop fl
+Telop s n 1 "q"

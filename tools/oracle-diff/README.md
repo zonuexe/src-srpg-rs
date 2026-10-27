@@ -87,6 +87,25 @@ paste /tmp/p.txt /tmp/cs.txt /tmp/rs.txt
 また C# は `If` の項数を記録し忘れており、パイロット名 1 項 / `Not パイロット名` の判定が
 効かない (本実装は VB6 どおり判定する)。
 
+## コマンド引数モード (args) — GetArgAsString / GetArgAsLong の差分
+
+`scenario` と同じ入力形式で、下段の各行をコマンドとして構文解析し、引数ごとの
+`GetArgAsString(i)|GetArgAsLong(i)` をタブ区切りで出す (C# は `CmdData` を直接、Rust は
+[`oracle_args`](../verify-archive/src/bin/oracle_args.rs) が `event_runtime::eval_command_args`)。
+コーパスは [`args.txt`](args.txt)。コマンド実行を通した突合は `scenario` モードの
+[`scenario_args.txt`](scenario_args.txt)。
+
+```sh
+$NIX develop .#dotnet --command bash -c \
+  'dotnet run --project tools/oracle-diff/oracle-diff.csproj -c Release args < tools/oracle-diff/args.txt > /tmp/cs.txt 2>/dev/null'
+$NIX develop --command bash -c \
+  'cargo run -q -p verify-archive --bin oracle_args < tools/oracle-diff/args.txt > /tmp/rs.txt 2>/dev/null'
+```
+
+一致しない既知の差: 数値引数の整数化 (`1.50` / `3.5`。VB6 の CLng は偶数丸め、C# は切り捨て。
+本実装は VB6 準拠)、クォート外の `$(...)` (本移植の拡張)、`Incr k "5"` (原典は引用符付き
+数値を 0 とするが、本移植は数値として読む)。
+
 ## データロードモード (loaddata) — 静的ユニット/パイロットデータの差分
 
 実シナリオの**データディレクトリ** (`pilot.txt` / `unit.txt` / …) を両エンジンにロードし、

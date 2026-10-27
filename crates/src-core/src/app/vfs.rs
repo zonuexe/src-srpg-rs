@@ -32,6 +32,7 @@ impl App {
                 path: norm,
                 write,
                 read_cursor: 0,
+                line_open: false,
             },
         );
         handle
@@ -43,10 +44,19 @@ impl App {
     }
 
     /// 開いているファイルに 1 行追記する。
-    pub fn vfs_print(&mut self, handle: &str, line: String) {
-        if let Some(h) = self.open_files.get(handle) {
-            let path = h.path.clone();
-            self.virtual_files.entry(path).or_default().push(line);
+    /// 開いているファイルへ書く (原典 `Print #f, msg` / `Print #f, msg;`)。`newline` が
+    /// `false` なら改行せず、次の書き込みは同じ行の続きになる。
+    pub fn vfs_print(&mut self, handle: &str, text: String, newline: bool) {
+        let Some(h) = self.open_files.get_mut(handle) else {
+            return;
+        };
+        let continue_line = h.line_open;
+        h.line_open = !newline;
+        let path = h.path.clone();
+        let lines = self.virtual_files.entry(path).or_default();
+        match lines.last_mut() {
+            Some(last) if continue_line => last.push_str(&text),
+            _ => lines.push(text),
         }
     }
 

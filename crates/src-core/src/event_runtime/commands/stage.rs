@@ -273,9 +273,9 @@ fn exec_organize(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     if xargs.len() < 3 {
         return Ok(pc + 1);
     }
-    let count: usize = fn_arg_value(app, &xargs[0]).parse().unwrap_or(9);
-    let cx: i32 = fn_arg_value(app, &xargs[1]).parse().unwrap_or(5);
-    let cy: i32 = fn_arg_value(app, &xargs[2]).parse().unwrap_or(5);
+    let count: usize = xargs[0].to_string().parse().unwrap_or(9);
+    let cx: i32 = xargs[1].to_string().parse().unwrap_or(5);
+    let cy: i32 = xargs[2].to_string().parse().unwrap_or(5);
     // 配置済 (! off_map) の Player ユニットは触らず、off_map なものから
     // 配置する。何も off_map に無い場合は no-op。
     let (mw, mh) = app
@@ -581,7 +581,7 @@ fn exec_pause(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     // 引数があれば Wait と同じ処理、なければ 0 秒待機。
     let secs: f64 = xargs
         .first()
-        .and_then(|s| fn_arg_value(app, s).parse().ok())
+        .and_then(|s| s.to_string().parse().ok())
         .unwrap_or(0.0);
     if secs > 0.0 {
         app.set_pending_timer(secs.min(5.0));

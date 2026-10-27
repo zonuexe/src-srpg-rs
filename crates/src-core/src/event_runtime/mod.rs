@@ -203,6 +203,21 @@ pub fn eval_expression(app: &App, expr: &str) -> String {
     eval::value_as_string(app, expr)
 }
 
+/// 1 行のコマンドを構文解析し、各引数の (文字列値, 整数値) を返す (原典
+/// `GetArgAsString` / `GetArgAsLong`)。差分オラクル (`oracle_args`) 向けの入口。
+pub fn eval_command_args(app: &App, line: &str) -> Vec<(String, i64)> {
+    let Ok(stmts) = crate::data::event::parse(line) else {
+        return Vec::new();
+    };
+    match stmts.first() {
+        Some(EventStatement::Command { raw_args, .. }) => raw_args
+            .iter()
+            .map(|r| (eval::arg_as_string(app, r), eval::arg_as_long(app, r)))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// `.eve` の `If` 条件式を評価する (原典 `AIfCmd.Evaluate`)。
 pub fn eval_if_condition(app: &App, expr: &str) -> bool {
     eval::if_condition(app, expr)
@@ -278,6 +293,25 @@ fn preprocess_call_expressions_in_condition(app: &mut App, src: &str) -> String 
 /// 引数を事前展開しない。
 fn evaluates_raw_args(lname: &str) -> bool {
     matches!(lname, "if" | "do" | "loop" | "set" | "local" | "__assign")
+}
+
+/// 原典がコマンド引数を評価せず原文のまま使う位置か (`CmdData.cls` の `GetArg(i)`。
+/// 0 始まり)。変数名 (`For i` / `Incr x` / `Array a` / `Open … As F` 等)・ラベル (`Goto`)・
+/// キーワード (`Wait Click` / `For … To … Step`) が該当する。
+fn raw_arg_position(lname: &str, i: usize) -> bool {
+    match lname {
+        "array" | "sort" | "unset" | "incr" | "input" | "goto" | "wait" => i == 0,
+        "copyarray" | "swap" => i <= 1,
+        "for" => matches!(i, 0 | 1 | 3 | 5),
+        "foreach" => matches!(i, 0 | 2),
+        "open" => i == 4,
+        // ファイルハンドル (`F` / `#1,`) は `file_handle` が解決する。`Read` / `LineRead` の
+        // 2 番目以降は読み込み先の変数名。
+        "print" | "write" | "close" => i == 0,
+        "lineread" | "read" => true,
+        "global" => true,
+        _ => false,
+    }
 }
 
 /// `raw` (原文トークン) が `"..."` / `` `...` `` で囲まれていれば、前処理済みの
@@ -498,7 +532,7 @@ fn preprocess_user_functions(app: &mut App, src: &str) -> String {
             let inner = preprocess_user_functions(app, args_str);
             let args: Vec<String> = split_function_args(&inner)
                 .into_iter()
-                .map(|a| a.trim().to_string())
+                .map(|a| eval::param_value(app, a.trim()))
                 .collect();
             match call_label_sync(app, &name, &args) {
                 Some(v) => out.push_str(&v),
@@ -886,7 +920,7 @@ fn exec_command_pc(
     // 各引数を $(var) / Args(N) / 関数呼出 / インデックス変数で展開後、
     // `&` 連結演算子を畳み込む（`"abc" & x & ".bmp"` → "abcvalue.bmp"）。
     // 式展開の前にユーザ定義関数呼び出しを解決して値へ畳み込む
-    // (`expand_arg` は `&App` しか持たずサブルーチンを実行できないため)。
+    // (評価器は `&App` しか持たずサブルーチンを実行できないため)。
     let args: Vec<String> = args
         .iter()
         .map(|a| preprocess_user_functions(app, a))
@@ -906,11 +940,24 @@ fn exec_command_pc(
     // 条件式を原文トークンから統一評価器で評価するコマンドは、ここで引数を展開しない。
     // 展開すると `KeyState(2)` (ワンショット消費) や `Random()` (乱数を進める) が
     // 評価器と合わせて 2 度呼ばれてしまう。
+    //
+    // それ以外の引数は原典 `GetArgAsString` どおり 1 引数ずつ評価する (`eval::arg_as_string`:
+    // クォート文字列はそのまま、数値は数値、それ以外は項として変数・関数・括弧式を評価)。
+    // 変数名・ラベル・キーワードとして原文のまま使う位置 (`raw_arg_position`) は評価しない。
     let xargs: Vec<String> = if evaluates_raw_args(&lname) {
         args.clone()
     } else {
-        let expanded: Vec<String> = args.iter().map(|a| expand_arg(app, a)).collect();
-        collapse_concat(expanded)
+        raw_args
+            .iter()
+            .enumerate()
+            .map(|(i, raw)| {
+                if raw_arg_position(&lname, i) {
+                    args[i].clone()
+                } else {
+                    eval::arg_as_string(app, raw)
+                }
+            })
+            .collect()
     };
     let c = commands::Cmd {
         lname: &lname,
@@ -1001,10 +1048,10 @@ fn exec_command_pc(
             if xargs.is_empty() {
                 return Err(err(line, "Pilot 命令は name level が必要。"));
             }
-            let name = fn_arg_value(app, &xargs[0]);
+            let name = xargs[0].to_string();
             let level: i32 = xargs
                 .get(1)
-                .and_then(|s| fn_arg_value(app, s).parse().ok())
+                .and_then(|s| s.to_string().parse().ok())
                 .unwrap_or(1);
             // データ名 / 通称から PilotData を解決して runtime インスタンスを作成。
             let data_name = app
@@ -1048,7 +1095,7 @@ fn exec_command_pc(
             // スパロボ戦記 の `乗せ換え処理` 等が `Unit 仮ユニット 0` を使う。
             if xargs.len() < 14 {
                 if let Some(name_arg) = xargs.first() {
-                    let unit_data_name = fn_arg_value(app, name_arg);
+                    let unit_data_name = name_arg.to_string();
                     let mut inst =
                         UnitInstance::new(unit_data_name, String::new(), Party::Player, 0, 0);
                     inst.off_map = true;
@@ -1118,7 +1165,7 @@ fn exec_command_pc(
                 return Err(err(line, "Place 命令は 5 引数必要。"));
             }
             let unit_data_name = xargs[0].clone();
-            let party = parse_party(app, &xargs[2], line)?;
+            let party = parse_party(&xargs[2], line)?;
             // 座標は式評価 (ループ変数/算術式対応)。
             let x = eval_coord_u32(app, &xargs, 3);
             let y = eval_coord_u32(app, &xargs, 4);
@@ -1698,10 +1745,10 @@ fn numeric_int(app: &App, s: &str) -> Option<i64> {
 /// Create ＲＧparty ＲＧunit 0 ＲＧpilot ＲＧlevel ＲＧx ＲＧy
 /// ```
 ///
-/// 未定義なら `fn_arg_value` が名前自身を返すので、`Create 味方 …` の
-/// ような定数指定は影響を受けない。
-fn parse_party(app: &App, s: &str, line: usize) -> Result<Party, ScriptError> {
-    let resolved = fn_arg_value(app, s);
+/// 引数は評価済み (`GetArgAsString`) で渡る。未定義の名前は名前自身になるので、
+/// `Create 味方 …` のような定数指定は影響を受けない。
+fn parse_party(s: &str, line: usize) -> Result<Party, ScriptError> {
+    let resolved = s.to_string();
     match resolved.as_str() {
         "Player" | "味方" => Ok(Party::Player),
         // ＮＰＣ はコンピューター操作のプレイヤー側陣営。SRC 正準名は "ＮＰＣ"。

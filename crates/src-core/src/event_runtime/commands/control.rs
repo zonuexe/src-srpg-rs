@@ -147,7 +147,7 @@ fn exec_call(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     jump_to(app, pc, target, line)
 }
 
-fn exec_switch(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
+fn exec_switch(_app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     let Cmd {
         xargs,
         line,
@@ -164,7 +164,7 @@ fn exec_switch(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         return Err(err(line, "Switchコマンドの引数の数が違います"));
     }
     let value = if xargs.len() == 1 {
-        fn_arg_value(app, &xargs[0])
+        xargs[0].to_string()
     } else {
         xargs.join(" ")
     };

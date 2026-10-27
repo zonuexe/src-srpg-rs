@@ -392,8 +392,8 @@ fn exec_stow(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     if xargs.len() < 2 {
         return Ok(pc + 1);
     }
-    let unit_key = fn_arg_value(app, &xargs[0]);
-    let carrier_key = fn_arg_value(app, &xargs[1]);
+    let unit_key = xargs[0].to_string();
+    let carrier_key = xargs[1].to_string();
     let unit_idx = app
         .database()
         .unit_instances
@@ -442,7 +442,7 @@ fn exec_join(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     // パイロット名称でも unit_instances を逆引きして復帰できる。
     // ※旧実装は `pilot unit` の 2 引数形式 (= Ride 相当) だったが誤り。
     let key = if let Some(a) = xargs.first() {
-        fn_arg_value(app, a)
+        a.to_string()
     } else {
         app.selected_unit_for_event().to_string()
     };
@@ -473,9 +473,9 @@ fn exec_ride(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     if xargs.is_empty() {
         return Ok(pc + 1);
     }
-    let pilot = fn_arg_value(app, &xargs[0]);
+    let pilot = xargs[0].to_string();
     let target_handle = if xargs.len() >= 2 {
-        fn_arg_value(app, &xargs[1])
+        xargs[1].to_string()
     } else {
         app.selected_unit_for_event().to_string()
     };
@@ -578,7 +578,7 @@ fn exec_getoff(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     // 該当 UnitInstance.pilot_name を空にすることで、後段の RemovePilot
     // が誤ってユニット本体を巻き込まないようにする。
     if let Some(target_arg) = xargs.first() {
-        let key = fn_arg_value(app, target_arg);
+        let key = target_arg.to_string();
         if let Some(u) = app
             .database_mut()
             .unit_instances
@@ -596,7 +596,7 @@ fn exec_leave(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     // `Leave unit` — 部隊から外す (`Leaveコマンド.md`)。Escape と異なり
     // ユニット状態が `離脱` になり Status() で識別可能。
     if let Some(target_arg) = xargs.first() {
-        let key = fn_arg_value(app, target_arg);
+        let key = target_arg.to_string();
         let uid = app
             .database()
             .unit_instances
@@ -624,7 +624,7 @@ fn exec_setrelation(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     }
     let a = xargs[0].clone();
     let b = xargs[1].clone();
-    let value = fn_arg_value(app, &xargs[2]);
+    let value = xargs[2].to_string();
     app.set_script_var(format!("__rel_{a}_{b}"), value.clone());
     app.set_script_var(format!("__rel_{b}_{a}"), value);
     Ok(pc + 1)
@@ -639,7 +639,7 @@ fn exec_changeparty(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         return Err(err(line, "ChangeParty 命令は 2 引数必要 (unit party)。"));
     }
     let target = xargs[0].clone();
-    let party = parse_party(app, &xargs[1], line)?;
+    let party = parse_party(&xargs[1], line)?;
     if let Some(u) = app
         .database_mut()
         .unit_instances
@@ -699,7 +699,7 @@ fn exec_escape(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
             }
         }
         Some(arg) => {
-            let key = fn_arg_value(app, arg);
+            let key = arg.to_string();
             if let Some(party) = parse_party_label(key.trim().trim_matches('"')) {
                 // 陣営ラベル: 当該陣営の出撃中ユニットを全退避。
                 let uids: Vec<String> = app
@@ -804,7 +804,7 @@ fn exec_center(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         }
     }
     // unit 指定
-    let key = fn_arg_value(app, &xargs[0]);
+    let key = xargs[0].to_string();
     let pos = app
         .database()
         .unit_instances
@@ -851,7 +851,7 @@ fn exec_select(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     if xargs.len() != 1 {
         return Err(err(line, "Selectコマンドの引数の数が違います"));
     }
-    let key = fn_arg_value(app, &xargs[0]);
+    let key = xargs[0].to_string();
     app.set_selected_unit_for_event(key);
     Ok(pc + 1)
 }
@@ -869,7 +869,7 @@ fn exec_selecttarget(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         return Err(err(line, "SelectTargetコマンドの引数の数が違います"));
     }
     if let Some(target) = xargs.first() {
-        let key = fn_arg_value(app, target);
+        let key = target.to_string();
         let resolved = app
             .database()
             .unit_instances
@@ -992,22 +992,22 @@ fn exec_create(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
             "Create 命令は 7 引数必要 (party unit rank pilot level x y)。",
         ));
     }
-    let party = parse_party(app, &xargs[0], line)?;
-    let unit_data_name = fn_arg_value(app, &xargs[1]);
+    let party = parse_party(&xargs[0], line)?;
+    let unit_data_name = xargs[1].to_string();
     // rank = xargs[2] = 改造段階。SRC `UList.Add(uname, urank, uparty)` は
     // `Unit.Rank=urank` で 1 段ごとに HP+200/装甲+100/EN+10/運動性+5 を加える
     // (差分オラクル placeunit で C# 実測: rank2 → MaxHP+400・装甲+200)。
     // 本実装の改造段階は `UnitInstance.upgrade_level`・`effective_*` がこの加算を
     // 持つので、rank をそこへ配線する (旧実装は rank を捨てて常に素のステータスだった)。
-    let rank: i32 = fn_arg_value(app, &xargs[2]).parse().unwrap_or(0);
-    let pilot = fn_arg_value(app, &xargs[3]);
+    let rank: i32 = xargs[2].to_string().parse().unwrap_or(0);
+    let pilot = xargs[3].to_string();
     // level = xargs[4] = 主パイロットの初期レベル。SRC `PList.Add(pname, plevel, …)` は
     // `Pilot.Level=plevel` でレベルを設定する。本実装はレベルを累積経験値から導くため
     // (`level_from_exp`)、level を `exp_for_level` で初期 total_exp へ変換する
     // (旧実装は level を捨てて常にレベル 1 だった = 増援が指定レベルにならなかった)。
     // 注: レベルに応じた能力値成長 (`grown_pilot`) は class ベースの簡易式で、SRC の
     // 成長タイプ準拠成長とは乖離する (穴埋めロードマップ・docs/SRC_SHARP_DIVERGENCE.md)。
-    let level: i32 = fn_arg_value(app, &xargs[4]).parse().unwrap_or(1);
+    let level: i32 = xargs[4].to_string().parse().unwrap_or(1);
     // 座標は app-aware 式評価で解決する。SRC は座標を式として評価するため、
     // `For i = ... / Create 中立 壁 0 P 1 4 i / Next` のような**裸のループ変数**や
     // 算術式が座標に来る (`eval_coord_u32`)。
@@ -1051,7 +1051,7 @@ fn exec_removepilot(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     if xargs.is_empty() {
         return Err(err(line, "RemovePilot には対象名が必要。"));
     }
-    let target = fn_arg_value(app, &xargs[0]);
+    let target = xargs[0].to_string();
     let db = app.database_mut();
     db.pilots
         .retain(|p| p.name != target && p.nickname != target);

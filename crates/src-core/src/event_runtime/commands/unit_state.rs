@@ -53,10 +53,7 @@ fn exec_bossrank(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         1 => (app.selected_unit_for_event().to_string(), xargs[0].clone()),
         _ => (xargs[0].clone(), xargs[1].clone()),
     };
-    let rank: i32 = fn_arg_value(app, &rank_str)
-        .parse()
-        .unwrap_or(0)
-        .clamp(0, 5);
+    let rank: i32 = rank_str.to_string().parse().unwrap_or(0).clamp(0, 5);
     app.set_script_var(format!("__rank_{target}"), rank.to_string());
     if let Some(u) = app
         .database_mut()
@@ -401,7 +398,7 @@ fn exec_fix(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     //
     // 引数省略時はデフォルトユニットのメインパイロットを固定する。
     let target = if let Some(t) = xargs.first() {
-        fn_arg_value(app, t)
+        t.to_string()
     } else {
         // 省略時: selected_unit_for_event が指すユニットのパイロット
         let uid = app.selected_unit_for_event().to_string();
@@ -448,7 +445,7 @@ fn exec_release(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     // `Release [name]` — SRC `Releaseコマンド.md`:
     // `Fix` で固定されたパイロット・アイテムの固定を解除する。
     // 引数省略時は全パイロット・全アイテムスロットの固定を解除。
-    let target = xargs.first().map(|t| fn_arg_value(app, t));
+    let target = xargs.first().map(|t| t.to_string());
     match &target {
         None => {
             // 全解除
@@ -1064,7 +1061,7 @@ fn exec_removeitem(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     }
     // (1)(2) item 省略: 対象ユニットの全アイテムを取り外して在庫へ。
     let target = if let Some(t) = xargs.first() {
-        fn_arg_value(app, t)
+        t.to_string()
     } else {
         app.selected_unit_for_event().to_string()
     };

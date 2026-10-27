@@ -579,7 +579,7 @@ fn smoke_test(entries: &[(String, Vec<u8>)]) -> Result<(), String> {
                 .unwrap_or_default();
             let path = "cmexit.src";
             let h = app.vfs_open(path, "出力");
-            app.vfs_print(&h, format!("Set 設定[パイロット一覧] {pilot} "));
+            app.vfs_print(&h, format!("Set 設定[パイロット一覧] {pilot} "), true);
             app.vfs_close(&h);
             app.set_script_var("__verify_loadfile".to_string(), path.to_string());
             let rh = app.vfs_open(path, "入力");

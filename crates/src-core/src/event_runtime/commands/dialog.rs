@@ -151,8 +151,7 @@ fn exec_setmessage(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
             xargs[1..].join(" "),
         ),
     };
-    let expanded = expand_vars(app, &value);
-    app.set_script_var(key, expanded);
+    app.set_script_var(key, value);
     Ok(pc + 1)
 }
 

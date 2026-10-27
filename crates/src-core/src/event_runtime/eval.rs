@@ -133,6 +133,94 @@ pub(super) fn try_numeric(app: &App, expr: &str) -> Option<f64> {
     (!t.is_empty() && !t.contains(char::is_whitespace) && is_numeric(t)).then(|| str_to_dbl(t))
 }
 
+/// コマンド引数の型 (原典 `CmdData` の構文解析時の `ArgsType`)。先頭の 1 文字で決まる。
+enum ArgKind {
+    /// 文字列リテラル (クォートを外した値。`$(...)` を含まないクォート文字列・
+    /// バッククォート文字列・数値として読めない `-` / 数字始まりの語)。
+    Literal(String),
+    /// 数値リテラル。
+    Number(f64),
+    /// 項として評価する (変数・関数・括弧式・`$(...)` を含むクォート文字列)。
+    Term,
+}
+
+fn arg_kind(raw: &str) -> ArgKind {
+    let Some(first) = raw.chars().next() else {
+        return ArgKind::Literal(String::new());
+    };
+    match first {
+        '"' if raw.len() >= 2 && raw.ends_with('"') => {
+            if raw.contains("$(") {
+                ArgKind::Term
+            } else {
+                ArgKind::Literal(raw[1..raw.len() - 1].to_string())
+            }
+        }
+        // 閉じクォートが無い `"...` はそのまま文字列。
+        '"' => ArgKind::Literal(raw.to_string()),
+        '`' if raw.len() >= 2 && raw.ends_with('`') => {
+            ArgKind::Literal(raw[1..raw.len() - 1].to_string())
+        }
+        '`' => ArgKind::Literal(raw.to_string()),
+        '-' | '0'..='9' => {
+            if is_numeric(raw) {
+                ArgKind::Number(str_to_dbl(raw))
+            } else {
+                ArgKind::Literal(raw.to_string())
+            }
+        }
+        _ => ArgKind::Term,
+    }
+}
+
+/// コマンド引数 (原文トークン) の文字列値 (原典 `CmdData.GetArgAsString`)。
+pub(super) fn arg_as_string(app: &App, raw: &str) -> String {
+    match arg_kind(raw) {
+        ArgKind::Literal(s) => s,
+        ArgKind::Number(n) => format_num(n),
+        ArgKind::Term => eval_term(app, raw, Ty::Str).s,
+    }
+}
+
+/// コマンド引数 (原文トークン) の整数値 (原典 `CmdData.GetArgAsLong`)。文字列リテラルは 0。
+pub(super) fn arg_as_long(app: &App, raw: &str) -> i64 {
+    match arg_kind(raw) {
+        ArgKind::Literal(_) => 0,
+        ArgKind::Number(n) => vb_clng(n),
+        ArgKind::Term => term_as_long(app, raw),
+    }
+}
+
+/// `Print #f, msg` の書き込み文字列 (原典 `ExecPrintCmd`)。`msg` はハンドルより後ろの原文
+/// (末尾の `;` は除去済み)。バッククォートで囲まれていればそのまま (`$(...)` も展開しない)。
+/// それ以外は、全体が `$(式)` ならその値、1 項ならその値を取り、最後に `$(...)` を展開する。
+pub(super) fn print_text(app: &App, msg: &str) -> String {
+    if msg.len() >= 2 && msg.starts_with('`') && msg.ends_with('`') {
+        return msg[1..msg.len() - 1].to_string();
+    }
+    let msg = if msg.starts_with("$(") {
+        if msg.ends_with(')') {
+            value_as_string(app, &msg[2..msg.len() - 1])
+        } else {
+            msg.to_string()
+        }
+    } else if list_split(msg).is_some_and(|t| t.len() == 1) {
+        value_as_string(app, msg)
+    } else {
+        msg.to_string()
+    };
+    replace_sub_expression(app, &msg)
+}
+
+/// 関数の引数 1 つの値 (原典 `CallFunction` の `GetValueAsString(params(i), is_term(i))`)。
+/// 空白を含まない引数は項として、含む引数は式として評価する。
+pub(super) fn param_value(app: &App, param: &str) -> String {
+    match list_split(param) {
+        Some(terms) if terms.len() == 1 => eval_term(app, param, Ty::Str).s,
+        _ => value_as_string(app, param),
+    }
+}
+
 fn to_long(n: f64) -> i64 {
     if n.is_finite() {
         n.trunc() as i64

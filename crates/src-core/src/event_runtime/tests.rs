@@ -6499,3 +6499,72 @@ fn recover_hp_en_rate_uses_effective_max() {
     assert_eq!(u.damage, 2000 - 1300, "HP 回復量が 2600 の 50% でない");
     assert_eq!(u.en_consumed, 80 - 45, "EN 回復量が 90 の 50% でない");
 }
+
+// ============================================================
+//  コマンド引数の評価 (原典 GetArgAsString)
+// ============================================================
+
+/// コマンド引数は 1 回だけ評価される。評価結果がたまたま別の変数名と同じでも、
+/// もう一度その変数を引かない (旧実装は fn_arg_value で 2 度解決し得た)。
+#[test]
+fn command_args_are_evaluated_once() {
+    let src = "\
+Set a b
+Set b 5
+Call sub a \"Len(x)\" (1 + 2)
+Exit
+sub:
+Set got1 Args(1)
+Set got2 Args(2)
+Set got3 Args(3)
+Return
+";
+    let mut app = App::new();
+    execute(&mut app, &event::parse(src).unwrap()).unwrap();
+    assert_eq!(app.script_var("got1"), "b");
+    // クォート文字列はリテラル (中の関数呼び出しの形は評価しない)。
+    assert_eq!(app.script_var("got2"), "Len(x)");
+    assert_eq!(app.script_var("got3"), "3");
+}
+
+/// `Print F msg;` は改行せず、次の Print が同じ行に続く (原典 ExecPrintCmd)。
+/// 実データの戦闘アニメ定義 (BattleAnime.eve) が 1 行を 3 回の Print で組み立てる。
+#[test]
+fn print_semicolon_continues_the_same_line() {
+    let src = "\
+Set w ビーム
+Open \"out.txt\" For 出力 As F
+Print F \"$(w)(回避),\";
+Print F `$(Call(回避戦績処理))`;
+Print F \"ブラックイン\"
+Close F
+";
+    let mut app = App::new();
+    execute(&mut app, &event::parse(src).unwrap()).unwrap();
+    assert_eq!(
+        app.virtual_file_lines("out.txt").unwrap(),
+        ["ビーム(回避),$(Call(回避戦績処理))ブラックイン"]
+    );
+}
+
+/// Talk 本文は `$(...)` だけを展開する (原典 FormatMessage)。関数呼び出しの形をした
+/// 文字列はそのまま表示し、未定義変数の `$(...)` は変数名になる。
+#[test]
+fn talk_body_only_replaces_sub_expressions() {
+    let src = "\
+Set n 3
+Talk 番頭さん
+残り$(n)部屋 Len(abc)
+$(未定義)
+End
+";
+    let mut app = App::new();
+    execute(&mut app, &event::parse(src).unwrap()).unwrap();
+    match app.pending_dialog().unwrap() {
+        crate::PendingDialog::Talk { body, .. } => {
+            assert!(body.contains("残り3部屋 Len(abc)"), "{body:?}");
+            assert!(body.contains("未定義"), "{body:?}");
+        }
+        _ => panic!("expected Talk dialog"),
+    }
+}

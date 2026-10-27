@@ -34,6 +34,10 @@ namespace OracleDiff
             {
                 return RunScenario(true);
             }
+            if (args.Length > 0 && args[0] == "args")
+            {
+                return RunArgs();
+            }
             if (args.Length > 1 && args[0] == "loaddata")
             {
                 return RunLoadData(args[1]);
@@ -127,6 +131,71 @@ namespace OracleDiff
                 {
                     Console.WriteLine(Eval(src.Expression, p));
                 }
+            }
+            return 0;
+        }
+
+        // args モード: 上段のコマンド列を実行したあと、下段の各行をコマンドとして構文解析し、
+        // 引数ごとの `GetArgAsString(i)|GetArgAsLong(i)` をタブ区切りで出力する
+        // (コマンド引数の評価規則の突合。Rust 側は `oracle_args`)。
+        private static int RunArgs()
+        {
+            var src = new SRC { GUI = new MockGUI() };
+            src.Event.EventData = new List<EventDataLine>();
+            src.Event.EventCmd = new List<CmdData>();
+            src.Event.EventFileNames = new List<string>();
+            src.Event.AdditionalEventFileNames = new List<string>();
+            src.Event.EventQue = new Queue<string>();
+            var parser = new CmdParser();
+            var inProbes = false;
+            var id = 0;
+            string line;
+            while ((line = Console.In.ReadLine()) != null)
+            {
+                if (line == "===PROBES===")
+                {
+                    inProbes = true;
+                    continue;
+                }
+                if (line.Length == 0 || line[0] == '#')
+                {
+                    continue;
+                }
+                try
+                {
+                    var dl = new EventDataLine(id, EventDataSource.Scenario, "test", id, line);
+                    src.Event.EventData.Add(dl);
+                    var cmd = parser.Parse(src, dl);
+                    src.Event.EventCmd.Add(cmd);
+                    if (!inProbes)
+                    {
+                        cmd.Exec();
+                    }
+                    else
+                    {
+                        var outs = new List<string>();
+                        for (var i = 2; i <= cmd.ArgNum; i++)
+                        {
+                            string sv, lv;
+                            try { sv = cmd.GetArgAsString(i); } catch (Exception e) { sv = "<ERR:" + e.GetType().Name + ">"; }
+                            try { lv = cmd.GetArgAsLong(i).ToString(); } catch (Exception e) { lv = "<ERR:" + e.GetType().Name + ">"; }
+                            outs.Add(sv + "|" + lv);
+                        }
+                        Console.WriteLine(string.Join("\t", outs));
+                    }
+                }
+                catch (Exception e)
+                {
+                    if (inProbes)
+                    {
+                        Console.WriteLine("<ERR:" + e.GetType().Name + ">");
+                    }
+                    else
+                    {
+                        Console.Error.WriteLine("cmd err [" + line + "]: " + e.Message);
+                    }
+                }
+                id++;
             }
             return 0;
         }

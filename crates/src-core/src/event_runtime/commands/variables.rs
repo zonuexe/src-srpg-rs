@@ -323,8 +323,8 @@ fn exec_array(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         return Err(err(line, "Array 命令は 3 引数必要 (var string sep)。"));
     }
     let var_name = xargs[0].clone();
-    let value = expand_vars(app, &fn_arg_value(app, &xargs[1]));
-    let sep = fn_arg_value(app, &xargs[2]);
+    let value = xargs[1].to_string();
+    let sep = xargs[2].to_string();
     let sep = sep.trim().trim_matches('"');
     let parts: Vec<&str> = if sep == "リスト" || sep.eq_ignore_ascii_case("list") {
         // リスト形式 = 空白区切り (Llength/Lindex と同じ規約)

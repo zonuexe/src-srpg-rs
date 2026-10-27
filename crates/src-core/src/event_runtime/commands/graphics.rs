@@ -676,7 +676,7 @@ fn exec_setwindowframewidth(app: &mut App, c: &Cmd) -> Result<usize, ScriptError
     // ステータスウィンドウの枠幅を n に設定し、グローバル変数
     // `StatusWindow(FrameWidth)` に n を格納する。
     if let Some(arg) = xargs.first() {
-        let n = fn_arg_value(app, arg);
+        let n = arg.to_string();
         app.set_script_var("StatusWindow(FrameWidth)".to_string(), n);
     }
     Ok(pc + 1)
@@ -694,7 +694,7 @@ fn exec_setwindowcolor(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     if xargs.is_empty() {
         return Err(err(line, "SetWindowColor には色指定が必要。"));
     }
-    let color_str = fn_arg_value(app, &xargs[0]);
+    let color_str = xargs[0].to_string();
     // `#RRGGBB` 形式チェック
     if color_str.len() != 7 || !color_str.starts_with('#') {
         return Err(err(line, "SetWindowColor: 色指定が不正 (#rrggbb 形式)。"));
@@ -738,7 +738,7 @@ fn exec_setstatusstringcolor(app: &mut App, c: &Cmd) -> Result<usize, ScriptErro
     if xargs.len() < 2 {
         return Err(err(line, "SetStatusStringColor には色指定と対象が必要。"));
     }
-    let color_str = fn_arg_value(app, &xargs[0]);
+    let color_str = xargs[0].to_string();
     if color_str.len() != 7 || !color_str.starts_with('#') {
         return Err(err(
             line,
@@ -761,7 +761,7 @@ fn exec_setstatusstringcolor(app: &mut App, c: &Cmd) -> Result<usize, ScriptErro
     let b = rgb & 0xFF;
     let colorref = (b << 16) | (g << 8) | r;
 
-    let target = fn_arg_value(app, &xargs[1]);
+    let target = xargs[1].to_string();
     let vname = match target.as_str() {
         "通常" => "StatusWindow(StringColor)",
         "能力名" => "StatusWindow(ANameColor)",

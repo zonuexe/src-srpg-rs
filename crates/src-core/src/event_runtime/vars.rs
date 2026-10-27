@@ -362,128 +362,6 @@ pub(super) fn resolve_index_part(app: &App, part: &str) -> String {
     }
 }
 
-/// 1 引数トークンを展開する。`expand_vars` (`$(var)` / 関数呼出 /
-/// インデックス変数の展開) に加え、トークン全体が `(...)` で括られその
-/// 内側にトップレベルの `&` 連結を含む場合は、カッコを外して連結を畳む。
-///
-/// 元 SRC の引数トークナイザは `(...)` を 1 トークンとして保持するため、
-/// `("u_" & Left("x",2))` のような括弧付き `&` 連結は token 単位で動く
-/// `collapse_concat` には捕まらない。ここで token 内部の `&` を処理する。
-///
-/// 算術式 `(200 - 128 / 2)` は `&` を含まないので連結扱いされず、従来通り
-/// `expand_vars` をそのまま通って数値評価パスに委ねられる。
-pub(super) fn expand_arg(app: &App, a: &str) -> String {
-    if let Some(inner) = paren_wrapped_concat(a) {
-        let mut result = String::new();
-        for part in split_top_level_concat(inner) {
-            let p = part.trim();
-            if p.len() >= 2 && p.starts_with('"') && p.ends_with('"') {
-                // 純粋な `"..."` リテラルはクオートを剥がして中身を
-                // `expand_vars` で展開する (非括弧形 tokenizer と同じ挙動)。
-                // クオート内はリテラル扱いなので連結再帰はしない。
-                result.push_str(&expand_vars(app, &p[1..p.len() - 1]));
-            } else if paren_wrapped_concat(p).is_some() {
-                // ネスト括弧連結は再帰で処理。
-                result.push_str(&expand_arg(app, p));
-            } else {
-                // 非クオートの裸オペランド (変数名 / 算術式 / 関数呼出など)。
-                // `fn_arg_value` で変数解決・システム変数展開・indexed 参照を
-                // 行う。`("DL_GUI_" & DL_ShowGUI)` 中の `DL_ShowGUI` のような
-                // ベア識別子が変数として正しく解決される。
-                // 算術式が残る場合は `expand_vars` でさらに `$(...)` を展開する。
-                let resolved = fn_arg_value(app, p);
-                result.push_str(&expand_vars(app, &resolved));
-            }
-        }
-        return result;
-    }
-    expand_vars(app, a)
-}
-
-/// トークン全体が単一の `(...)` グループで、内側にトップレベル
-/// (クオート外・ネスト括弧外) の `&` を含むなら、その内側を返す。
-/// `(a) & (b)` のように複数グループに分かれる場合や `&` を含まない
-/// 算術式は `None`。
-pub(super) fn paren_wrapped_concat(a: &str) -> Option<&str> {
-    let t = a.trim();
-    let bytes = t.as_bytes();
-    if bytes.first() != Some(&b'(') || bytes.last() != Some(&b')') {
-        return None;
-    }
-    let mut depth = 0i32;
-    let mut in_quote = false;
-    let mut has_concat = false;
-    for (idx, &b) in bytes.iter().enumerate() {
-        if b == b'"' {
-            in_quote = !in_quote;
-            continue;
-        }
-        if in_quote {
-            continue;
-        }
-        match b {
-            b'(' => depth += 1,
-            b')' => {
-                depth -= 1;
-                // 先頭 `(` に対応する `)` が末尾以外で現れたら、全体は
-                // 1 つの括弧グループではない。
-                if depth == 0 && idx != bytes.len() - 1 {
-                    return None;
-                }
-            }
-            b'&' if depth == 1 => has_concat = true,
-            _ => {}
-        }
-    }
-    if depth != 0 || in_quote || !has_concat {
-        return None;
-    }
-    Some(&t[1..t.len() - 1])
-}
-
-/// `inner` をトップレベル (クオート外・括弧外) の `&` で分割する。
-pub(super) fn split_top_level_concat(inner: &str) -> Vec<&str> {
-    let bytes = inner.as_bytes();
-    let mut parts = Vec::new();
-    let mut depth = 0i32;
-    let mut in_quote = false;
-    let mut start = 0;
-    for (idx, &b) in bytes.iter().enumerate() {
-        match b {
-            b'"' => in_quote = !in_quote,
-            b'(' if !in_quote => depth += 1,
-            b')' if !in_quote => depth -= 1,
-            b'&' if !in_quote && depth == 0 => {
-                parts.push(&inner[start..idx]);
-                start = idx + 1;
-            }
-            _ => {}
-        }
-    }
-    parts.push(&inner[start..]);
-    parts
-}
-
-/// `&` 連結演算子の畳み込み。引数列で `"&"` トークンを見つけたら前後を
-/// 空白なしで連結する。`["abc", "&", "xyz"]` → `["abcxyz"]`。
-/// 元 SRC は VB5 風の文字列連結 `a & b` を使うため。
-pub(super) fn collapse_concat(args: Vec<String>) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    let mut i = 0;
-    while i < args.len() {
-        if args[i] == "&" && !out.is_empty() && i + 1 < args.len() {
-            let last = out.pop().unwrap();
-            let next = args[i + 1].clone();
-            out.push(format!("{last}{next}"));
-            i += 2;
-        } else {
-            out.push(args[i].clone());
-            i += 1;
-        }
-    }
-    out
-}
-
 /// インデックス変数の識別子に含めて良い文字か。
 /// 区切り文字以外なら true。
 pub(super) fn is_indexed_ident_char(c: char) -> bool {
@@ -708,14 +586,10 @@ pub(super) fn enter_call_args(app: &mut App, new_args: &[String]) -> Vec<String>
     for k in 1..=prev_argnum.max(new_args.len()) {
         app.set_script_var(format!("Args({k})"), String::new());
     }
-    // 各引数は `fn_arg_value` で解決する。`Call 敵配置 … 敵配置数` のように
-    // 裸変数を渡すと、expand_vars は裸変数を展開しないため `Args(N)` に
-    // 変数 *名* が入ってしまう。SRC の `Call` は引数を式評価して渡すので、
-    // 単一の括弧式 (`(500 - Info(…))` 等) は数値化する。
+    // 引数は呼び出し側で評価済みの値 (`Call` はコマンド引数として `GetArgAsString`、
+    // ユーザ定義関数は `eval::param_value`) なので、そのまま束縛する。
     for (i, v) in new_args.iter().enumerate() {
-        let resolved = fn_arg_value(app, v);
-        let resolved = eval_paren_arith_value(app, &resolved).unwrap_or(resolved);
-        app.set_script_var(format!("Args({})", i + 1), resolved);
+        app.set_script_var(format!("Args({})", i + 1), v.clone());
     }
     // ArgNum = 渡した引数の数
     app.set_script_var("ArgNum".to_string(), new_args.len().to_string());

@@ -132,7 +132,9 @@ fn moveunit_coords_from_functions() {
 
 #[test]
 fn money_delta_from_function() {
-    let app = run("Money +Max(100, 250)\n");
+    // 引数は 1 項として評価する (原典 GetArgAsString)。`+Max(…)` のように先頭に `+` を
+    // 付けると原典では 1 つの名前になるので、関数はそのまま書く。
+    let app = run("Money Max(100, 250)\n");
     assert_eq!(app.money(), 250);
 }
 

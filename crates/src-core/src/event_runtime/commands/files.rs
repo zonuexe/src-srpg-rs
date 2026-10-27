@@ -19,23 +19,29 @@ pub(super) fn exec(app: &mut App, c: &Cmd) -> Option<Result<usize, ScriptError>>
 
 fn exec_print(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     let Cmd {
-        lname, xargs, pc, ..
+        lname,
+        raw_args,
+        pc,
+        ..
     } = *c;
-    // `Print <handle>, [text]` — 第 1 引数が開いているファイルハンドル
-    // なら仮想ファイルへ 1 行書き込む。それ以外の `Print "text"` は
-    // Message と同義 (`Write` はファイル専用なので handle 無しは無視)。
-    // 書き込みテキストは `$(...)` / 関数呼出を展開してから VFS へ渡す。
-    // SRC 構文の `Print #1, abc` は tokenizer 上で `#1,` がトークン化
-    // されるため、ハンドル候補の trailing `,` を剥がしてから解決する。
-    if let Some(first) = xargs.first() {
-        let handle_raw = first.trim_end_matches(',');
-        let handle = fn_arg_value(app, handle_raw);
+    // `Print <handle> [text]` — 第 1 引数が開いているファイルハンドルなら仮想ファイルへ
+    // 書き込む。それ以外の `Print "text"` は Message と同義 (`Write` はファイル専用なので
+    // handle 無しは無視)。SRC 構文の `Print #1, abc` は `#1,` が 1 トークンになるため、
+    // ハンドル候補の trailing `,` を剥がしてから解決する。
+    // 書き込む文字列はハンドルより後ろの原文から作る (原典 `ExecPrintCmd`: 末尾 `;` は
+    // 改行しない指定。値の作り方は `eval::print_text`)。
+    if let Some(first) = raw_args.first() {
+        let handle = file_handle(app, first);
         if app.vfs_is_handle(&handle) {
-            let raw = xargs[1..].join(" ");
-            let text = expand_vars(app, &raw);
-            app.vfs_print(&handle, text);
+            let tail = raw_args[1..].join(" ");
+            let (msg, newline) = match tail.strip_suffix(';') {
+                Some(m) => (m.to_string(), false),
+                None => (tail, true),
+            };
+            let text = eval::print_text(app, &msg);
+            app.vfs_print(&handle, text, newline);
         } else if lname == "print" {
-            app.push_message(first.clone());
+            app.push_message(eval::arg_as_string(app, first));
         }
     }
     Ok(pc + 1)
@@ -52,10 +58,7 @@ fn exec_open(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         return Err(err(line, "Openコマンドの引数の数が違います"));
     }
     // path / mode には `$(...)` が含まれることがあるため eval 後に展開する。
-    let path = xargs
-        .first()
-        .map(|s| expand_vars(app, &fn_arg_value(app, s)))
-        .unwrap_or_default();
+    let path = xargs.first().map(|s| s.to_string()).unwrap_or_default();
     // パス内の上位ディレクトリ参照を禁止する (SRC.Sharp 準拠)。
     if path.contains("..\\") || path.contains("../") {
         return Err(err(line, "ファイル指定に「../」は使えません"));
@@ -67,7 +70,7 @@ fn exec_open(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         match xargs[i].to_ascii_lowercase().as_str() {
             "for" => {
                 if let Some(m) = xargs.get(i + 1) {
-                    mode = expand_vars(app, &fn_arg_value(app, m));
+                    mode = m.to_string();
                 }
                 i += 2;
             }
@@ -93,7 +96,7 @@ fn exec_read(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     } = *c;
     // `Read <handle> <var>` / `LineRead <handle> <var>` — 1 行読込。
     if xargs.len() >= 2 {
-        let handle = fn_arg_value(app, &xargs[0]);
+        let handle = file_handle(app, &xargs[0]);
         let line = app.vfs_read_line(&handle).unwrap_or_default();
         let var = resolve_lhs_name(app, &args[1]);
         app.set_script_var(var, line);
@@ -104,7 +107,7 @@ fn exec_read(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
 fn exec_close(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     let Cmd { xargs, pc, .. } = *c;
     if let Some(h) = xargs.first() {
-        let handle = fn_arg_value(app, h);
+        let handle = file_handle(app, h);
         app.vfs_close(&handle);
     }
     Ok(pc + 1)
@@ -167,4 +170,15 @@ fn exec_copyfile(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         app.vfs_copy_file(&xargs[0], &xargs[1]);
     }
     Ok(pc + 1)
+}
+
+/// ファイルハンドル引数 (`Open … As F` で変数 F に入れたハンドル) を解決する。原典は
+/// `GetArgAsLong` で評価するが、本移植は VB 流の `#1` / `#h` と末尾の `,` (`Print #1, msg`) も
+/// 受け付ける拡張として、まずトークンそのものを変数名として引く。
+fn file_handle(app: &App, raw: &str) -> String {
+    let t = raw.trim().trim_end_matches(',');
+    if app.is_script_var_defined(t) {
+        return app.script_var(t).to_string();
+    }
+    eval::arg_as_string(app, t)
 }

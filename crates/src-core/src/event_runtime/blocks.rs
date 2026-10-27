@@ -12,17 +12,18 @@ pub(super) fn collect_menu_options(
     let mut options = Vec::new();
     let mut i = start;
     while i < stmts.len() {
-        if let EventStatement::Command { name, args, .. } = &stmts[i] {
+        if let EventStatement::Command {
+            name,
+            args,
+            raw_args,
+            ..
+        } = &stmts[i]
+        {
             if name.eq_ignore_ascii_case("end") {
                 return (options, i + 1);
             }
-            // 1 行を 1 選択肢として連結。`$(var)` / 関数呼出 / `name[expr]` は
-            // expand_vars で実値に展開する (元 SRC は Ask 選択肢を式評価する)。
-            let mut s = expand_vars(app, name);
-            for a in args {
-                s.push(' ');
-                s.push_str(&expand_vars(app, a));
-            }
+            // 1 行を 1 選択肢とし、`$(...)` を展開する (原典 `FormatMessage`)。
+            let s = message_line(app, name, args, raw_args);
             // 空展開で空白だけが残った行はメニューから外す (SRC 仕様)。
             let trimmed = s.trim();
             if !trimmed.is_empty() {
@@ -205,7 +206,13 @@ pub(super) fn collect_until_end(
     let mut body = String::new();
     let mut i = start;
     while i < stmts.len() {
-        if let EventStatement::Command { name, args, .. } = &stmts[i] {
+        if let EventStatement::Command {
+            name,
+            args,
+            raw_args,
+            ..
+        } = &stmts[i]
+        {
             if name.eq_ignore_ascii_case("end") {
                 return (body.trim().to_string(), i + 1);
             }
@@ -225,15 +232,27 @@ pub(super) fn collect_until_end(
             if !body.is_empty() {
                 body.push('\n');
             }
-            body.push_str(&expand_vars(app, name));
-            for a in args {
-                body.push(' ');
-                body.push_str(&expand_vars(app, a));
-            }
+            body.push_str(&message_line(app, name, args, raw_args));
         }
         i += 1;
     }
     (body.trim().to_string(), i)
+}
+
+/// `Talk` 本文 / `Ask` 選択肢の 1 行を組み立てる (原典 `FormatMessage`: 行の原文に
+/// `$(...)` の展開だけを行う。関数呼び出しや配列参照の形をした文字列はそのまま)。
+fn message_line(app: &App, name: &str, args: &[String], raw_args: &[String]) -> String {
+    let raw = if raw_args.len() == args.len() {
+        raw_args
+    } else {
+        args
+    };
+    let mut line = name.to_string();
+    for a in raw {
+        line.push(' ');
+        line.push_str(a);
+    }
+    eval::replace_sub_expression(app, &line)
 }
 
 /// ラベルへジャンプ。`@anchor` / `label:` どちらも `collect_labels` で正規化済み。

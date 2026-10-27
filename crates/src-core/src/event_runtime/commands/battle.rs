@@ -112,7 +112,7 @@ fn exec_stopsummoning(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     // 指定ユニットが召喚したユニットを解放 (マップから除去) する。
     // 引数省略時は selected_unit_for_event を対象とする。
     let summoner_key = if let Some(t) = xargs.first() {
-        fn_arg_value(app, t)
+        t.to_string()
     } else {
         app.selected_unit_for_event().to_string()
     };
@@ -151,7 +151,7 @@ fn exec_attack(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
         ));
     }
     let uid_of = |app: &App, arg: &str| {
-        let key = fn_arg_value(app, arg);
+        let key = arg.to_string();
         app.database()
             .unit_instances
             .iter()
@@ -356,7 +356,7 @@ fn exec_useability(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
             // 記録する。座標省略時は親ユニットの隣 (右隣、範囲外なら親位置)。
             // 子ユニットデータ名は target_key (= xargs[2])。
             let summoned_data = if xargs.len() >= 3 {
-                fn_arg_value(app, &xargs[2])
+                xargs[2].to_string()
             } else {
                 String::new()
             };

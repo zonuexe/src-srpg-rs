@@ -92,8 +92,9 @@ Return
 
 #[test]
 fn call_evaluates_parenthesized_arithmetic_args() {
-    // SRC の `Call` は引数を式評価して渡す。単一の括弧式 (`(500 - 経験値)`)
-    // は数値化される。非数値の括弧は文字列のまま。
+    // SRC の `Call` は引数を項として評価して渡す (GetArgAsString)。括弧式は式として
+    // 評価され、`(500 - 経験値)` は数値に、`(テキスト)` は括弧が外れた文字列になる
+    // (C# oracle の args モードで確認)。
     let app = run(r#"
 Set 経験値 123
 Call sub (500 - 経験値) (テキスト)
@@ -105,7 +106,7 @@ Set txt $(Args(2))
 Return
 "#);
     assert_eq!(app.script_var("num"), "377");
-    assert_eq!(app.script_var("txt"), "(テキスト)");
+    assert_eq!(app.script_var("txt"), "テキスト");
 }
 
 #[test]
