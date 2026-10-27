@@ -2117,53 +2117,30 @@ fn log_of_one_is_zero() {
 //  AutoTalk コマンド
 // ============================================================
 
+/// `AutoTalk` は自動で進む Talk (`AutoTalkコマンド.md`)。`End` までが本文で、本文の行は
+/// コマンドとして実行されず、`End` でイベントが終わることもない。内部の `AutoTalk` 行で
+/// 話者が替わる。応答を待たずに進み、メッセージはログに積まれる。
 #[test]
-fn autotalk_fires_conversation_label_for_adjacent_units() {
-    // 隣接した 2 ユニットが `会話 リオ ガロ:` ラベルを発火する。
+fn autotalk_consumes_body_until_end() {
     let app = run(r#"
-Pilot "リオ" リオ 男性 超能力者 AAAA 100 100 100 100 100 100 100
-Pilot "ガロ" ガロ 男性 一般 AAAA 100 100 100 100 100 100 100
-Unit "ブレイバー" リアル系 1 0 陸 5 M 1000 100 3500 120 1200 110 AAAA
-Unit "ゾルダ" Mass 1 0 陸 5 M 1000 100 2500 100 900 100 AAAA
-MapSize 5 5
-Place "ブレイバー" "リオ" Player 2 2
-Place "ゾルダ" "ガロ" Enemy 2 3
-AutoTalk
-Exit
-
-会話 リオ ガロ:
-Set talked yes
-Return
+AutoTalk システム
+Set leaked 1
+AutoTalk ナレーター
+次の話者:二段目
+End
+Set after 1
 "#);
-    assert_eq!(
-        app.script_var("talked"),
-        "yes",
-        "AutoTalk で 会話ラベルが発火する"
+    assert_eq!(app.script_var("leaked"), "", "本文の行を実行してはいけない");
+    assert_eq!(app.script_var("after"), "1", "End のあとも続きを実行する");
+    assert!(app.pending_dialog().is_none(), "応答を待たない");
+    let log = app.messages();
+    assert!(
+        log.iter().any(|m| m == "【システム】Set leaked 1"),
+        "{log:?}"
     );
-}
-
-#[test]
-fn autotalk_does_not_fire_for_non_adjacent_units() {
-    // 離れたユニットでは 会話ラベルは発火しない。
-    let app = run(r#"
-Pilot "リオ" リオ 男性 超能力者 AAAA 100 100 100 100 100 100 100
-Pilot "ガロ" ガロ 男性 一般 AAAA 100 100 100 100 100 100 100
-Unit "ブレイバー" リアル系 1 0 陸 5 M 1000 100 3500 120 1200 110 AAAA
-Unit "ゾルダ" Mass 1 0 陸 5 M 1000 100 2500 100 900 100 AAAA
-MapSize 10 10
-Place "ブレイバー" "リオ" Player 0 0
-Place "ゾルダ" "ガロ" Enemy 9 9
-AutoTalk
-Exit
-
-会話 リオ ガロ:
-Set talked yes
-Return
-"#);
-    assert_eq!(
-        app.script_var("talked"),
-        "",
-        "離れたユニットでは 会話ラベルは発火しない"
+    assert!(
+        log.iter().any(|m| m == "【ナレーター】次の話者 二段目"),
+        "{log:?}"
     );
 }
 
