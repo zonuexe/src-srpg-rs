@@ -8514,6 +8514,33 @@ fn support_guard_reaction_option_offered_only_when_available() {
     );
 }
 
+/// B7: 援護防御の発動判定は実効最大 HP (改造・アイテム・BossRank 込み) で行う。
+/// 旧実装は基本 HP を使い、改造で HP が十分ある援護役を「撃破される」と誤判定していた。
+#[test]
+fn support_guard_uses_effective_max_hp() {
+    let mut app = App::new();
+    enter_mapview_with_demo_map(&mut app);
+    place_player_unit(&mut app, "Foe", 9, 9);
+    let fuid = spawn_party(&mut app, "Foe", crate::Party::Enemy, 6, 6); // 防御側
+    let guid = spawn_party(&mut app, "Foe", crate::Party::Enemy, 6, 5); // 援護役
+    let base_hp = app.database().unit_by_name("Foe").unwrap().hp;
+    {
+        let g = app.database_mut().unit_by_uid_mut(&guid).unwrap();
+        g.add_condition(crate::condition::Condition::new("サポートガード", 9));
+        g.support_guard_remaining = 1;
+        // 基本 HP ではほぼ瀕死だが、改造 5 段階で実効 HP には十分な余裕がある。
+        g.damage = base_hp - 1;
+        g.upgrade_level = 5;
+    }
+    let def_idx = app.database().idx_by_uid(&fuid).unwrap();
+    let guard_idx = app.database().idx_by_uid(&guid).unwrap();
+    assert_eq!(
+        app.try_find_support_guard(def_idx, base_hp),
+        Some(guard_idx),
+        "実効 HP に余裕のある援護役が援護防御しない"
+    );
+}
+
 #[test]
 fn support_guard_intercepts_on_choice_and_suppressed_on_personal_reaction() {
     // "援護防御" 選択 → 隣接の援護役が肩代わり (防御側被弾 0)。個別反撃 ("防御")

@@ -23,8 +23,8 @@
 - **sp.txt の効果行**: 旧パーサは効果を `,` で区切っていたが、実データと C# `ToList` は空白区切り（`挑発 命中率低下Lv5`）。修正済。
 - **`.eve Attack`**: 旧実装は命中判定なし・基本データの簡易式で、撃破したユニットを HP 0 以下のまま盤面に残していた。修正済（`script_attack`）。
 - **`.eve UseAbility`**: 旧実装はアビリティ名で効果を決め打ちし、ユニットデータの効果を見ていなかった。データにあればそれを使うよう修正済。データに無い名前は旧処理にフォールバックする。
-- **`.eve Transform` の変形イベント**（未決）: C# `TransformCmd` は変形イベントを発火しないが、本移植は fixture 21 に合わせて発火している（`Combine` も同様）。原典の挙動に合わせるかは要判断。
-- **B7**: 援護防御の発動判定 `try_find_support_guard`（app/battle.rs）は、最大 HP に基本値（`unit_by_name(..).hp`）を使っている。戦闘本体は `effective_combat_data` で実効 HP を使うので、改造機や BossRank 機では発動閾値が食い違う（要検証。B3 の App 側版）。
+- **`.eve Transform` の変形イベント**（決定: 現状維持）: C# `TransformCmd` は変形イベントを発火しないが、本移植は `Combine` と揃えて発火する（fixture 21 で固定）。2026-10-27 にユーザ判断で確定。
+- **B7**: 援護防御の発動判定 `try_find_support_guard`（app/battle.rs）は、最大 HP に基本値（`unit_by_name(..).hp`）を使っていた。戦闘本体は実効 HP を使うので、改造機や BossRank 機では発動閾値が食い違っていた。修正済（回帰テスト 1 件）。
 
 ## 0. 全体像
 

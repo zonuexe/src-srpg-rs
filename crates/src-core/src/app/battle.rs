@@ -1748,8 +1748,9 @@ impl App {
         let def_inst = &self.database.unit_instances[def_idx];
         let def_pos = (def_inst.x, def_inst.y);
         let def_party = def_inst.party;
-        let def_unit = self.database.unit_by_name(&def_inst.unit_data_name)?;
-        let def_max_hp = def_unit.hp;
+        // 最大 HP は改造・アイテム・BossRank 込みの実効値 (戦闘本体と同じ基準)。
+        self.database.unit_by_name(&def_inst.unit_data_name)?;
+        let def_max_hp = self.database.effective_max_hp(def_inst);
         let def_current_hp = def_max_hp - def_inst.damage;
 
         // ダメージが最小閾値 (MaxHP の 5% or 現 HP の 20%) を下回る場合は発動しない。
@@ -1796,12 +1797,10 @@ impl App {
                 continue;
             }
             // 代わりに受けても撃破されないこと (50% ダメージで HP が残る)
-            let guard_unit_data = match self.database.unit_by_name(&u.unit_data_name) {
-                Some(d) => d,
-                None => continue,
-            };
-            let guard_max_hp = guard_unit_data.hp;
-            let guard_current_hp = guard_max_hp - u.damage;
+            if self.database.unit_by_name(&u.unit_data_name).is_none() {
+                continue;
+            }
+            let guard_current_hp = self.database.effective_max_hp(u) - u.damage;
             let guard_dmg = expected_damage / 2; // 防御扱い = 50%
             if guard_dmg >= guard_current_hp {
                 // 倒れてしまうのでかばわない
