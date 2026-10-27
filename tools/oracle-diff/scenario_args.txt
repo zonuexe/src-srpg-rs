@@ -23,6 +23,19 @@ Set z (未定義)
 Set q "(m)"
 Set r `$(m)`
 Unset y
+Set h 3.5
+Set j 0
+Incr j h
+Set j2 0
+Incr j2 "2.5"
+Set j3 1
+Incr j3 (h * 2)
+Set j4 0
+Incr j4 Len(s)
+Money 100
+Money "50"
+Money (h * 2)
+Money (5 / 2)
 ===PROBES===
 n
 m
@@ -40,3 +53,8 @@ w
 z
 q
 r
+j
+j2
+j3
+j4
+資金

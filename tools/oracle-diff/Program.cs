@@ -8,6 +8,7 @@ using SRCCore.Filesystem;
 using SRCCore.Models;
 using SRCCore.TestLib;
 using SRCCore.Units;
+using SRCCore.VB;
 
 namespace OracleDiff
 {
@@ -180,10 +181,11 @@ namespace OracleDiff
                         var outs = new List<string>();
                         for (var i = 2; i <= cmd.ArgNum; i++)
                         {
-                            string sv, lv;
+                            string sv, lv, dv;
                             try { sv = cmd.GetArgAsString(i); } catch (Exception e) { sv = "<ERR:" + e.GetType().Name + ">"; }
                             try { lv = cmd.GetArgAsLong(i).ToString(); } catch (Exception e) { lv = "<ERR:" + e.GetType().Name + ">"; }
-                            outs.Add(sv + "|" + lv);
+                            try { dv = SrcFormatter.Format(cmd.GetArgAsDouble(i)); } catch (Exception e) { dv = "<ERR:" + e.GetType().Name + ">"; }
+                            outs.Add(sv + "|" + lv + "|" + dv);
                         }
                         Console.WriteLine(string.Join("\t", outs));
                     }

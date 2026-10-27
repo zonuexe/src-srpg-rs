@@ -1,5 +1,5 @@
 # コマンド引数モード (args) のコーパス。上段で変数を用意し、===PROBES=== 以下の各行を
-# コマンドとして構文解析して、引数ごとの GetArgAsString|GetArgAsLong を突合する。
+# コマンドとして構文解析して、引数ごとの GetArgAsString|GetArgAsLong|GetArgAsDouble を突合する。
 Set n 10
 Set m 3
 Set s "abc"
@@ -9,6 +9,11 @@ Set arr[2] "x"
 Set idx 2
 Set fl 2.5
 Set lbl n
+Set h 3.5
+Set h2 2.5
+Set q "7"
+Set neg -2.5
+Set big 1,000
 Set 主人公 アムロ
 Money 500
 ===PROBES===
@@ -54,3 +59,23 @@ Telop RX-78-2
 Telop (未定義)
 Telop fl
 Telop s n 1 "q"
+# 数値引数 (GetArgAsLong の偶数丸め / GetArgAsDouble)
+Telop (7 / 2)
+Telop (5 / 2)
+Telop (-7 / 2)
+Telop h
+Telop h2
+Telop neg
+Telop q
+Telop "7"
+Telop "3.5"
+Telop big
+Telop 1,000
+Telop (h * 2)
+Telop (n / 4)
+Telop 0.5
+Telop 1.5
+Telop -0.5
+Telop Int(h)
+Telop Random(1)
+Telop (s + 1)
