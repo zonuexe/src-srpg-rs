@@ -31,6 +31,10 @@ nix --extra-experimental-features 'nix-command flakes' develop --command just <r
 
 > **注意**: テストは `src-core` クレートのネイティブビルドでのみ実行可能。WASM ターゲットではテストを実行しない。
 
+> **CI**: `.github/workflows/ci.yml` が PR と `master` への push で同じゲート (fmt `--check` →
+> `just test` → `just lint` → `just check`) を Nix devShell 上で回す。SRC.Sharp (サブモジュール)・
+> フィクスチャ・vendor-assets は CI に無いので、それらを読むテストはファイルが無ければスキップすること。
+
 > **コミット前に必ず `just fmt`（`cargo fmt --all`）を実行する。** リポジトリ全体を
 > rustfmt 準拠に保つ運用とする。部分的な手動整形ではなく、コミット直前に
 > ワークスペース全体を整形してから差分を確定すること。
