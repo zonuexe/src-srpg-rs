@@ -425,15 +425,23 @@ fn exec_changemode(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     let Cmd {
         xargs, line, pc, ..
     } = *c;
-    // SRC `ChangeMode [unit] mode` (`ChangeModeコマンド.md`):
-    // ユニットの思考モードを変更。本実装は AI が最小限のため、
-    // `ai_mode` 文字列フィールドへの単純な代入のみ行う。
-    // 1 引数: unit 省略 → selected_unit_for_event。
-    // 2 引数: unit + mode。
-    // 3 引数: unit + group_id + mode 等の拡張は未対応 (簡略化)。
+    // SRC `ChangeMode [unit] mode` (`ChangeModeコマンド.md`): ユニットの思考モードを
+    // `ai_mode` に設定する。mode が座標 `X Y` のときは原典 `ExecChangeModeCmd` どおり
+    // `GetArgAsLong` で読み、`"X Y"` として保存する (AI が目的地として使う)。
+    // 引数 2 個は、両方が数値なら選択中ユニットの座標モード、そうでなければ `unit mode`。
+    let coord = |i: usize| {
+        format!(
+            "{} {}",
+            c.long(app, i).unwrap_or(0),
+            c.long(app, i + 1).unwrap_or(0)
+        )
+    };
+    let numeric = |i: usize| xargs.get(i).is_some_and(|s| eval::is_numeric(s));
     let (target, mode) = match xargs.len() {
         0 => return Err(err(line, "ChangeMode 命令は最低 1 引数必要 (mode)。")),
         1 => (app.selected_unit_for_event().to_string(), xargs[0].clone()),
+        2 if numeric(0) && numeric(1) => (app.selected_unit_for_event().to_string(), coord(0)),
+        3 if numeric(1) && numeric(2) => (xargs[0].clone(), coord(1)),
         _ => (xargs[0].clone(), xargs[1..].join(" ")),
     };
     // 陣営指定: 該当陣営の全ユニットを更新 (`味方`/`敵`/`友軍`/`中立`)

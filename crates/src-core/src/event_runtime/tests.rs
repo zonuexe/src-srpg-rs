@@ -6514,6 +6514,44 @@ Wait 待ち時間
     assert_eq!(u.morale, 110);
 }
 
+/// `ClearPicture x1 y1 x2 y2` は矩形消去 (原典 `ClearPicture2`)、`ChangeMode x y` は
+/// 選択中ユニットの座標モード (原典 `ExecChangeModeCmd` の 2 引数・数値形)。
+#[test]
+fn clearpicture_range_and_changemode_coordinates() {
+    let mut app = App::new();
+    setup_two_units(&mut app);
+    let braver = app.database().unit_instances[0].uid.clone();
+    app.set_selected_unit_for_event(braver);
+    let src = "\
+Set w 100
+Line 0 0 50 50
+ClearPicture 10 20 (w + 10) 120
+ChangeMode 4 (1 + 2)
+ChangeMode 敵 固定
+ChangeMode ガロ 2 (1 + 2)
+";
+    execute(&mut app, &event::parse(src).unwrap()).unwrap();
+    assert_eq!(
+        app.script_overlay().cmds.last(),
+        Some(&crate::DrawCmd::ClearRect {
+            x1: 10.0,
+            y1: 20.0,
+            x2: 110.0,
+            y2: 120.0
+        })
+    );
+    // Line は消えずに残る (矩形の外側の描画は保たれる)。
+    assert!(app
+        .script_overlay()
+        .cmds
+        .iter()
+        .any(|c| matches!(c, crate::DrawCmd::Line { .. })));
+    let units = &app.database().unit_instances;
+    assert_eq!(units[0].ai_mode, "4 3");
+    // 陣営指定 (`敵 固定`) の後、ユニット指定の座標モードで上書きする。
+    assert_eq!(units[1].ai_mode, "2 3");
+}
+
 /// `Print F msg;` は改行せず、次の Print が同じ行に続く (原典 ExecPrintCmd)。
 /// 実データの戦闘アニメ定義 (BattleAnime.eve) が 1 行を 3 回の Print で組み立てる。
 #[test]

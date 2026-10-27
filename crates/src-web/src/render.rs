@@ -400,11 +400,20 @@ fn draw_command_menu(ctx: &CanvasRenderingContext2d, menu: &src_core::CommandMen
 /// `.eve` の `PaintString` / `Line` / `Font` 等で蓄積された
 /// `ScriptOverlay` を Canvas に流し込む。
 fn draw_script_overlay(
-    ctx: &CanvasRenderingContext2d,
+    out: &CanvasRenderingContext2d,
     overlay: &src_core::ScriptOverlay,
     assets: &Assets,
 ) {
     use src_core::DrawCmd as D;
+    // 矩形消去 (`ClearPicture x1 y1 x2 y2`) があるときは、オーバーレイを別レイヤに描いて
+    // から合成する (直接描くと消去で下のマップまで消えてしまう)。
+    let layer = overlay
+        .cmds
+        .iter()
+        .any(|c| matches!(c, D::ClearRect { .. }))
+        .then(|| overlay_layer(out))
+        .flatten();
+    let ctx: &CanvasRenderingContext2d = layer.as_ref().map_or(out, |(_, c)| c);
     // ペン状態は overlay の永続フィールドから seed する。SRC の ObjColor/ObjFillStyle/
     // ObjFillColor/ObjDrawWidth は ClearPicture を跨いで保持されるため、毎フレーム
     // ClearPicture される戦闘アニメで cmds から SetColor 等が消えても色/塗りが残る
@@ -520,6 +529,10 @@ fn draw_script_overlay(
                     fill_solid,
                     &fill_color,
                 );
+            }
+            D::ClearRect { x1, y1, x2, y2 } => {
+                let (x, y) = (x1.min(*x2), y1.min(*y2));
+                ctx.clear_rect(x, y, (x2 - x1).abs() + 1.0, (y2 - y1).abs() + 1.0);
             }
             D::Arc {
                 cx,
@@ -666,6 +679,31 @@ fn draw_script_overlay(
             }
         }
     }
+    if let Some((canvas, _)) = layer {
+        let _ = out.draw_image_with_html_canvas_element(&canvas, 0.0, 0.0);
+    }
+}
+
+/// `out` と同じ大きさの透明なオフスクリーンキャンバスを作る。
+fn overlay_layer(
+    out: &CanvasRenderingContext2d,
+) -> Option<(web_sys::HtmlCanvasElement, CanvasRenderingContext2d)> {
+    use wasm_bindgen::JsCast;
+    let main = out.canvas()?;
+    let canvas: web_sys::HtmlCanvasElement = web_sys::window()?
+        .document()?
+        .create_element("canvas")
+        .ok()?
+        .dyn_into()
+        .ok()?;
+    canvas.set_width(main.width());
+    canvas.set_height(main.height());
+    let ctx = canvas
+        .get_context("2d")
+        .ok()??
+        .dyn_into::<CanvasRenderingContext2d>()
+        .ok()?;
+    Some((canvas, ctx))
 }
 
 /// `Circle` / `Oval` の楕円描画。中心 (cx,cy)・横半径 rx・縦半径 ry。

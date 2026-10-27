@@ -231,6 +231,16 @@ fn exec_clearpicture(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     // → 汎用戦闘アニメの `Paint; Refresh; ClearPicture; Wait` 各フレームが
     //   Wait 中も正しく表示される (即 clear すると毎フレーム空になっていた)。
     // Hotpoint は別管理なのでそのまま。
+    //
+    // `ClearPicture x1 y1 x2 y2` (原典 `ExecClearPictureCmd` の 4 引数形。座標は
+    // `GetArgAsLong`) は矩形の内側だけを消す。
+    if c.xargs.len() == 4 {
+        let n = |i: usize| c.long(app, i).unwrap_or(0) as f64;
+        let (x1, y1, x2, y2) = (n(0), n(1), n(2), n(3));
+        app.script_overlay_mut()
+            .push(crate::script_overlay::DrawCmd::ClearRect { x1, y1, x2, y2 });
+        return Ok(pc + 1);
+    }
     app.script_overlay_mut().defer_clear();
     Ok(pc + 1)
 }
