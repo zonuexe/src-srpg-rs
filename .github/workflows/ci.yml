@@ -1,0 +1,47 @@
+# コミット前のゲート (CLAUDE.md: fmt → test → lint → check) を CI でも回す。
+# ツールチェーンはローカルと同じ Nix devShell (flake.lock で固定) を使う。
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      # SRC.Sharp (サブモジュール) とフィクスチャ (.gitignore 済み) は使わない。
+      # それらに依存するテストは見つからなければスキップする。
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'flake.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Format
+        run: nix develop --command cargo fmt --all -- --check
+
+      - name: Test (src-core)
+        run: nix develop --command just test
+
+      - name: Lint (clippy, wasm32)
+        run: nix develop --command just lint
+
+      - name: Type check (wasm32)
+        run: nix develop --command just check
