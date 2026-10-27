@@ -211,3 +211,54 @@ fn unusable_map_weapon_is_listed_but_not_selectable() {
         "メニューに戻っていない"
     );
 }
+
+/// 移動型マップ攻撃 (`Ｍ移`、公式サンプルの鳳翼天翔): 目標地点は武器の最大射程を移動力と
+/// した移動範囲の空きマスで、発射すると攻撃側がそこへ移動し、通り道の敵を攻撃する
+/// (原典 `Unit.MapAttack` の `Jump(tx, ty)`)。
+#[test]
+fn move_type_map_attack_moves_attacker_through_enemies() {
+    use crate::command_menu::UnitMenuItem;
+    let mut app = App::new();
+    enter_mapview_with_demo_map(&mut app);
+    // 地形コストで移動範囲が削れないよう一様なマップにする。
+    app.database_mut()
+        .replace_map(crate::data::map::MapData::new(12, 12));
+    place_player_unit(&mut app, "Hero", 2, 6);
+    give_map_weapon(&mut app, "Hero", "Ｍ移", 3);
+    register_enemy_data(&mut app, "Foe");
+    app.database_mut()
+        .catalog
+        .units
+        .iter_mut()
+        .find(|u| u.name == "Foe")
+        .unwrap()
+        .hp = 100_000;
+    let a = spawn_enemy(&mut app, "Foe", 3, 6);
+    let b = spawn_enemy(&mut app, "Foe", 4, 6);
+    let hero = first_player_uid(&app);
+    app.database_mut()
+        .unit_by_uid_mut(&hero)
+        .unwrap()
+        .add_condition(crate::Condition::new("必中", -1));
+    app.set_stage_state(crate::stage::StageState::Battle);
+
+    click_tile(&mut app, 2, 6);
+    let mi = menu_index(&app, &UnitMenuItem::MapAttack).unwrap();
+    click_menu_item(&mut app, mi);
+    app.respond_dialog(1);
+    let targets = app.map_attack_select_tiles().unwrap().targets;
+    assert!(targets.contains(&(5, 6)), "移動範囲の空きマスが選べない");
+    assert!(!targets.contains(&(3, 6)), "敵の居るマスは選べない");
+    assert!(!targets.contains(&(2, 6)), "自分のマスは選べない");
+
+    click_tile(&mut app, 5, 6);
+    click_tile(&mut app, 5, 6);
+    let h = app.database().unit_by_uid(&hero).unwrap();
+    assert_eq!((h.x, h.y), (5, 6), "攻撃側が目標地点へ移動していない");
+    assert_eq!(app.database().uid_at(5, 6), Some(hero.as_str()));
+    assert_eq!(app.database().uid_at(2, 6), None);
+    assert!(
+        damage(&app, &a) > 0 && damage(&app, &b) > 0,
+        "通り道の敵が被弾していない"
+    );
+}

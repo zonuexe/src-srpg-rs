@@ -557,6 +557,22 @@ impl GameDatabase {
         crate::movement::compute_range_with(map, start, mp, cost_fn)
     }
 
+    /// 移動型マップ攻撃 (`Ｍ移`) の目標地点の候補 (原典 `Map.AreaInMoveAction(unit, max_range)`):
+    /// 武器の最大射程 `mp` を移動力とし、そのユニットの地形コストで計算した移動範囲。
+    pub fn move_action_range(
+        &self,
+        uid: &str,
+        mp: i32,
+    ) -> std::collections::HashMap<(u32, u32), i32> {
+        let (Some(map), Some(u)) = (self.map.as_ref(), self.unit_by_uid(uid)) else {
+            return std::collections::HashMap::new();
+        };
+        let Some(cost_fn) = self.unit_terrain_cost_fn(u) else {
+            return std::collections::HashMap::new();
+        };
+        crate::movement::compute_range_with(map, (u.x, u.y), mp, cost_fn)
+    }
+
     /// ユニット `u` の地形 ID → 移動コストの関数 (`movement::make_unit_cost_fn`)。0 以下は
     /// 進入不能。ユニットデータが無ければ `None`。
     fn unit_terrain_cost_fn(&self, u: &UnitInstance) -> Option<impl Fn(u32) -> i32> {

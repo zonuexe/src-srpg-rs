@@ -52,6 +52,12 @@ impl App {
             combat::map_attack_area(&weapon, atk_pos, (cx, cy))
                 .into_iter()
                 .collect();
+        // 移動型マップ攻撃 (`Ｍ移`): 範囲を元の位置から決めたあと、攻撃側が目標地点へ
+        // 移動してから攻撃する (原典 `Jump(tx, ty)`)。目標地点が埋まっていれば動かない。
+        if weapon.class.contains("Ｍ移") && self.database.uid_at(cx, cy).is_none() {
+            let uid = self.database.unit_instances[atk_idx].uid.clone();
+            self.database.move_unit(&uid, cx, cy);
+        }
 
         // 攻撃側と敵対する全陣営 (味方↔ＮＰＣ 同盟は対象外、中立は対象) を攻撃対象に。
         let atk_party = self.database().unit_instances[atk_idx].party;
@@ -263,7 +269,7 @@ enum MapAim {
     Around,
     /// `Ｍ直` / `Ｍ拡` / `Ｍ扇`: 攻撃側から十字方向の射程内のマスで方向を選ぶ。
     Direction,
-    /// `Ｍ移`: 射程内の空きマス。
+    /// `Ｍ移`: 武器の最大射程を移動力とした移動範囲の空きマス。発射すると攻撃側が移動する。
     EmptyTile,
     /// `Ｍ投` / `Ｍ線` ほか: 射程内の任意のマス。
     Point,
@@ -431,8 +437,13 @@ impl App {
                 (target.0 == pos.0 || target.1 == pos.1) && combat::weapon_in_range(&w, dist)
             }
             MapAim::EmptyTile => {
-                combat::weapon_in_range(&w, dist)
+                // 原典: 武器の最大射程を移動力とした移動範囲の空きマス。
+                target != pos
                     && self.database.uid_at(target.0, target.1).is_none()
+                    && self
+                        .database
+                        .move_action_range(uid, w.max_range)
+                        .contains_key(&target)
             }
             MapAim::Point => combat::weapon_in_range(&w, dist),
         }
@@ -482,10 +493,21 @@ impl App {
         let pos = (u.x, u.y);
         let r = u32::try_from(w.max_range.max(0)).unwrap_or(0);
         let mut targets = Vec::new();
-        for y in pos.1.saturating_sub(r)..=(pos.1 + r).min(m.height.saturating_sub(1)) {
-            for x in pos.0.saturating_sub(r)..=(pos.0 + r).min(m.width.saturating_sub(1)) {
-                if self.map_attack_target_ok(uid, weapon, (x, y)) {
-                    targets.push((x, y));
+        if map_aim(&w) == MapAim::EmptyTile {
+            // 移動範囲は 1 回だけ求める (マスごとに求め直さない)。
+            let range = self.database.move_action_range(uid, w.max_range);
+            targets.extend(
+                range
+                    .keys()
+                    .filter(|&&t| t != pos && self.database.uid_at(t.0, t.1).is_none()),
+            );
+            targets.sort_unstable();
+        } else {
+            for y in pos.1.saturating_sub(r)..=(pos.1 + r).min(m.height.saturating_sub(1)) {
+                for x in pos.0.saturating_sub(r)..=(pos.0 + r).min(m.width.saturating_sub(1)) {
+                    if self.map_attack_target_ok(uid, weapon, (x, y)) {
+                        targets.push((x, y));
+                    }
                 }
             }
         }
