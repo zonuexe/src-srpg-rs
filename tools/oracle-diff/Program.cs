@@ -38,6 +38,10 @@ namespace OracleDiff
             {
                 return RunArgs();
             }
+            if (args.Length > 0 && args[0] == "switch")
+            {
+                return RunSwitch();
+            }
             if (args.Length > 1 && args[0] == "loaddata")
             {
                 return RunLoadData(args[1]);
@@ -194,6 +198,79 @@ namespace OracleDiff
                     {
                         Console.Error.WriteLine("cmd err [" + line + "]: " + e.Message);
                     }
+                }
+                id++;
+            }
+            return 0;
+        }
+
+        // switch モード: 上段のコマンド列を実行したあと、下段の `Switch` ～ `EndSw` の各ブロックで
+        // SwitchCmd を実行し、飛び先の行 (ブロック内 0 始まりの行番号。EndSw の次なら `end`) を
+        // 出力する (Case の評価・比較規則の突合。Rust 側は `oracle_switch`)。
+        private static int RunSwitch()
+        {
+            var src = new SRC { GUI = new MockGUI() };
+            src.Event.EventData = new List<EventDataLine>();
+            src.Event.EventCmd = new List<CmdData>();
+            src.Event.EventFileNames = new List<string>();
+            src.Event.AdditionalEventFileNames = new List<string>();
+            src.Event.EventQue = new Queue<string>();
+            var parser = new CmdParser();
+            var inProbes = false;
+            var id = 0;
+            var block = new List<string>();
+            string line;
+            while ((line = Console.In.ReadLine()) != null)
+            {
+                if (line == "===PROBES===")
+                {
+                    inProbes = true;
+                    continue;
+                }
+                if (line.Length == 0 || line[0] == '#')
+                {
+                    continue;
+                }
+                if (inProbes)
+                {
+                    block.Add(line);
+                    if (line.Trim().ToLower() != "endsw")
+                    {
+                        continue;
+                    }
+                    var start = id;
+                    foreach (var b in block)
+                    {
+                        var bl = new EventDataLine(id, EventDataSource.Scenario, "test", id, b);
+                        src.Event.EventData.Add(bl);
+                        src.Event.EventCmd.Add(parser.Parse(src, bl));
+                        id++;
+                    }
+                    string outv;
+                    try
+                    {
+                        var r = src.Event.EventCmd[start].Exec();
+                        outv = r < 0 ? "<ERR>" : (r - 1 - start == block.Count - 1 ? "end" : (r - 1 - start).ToString());
+                    }
+                    catch (Exception e)
+                    {
+                        outv = "<ERR:" + e.GetType().Name + ">";
+                    }
+                    Console.WriteLine(outv);
+                    block.Clear();
+                    continue;
+                }
+                try
+                {
+                    var dl = new EventDataLine(id, EventDataSource.Scenario, "test", id, line);
+                    src.Event.EventData.Add(dl);
+                    var cmd = parser.Parse(src, dl);
+                    src.Event.EventCmd.Add(cmd);
+                    cmd.Exec();
+                }
+                catch (Exception e)
+                {
+                    Console.Error.WriteLine("cmd err [" + line + "]: " + e.Message);
                 }
                 id++;
             }

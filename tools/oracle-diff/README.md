@@ -67,7 +67,8 @@ paste -d'~' /tmp/p.txt /tmp/cs.txt /tmp/rs.txt | awk -F'~' '$2!=$3{print}'
 構文解析した `If <probe> Then` の真偽 (`AIfCmd.Evaluate()`) をタブ区切りで出す。
 Rust 側 [`oracle_paths`](../verify-archive/src/bin/oracle_paths.rs) は本実装の評価経路ごと
 (`Eval()` / `=` 代入 / `If` / メニュー条件 / 統一評価器の値 / 統一評価器の If) に評価して出す。
-コーパスは [`paths.txt`](paths.txt) / [`paths_ext.txt`](paths_ext.txt) / [`paths_func.txt`](paths_func.txt) (組み込み関数の引数)。
+コーパスは [`paths.txt`](paths.txt) / [`paths_ext.txt`](paths_ext.txt) / [`paths_func.txt`](paths_func.txt) (組み込み関数の引数) /
+[`paths_index.txt`](paths_index.txt) (添字付き変数の添字と `Set Eval(式)` の左辺)。
 
 ```sh
 # C#
@@ -105,6 +106,23 @@ $NIX develop --command bash -c \
 一致しない既知の差: 数値引数の整数化 (`1.50` / `3.5`。VB6 の CLng は偶数丸め、C# は切り捨て。
 本実装は VB6 準拠)、クォート外の `$(...)` (本移植の拡張)、`Incr k "5"` (原典は引用符付き
 数値を 0 とするが、本移植は数値として読む)。
+
+## Switch モード (switch) — Case の評価・比較の差分
+
+`scenario` と同じ入力形式で、下段の `Switch` ～ `EndSw` の各ブロックで Switch を実行し、
+飛び込んだ `Case` のブロック内行番号 (0 始まり。どれにも入らなければ `end`) を出す
+(C# は `SwitchCmd.Exec()` の戻り値、Rust は [`oracle_switch`](../verify-archive/src/bin/oracle_switch.rs)
+が各 `Case` 行の直後に目印の `Set` を差し込んで実行する)。コーパスは [`switch.txt`](switch.txt)。
+
+```sh
+$NIX develop .#dotnet --command bash -c \
+  'dotnet run --project tools/oracle-diff/oracle-diff.csproj -c Release switch < tools/oracle-diff/switch.txt > /tmp/cs.txt 2>/dev/null'
+$NIX develop --command bash -c \
+  'cargo run -q -p verify-archive --bin oracle_switch < tools/oracle-diff/switch.txt > /tmp/rs.txt 2>/dev/null'
+```
+
+一致しない既知の差: クォート外の `$(...)` (本移植の拡張) と 1 語の `CaseElse` (本移植の拡張。
+原典は `Case Else` のみ)。
 
 ## データロードモード (loaddata) — 静的ユニット/パイロットデータの差分
 
