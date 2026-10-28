@@ -262,3 +262,56 @@ fn move_type_map_attack_moves_attacker_through_enemies() {
         "通り道の敵が被弾していない"
     );
 }
+
+/// 識別型でないマップ兵器は効果範囲内の味方も巻き込み、`識` 属性なら巻き込まない
+/// (原典 `Unit.MapAttack`)。盤外 (退避中) のユニットは座標が残っていても当たらない。
+#[test]
+fn map_attack_hits_allies_unless_discriminating() {
+    fn fire(class: &str) -> (i64, i64, i64) {
+        let mut app = App::new();
+        enter_mapview_with_demo_map(&mut app);
+        place_player_unit(&mut app, "Hero", 2, 6);
+        give_map_weapon(&mut app, "Hero", class, 4);
+        place_player_unit(&mut app, "Buddy", 5, 7);
+        register_enemy_data(&mut app, "Foe");
+        for name in ["Foe", "Buddy"] {
+            app.database_mut()
+                .catalog
+                .units
+                .iter_mut()
+                .find(|u| u.name == name)
+                .unwrap()
+                .hp = 100_000;
+        }
+        let foe = spawn_enemy(&mut app, "Foe", 5, 6);
+        let gone = spawn_enemy(&mut app, "Foe", 5, 5);
+        app.database_mut().set_off_map(&gone, true);
+        let hero = first_player_uid(&app);
+        let buddy = app
+            .database()
+            .unit_instances
+            .iter()
+            .find(|u| u.unit_data_name == "Buddy")
+            .unwrap()
+            .uid
+            .clone();
+        app.database_mut()
+            .unit_by_uid_mut(&hero)
+            .unwrap()
+            .add_condition(crate::Condition::new("必中", -1));
+        app.set_stage_state(crate::stage::StageState::Battle);
+        app.execute_map_attack(&hero, "マップ砲", 5, 6, false);
+        (
+            damage(&app, &foe),
+            damage(&app, &buddy),
+            damage(&app, &gone),
+        )
+    }
+    let (foe, buddy, gone) = fire("Ｍ投L1");
+    assert!(foe > 0, "敵が被弾していない");
+    assert!(buddy > 0, "識別型でないのに味方が巻き込まれていない");
+    assert_eq!(gone, 0, "盤外のユニットが被弾している");
+    let (foe, buddy, _) = fire("Ｍ投L1識");
+    assert!(foe > 0);
+    assert_eq!(buddy, 0, "識 属性なのに味方が巻き込まれた");
+}

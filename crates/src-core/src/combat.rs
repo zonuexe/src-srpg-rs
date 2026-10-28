@@ -229,6 +229,21 @@ pub fn terrain_env(class: &str) -> i32 {
 
 /// 武器の地形適応文字列 (4 文字) から `env` の修正率。未指定 (4 文字未満) は
 /// 制限なし (S=1.4) 扱いで、ユニット側適応が支配的になるようにする。
+/// 武器が地形適応環境 `env` (0=空/1=陸/2=海/3=宇、負なら不明) の相手に届くか。
+/// 武器の地形適応が `-` (0) の環境には届かない (原典 `WeaponAdaption(w, area) = 0`)。
+pub fn weapon_reaches_env(weapon: &WeaponData, env: i32) -> bool {
+    let b = weapon.adaption.as_bytes();
+    usize::try_from(env)
+        .ok()
+        .and_then(|e| b.get(e))
+        .map_or(true, |&c| c != b'-')
+}
+
+/// 識別型のマップ兵器 (`識` 属性) か。味方を巻き込まない。
+pub fn is_discriminating_map_weapon(weapon: &WeaponData) -> bool {
+    weapon.class.contains('識')
+}
+
 fn weapon_adaptation_mult(weapon_adaption: &str, env: usize) -> f64 {
     let b = weapon_adaption.as_bytes();
     if b.len() >= 4 {
