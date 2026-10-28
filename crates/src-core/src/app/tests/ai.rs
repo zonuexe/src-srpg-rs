@@ -394,6 +394,65 @@ fn ai_uses_map_weapon_on_multiple_enemies() {
     );
 }
 
+/// 識別型でないマップ兵器は味方も巻き込むので、敵 AI は味方が効果範囲に入る照準では
+/// 撃たない (`Ｍ全` は自分中心なので、隣に味方が居れば撃たない)。
+#[test]
+fn ai_map_weapon_avoids_hitting_allies() {
+    use crate::data::unit::WeaponData;
+    let mut app = App::new();
+    enter_mapview_with_demo_map(&mut app);
+    place_player_unit(&mut app, "Bomber", 9, 0);
+    app.database_mut()
+        .catalog
+        .units
+        .iter_mut()
+        .find(|d| d.name == "Bomber")
+        .unwrap()
+        .weapons
+        .push(WeaponData {
+            name: "全体砲".into(),
+            power: 30,
+            min_range: 1,
+            max_range: 5,
+            precision: 50,
+            bullet: -1,
+            en_consumption: 0,
+            necessary_morale: 0,
+            adaption: "AAAA".into(),
+            critical: 0,
+            class: "Ｍ全".into(),
+            extras: Vec::new(),
+        });
+    let bomber = app.database_mut().register_unit(crate::UnitInstance::new(
+        "Bomber",
+        "PILOT",
+        crate::Party::Enemy,
+        5,
+        5,
+    ));
+    let buddy = app.database_mut().register_unit(crate::UnitInstance::new(
+        "Bomber",
+        "PILOT",
+        crate::Party::Enemy,
+        5,
+        6,
+    ));
+    place_player_unit(&mut app, "Victim1", 6, 5);
+    place_player_unit(&mut app, "Victim2", 7, 5);
+    app.set_stage_state(crate::stage::StageState::Battle);
+    let idx = app.database().idx_by_uid(&bomber).unwrap();
+    app.ai_act_unit(idx);
+    assert_eq!(app.database().unit_by_uid(&buddy).unwrap().damage, 0);
+    assert!(
+        app.database()
+            .unit_instances
+            .iter()
+            .filter(|u| u.unit_data_name.starts_with("Victim"))
+            .all(|u| u.damage == 0),
+        "味方を巻き込む照準で撃っている"
+    );
+}
+
 /// ChangeMode「護衛 <対象>」の敵 AI は守護対象の近くへ移動する。
 #[test]
 fn change_mode_escort_moves_toward_protected_unit() {

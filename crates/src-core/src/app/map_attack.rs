@@ -59,16 +59,23 @@ impl App {
             self.database.move_unit(&uid, cx, cy);
         }
 
-        // 攻撃側と敵対する全陣営 (味方↔ＮＰＣ 同盟は対象外、中立は対象) を攻撃対象に。
+        // 攻撃対象 (原典 `Unit.MapAttack`): 効果範囲内の自分以外の全ユニット。味方も巻き込む。
+        // 除外: 武器の地形適応が `-` の場所に居る / 隠れ身中 / 識別型 (`識` 属性・識別攻撃)
+        // なら味方。
         let atk_party = self.database().unit_instances[atk_idx].party;
-        // 対象 idx を集めて damage と armor で個別評価。
+        let discriminating = combat::is_discriminating_map_weapon(&weapon)
+            || self.unit_under_spirit_effect(atk_idx, "識別攻撃");
         let mut targets: Vec<usize> = self
             .database()
             .unit_instances
             .iter()
             .enumerate()
-            .filter(|(_, u)| u.party.is_hostile_to(atk_party))
-            .filter(|(_, u)| area.contains(&(u.x, u.y)))
+            .filter(|&(i, u)| i != atk_idx && !u.off_map && area.contains(&(u.x, u.y)))
+            .filter(|&(_, u)| !(discriminating && u.party.is_ally_of(atk_party)))
+            .filter(|&(i, u)| {
+                combat::weapon_reaches_env(&weapon, self.terrain_env_at(u.x, u.y))
+                    && !self.unit_under_spirit_effect(i, "隠れ身")
+            })
             .map(|(i, _)| i)
             .collect();
         if targets.is_empty() {
@@ -290,6 +297,15 @@ fn map_aim(weapon: &crate::data::unit::WeaponData) -> MapAim {
 
 /// プレイヤーのマップ攻撃 (ユニットコマンド「マップ攻撃」)。
 impl App {
+    /// ユニット `idx` が精神コマンド効果 `effect` (`識別攻撃` / `隠れ身` 等) の下にあるか。
+    /// 効果は付いている精神コマンド (状態) の sp.txt の効果名で判定する。
+    pub(super) fn unit_under_spirit_effect(&self, idx: usize, effect: &str) -> bool {
+        self.database.unit_instances[idx]
+            .conditions
+            .iter()
+            .any(|c| self.spirit_has_effect(&c.name, effect))
+    }
+
     /// `uid` のマップ兵器と使用可否 (EN・弾・気力・必要技能・チャージ・移動後の制限)。
     fn player_map_weapons(&self, uid: &str, post_move: bool) -> Vec<(String, bool)> {
         let Some(idx) = self.database.idx_by_uid(uid) else {

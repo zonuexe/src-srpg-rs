@@ -526,11 +526,23 @@ impl App {
         if enemies.len() < 2 {
             return false;
         }
+        // 味方 (自分以外) の位置。識別型でないマップ兵器は味方も巻き込むので避ける。
+        let allies: Vec<(u32, u32)> = self
+            .database
+            .unit_instances
+            .iter()
+            .filter(|u| !u.off_map && u.uid != caster && u.party.is_ally_of(party))
+            .map(|u| (u.x, u.y))
+            .collect();
         for weapon in &map_weapons {
-            // 各敵位置を照準候補に、最も多く敵を巻き込む中心を探す。
+            let spares_allies = crate::combat::is_discriminating_map_weapon(weapon);
+            // 各敵位置を照準候補に、味方を巻き込まずに最も多く敵を巻き込む中心を探す。
             let mut best: Option<((u32, u32), usize)> = None;
             for &center in &enemies {
                 let area = crate::combat::map_attack_area(weapon, pos, center);
+                if !spares_allies && allies.iter().any(|a| area.contains(a)) {
+                    continue;
+                }
                 let hits = enemies.iter().filter(|e| area.contains(e)).count();
                 if hits >= 2 && best.as_ref().map(|(_, h)| hits > *h).unwrap_or(true) {
                     best = Some((center, hits));
