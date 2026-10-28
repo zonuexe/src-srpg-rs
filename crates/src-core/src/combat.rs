@@ -930,109 +930,169 @@ pub fn is_map_weapon(w: &WeaponData) -> bool {
     w.class.contains('Ｍ')
 }
 
-/// マップ攻撃の効果範囲を表す `(x, y)` 集合を計算する。
-/// 武器の `class` 文字列に含まれる SRC の属性記号を解釈する:
+/// マップ攻撃の効果範囲 (`(x, y)` の集合、内部座標)。原典 `Unit.MapAttack` が属性ごとに
+/// 呼ぶ `Map.AreaIn*` と同じ形にする (`src` は攻撃側、`target` は目標地点)。攻撃側自身の
+/// マスは含めない (原典は最後に自分を除外する)。盤外の座標を含み得るが、そこにユニットは
+/// 居ないので害はない。
 ///
-/// - `Ｍ全`             : 全方位 (攻撃者を中心としたマンハッタン菱形 ≤ max_range)
-/// - `Ｍ投L<n>` / `Ｍ投` : 指定地点を中心とした菱形 (半径 = L 値 or max_range)
-/// - `Ｍ直`             : 攻撃者から指定方向へ max_range タイルの直線
-/// - `Ｍ拡`             : 攻撃者から指定方向へ max_range タイル幅 3 の直線
-/// - `Ｍ移` / `Ｍ線`     : 攻撃者と指定地点を結ぶ直線 (近似で軸線優先)
-/// - `Ｍ扇L<n>`         : 簡略実装で `Ｍ拡` 同等 (将来詳細化)
-/// - 不明 / `Ｍ` 接頭辞なし : 指定地点中心の菱形 (半径 = max_range) — 旧挙動互換
+/// - `Ｍ全`    : 攻撃側から最小〜最大射程の菱形 (`AreaInRange(x, y, max, min)`)
+/// - `Ｍ投L<n>`: 目標地点から距離 n の菱形 (L が無ければ最大射程。中心を含む)
+/// - `Ｍ直`    : 上下 → 左右の順で目標地点の方向を決め、最小〜最大射程の直線 (`AreaInLine`)
+/// - `Ｍ拡`    : 縦横で距離の大きい方向に、最小〜最大射程の中央列と、最小+1〜最大-1 の
+///   両脇の列 (`AreaInCone`)
+/// - `Ｍ扇L<n>`: 方向は `Ｍ拡` と同じ (縦横同距離なら上下)。距離 i の半幅は Lv1 = i/3、
+///   Lv2 = i/2、Lv3 = i-1、Lv4 = i (`AreaInSector`)
+/// - `Ｍ移` / `Ｍ線`: 攻撃側と目標地点を結ぶ直線 (`AreaInPointToPoint`)
+/// - そのほか: 目標地点から最大射程の菱形 (旧挙動互換)
+///
+/// 注: `Ｍ投` は原典のコードでは `AreaInRange(tx, ty, Lv, 1)` で中心を除くが、ヘルプの
+/// 図と「レベル 0 も指定可能」の記述は中心を含むことを示すため、中心を含めている。
 pub fn map_attack_area(
     weapon: &crate::data::unit::WeaponData,
     src: (u32, u32),
     target: (u32, u32),
 ) -> Vec<(u32, u32)> {
     let cls = weapon.class.as_str();
-    let range = weapon.max_range.max(0);
+    let max = weapon.max_range.max(0);
+    let min = weapon.min_range.max(0);
     let lvl_after = |key: &str| -> Option<i32> {
         cls.find(key).map(|idx| {
             let tail = &cls[idx + key.len()..];
-            // 'L' があれば数字を読む
-            if let Some(rest) = tail.strip_prefix('L') {
-                let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-                digits.parse::<i32>().unwrap_or(range)
-            } else {
-                range
-            }
+            tail.strip_prefix('L')
+                .map(|rest| {
+                    rest.chars()
+                        .take_while(|c| c.is_ascii_digit())
+                        .collect::<String>()
+                })
+                .and_then(|d| d.parse::<i32>().ok())
+                .unwrap_or(max)
         })
     };
-
-    let mut out: Vec<(u32, u32)> = Vec::new();
+    let (x, y) = (src.0 as i32, src.1 as i32);
+    let (tx, ty) = (target.0 as i32, target.1 as i32);
+    let (adx, ady) = ((tx - x).abs(), (ty - y).abs());
+    let mut cells: Vec<(i32, i32)> = Vec::new();
     if cls.contains("Ｍ全") {
-        // 攻撃者中心の菱形 (max_range)
-        diamond_into(&mut out, src.0 as i32, src.1 as i32, range);
+        diamond_into(&mut cells, x, y, min, max);
     } else if let Some(lvl) = lvl_after("Ｍ投") {
-        // ターゲット中心の菱形 (L<lvl> あれば lvl、無ければ max_range)
-        diamond_into(&mut out, target.0 as i32, target.1 as i32, lvl);
+        diamond_into(&mut cells, tx, ty, 0, lvl);
     } else if cls.contains("Ｍ直") {
-        line_into(&mut out, src, target, range, 0);
-    } else if cls.contains("Ｍ拡") || cls.contains("Ｍ扇") {
-        // 簡略実装: 3 マス幅の直線
-        line_into(&mut out, src, target, range, 1);
+        let dir = if ty < y {
+            (0, -1)
+        } else if ty > y {
+            (0, 1)
+        } else if tx < x {
+            (-1, 0)
+        } else {
+            (1, 0)
+        };
+        for i in min..=max {
+            cells.push((x + dir.0 * i, y + dir.1 * i));
+        }
+    } else if cls.contains("Ｍ拡") {
+        let dir: (i32, i32) = if ty < y && ady > adx {
+            (0, -1)
+        } else if ty > y && ady > adx {
+            (0, 1)
+        } else if tx < x && adx > ady {
+            (-1, 0)
+        } else {
+            (1, 0)
+        };
+        let side = (dir.1.abs(), dir.0.abs()); // 進行方向と直交する単位ベクトル
+        for i in min..=max {
+            cells.push((x + dir.0 * i, y + dir.1 * i));
+        }
+        for i in (min + 1)..=(max - 1) {
+            let (cx, cy) = (x + dir.0 * i, y + dir.1 * i);
+            cells.push((cx - side.0, cy - side.1));
+            cells.push((cx + side.0, cy + side.1));
+        }
+    } else if let Some(lv) = lvl_after("Ｍ扇") {
+        let dir: (i32, i32) = if ty < y && ady >= adx {
+            (0, -1)
+        } else if ty > y && ady >= adx {
+            (0, 1)
+        } else if tx < x && adx >= ady {
+            (-1, 0)
+        } else {
+            (1, 0)
+        };
+        let side = (dir.1.abs(), dir.0.abs());
+        for i in min..=max {
+            let half = match lv {
+                1 => i / 3,
+                2 => i / 2,
+                3 => i - 1,
+                4 => i,
+                _ => continue,
+            };
+            let (cx, cy) = (x + dir.0 * i, y + dir.1 * i);
+            for k in -half..=half {
+                cells.push((cx + side.0 * k, cy + side.1 * k));
+            }
+        }
     } else if cls.contains("Ｍ移") || cls.contains("Ｍ線") {
-        // 攻撃者からターゲットまでの直線 (距離 ≤ max_range)
-        line_into(&mut out, src, target, range, 0);
+        point_to_point_into(&mut cells, (x, y), (tx, ty));
     } else {
-        // フォールバック: 旧挙動 (target 中心の菱形, radius=max_range)
-        diamond_into(&mut out, target.0 as i32, target.1 as i32, range);
+        diamond_into(&mut cells, tx, ty, 0, max);
+    }
+    let mut out: Vec<(u32, u32)> = Vec::new();
+    for (cx, cy) in cells {
+        if cx >= 0 && cy >= 0 && (cx, cy) != (x, y) {
+            let c = (cx as u32, cy as u32);
+            if !out.contains(&c) {
+                out.push(c);
+            }
+        }
     }
     out
 }
 
-/// (cx, cy) を中心としたマンハッタン半径 `radius` の菱形領域。
-fn diamond_into(out: &mut Vec<(u32, u32)>, cx: i32, cy: i32, radius: i32) {
-    if radius < 0 {
-        return;
-    }
-    for dy in -radius..=radius {
-        let span = radius - dy.abs();
+/// (cx, cy) からマンハッタン距離 `min`〜`max` の菱形 (原典 `AreaInRange`)。
+fn diamond_into(out: &mut Vec<(i32, i32)>, cx: i32, cy: i32, min: i32, max: i32) {
+    for dy in -max..=max {
+        let span = max - dy.abs();
         for dx in -span..=span {
-            let x = cx + dx;
-            let y = cy + dy;
-            if x >= 0 && y >= 0 {
-                out.push((x as u32, y as u32));
+            if dx.abs() + dy.abs() >= min {
+                out.push((cx + dx, cy + dy));
             }
         }
     }
 }
 
-/// 攻撃者 `src` から `target` へ向かう直線（軸線優先）。
-/// `width_each` = 1 なら線の両側 1 マス（合計 3 マス幅）。
-fn line_into(
-    out: &mut Vec<(u32, u32)>,
-    src: (u32, u32),
-    target: (u32, u32),
-    range: i32,
-    width_each: i32,
-) {
-    let dx = target.0 as i32 - src.0 as i32;
-    let dy = target.1 as i32 - src.1 as i32;
-    let (sx, sy) = if dx.abs() >= dy.abs() {
-        (dx.signum(), 0)
-    } else {
-        (0, dy.signum())
-    };
-    if sx == 0 && sy == 0 {
-        return;
+/// 原典 `AreaInPointToPoint`: 縦横で距離の大きい軸に 1 マスずつ進み、もう一方の座標を
+/// 比例計算する。VB は `Double` を `Integer` へ代入するので偶数丸めになる。各段で
+/// 「進めた直後のマス」と「もう一方を計算し直したマス」の両方を範囲に入れる。
+fn point_to_point_into(out: &mut Vec<(i32, i32)>, from: (i32, i32), to: (i32, i32)) {
+    let ((x1, y1), (x2, y2)) = (from, to);
+    out.push((x1, y1));
+    let (mut xx, mut yy) = (x1, y1);
+    if (x1 - x2).abs() > (y1 - y2).abs() {
+        while xx != x2 {
+            xx += if x1 > x2 { -1 } else { 1 };
+            out.push((xx, yy));
+            yy = y1 + vb_round_div(i64::from((y2 - y1) * (x1 - xx)), i64::from(x1 - x2)) as i32;
+            out.push((xx, yy));
+        }
+    } else if y1 != y2 {
+        while yy != y2 {
+            yy += if y1 > y2 { -1 } else { 1 };
+            out.push((xx, yy));
+            xx = x1 + vb_round_div(i64::from((x2 - x1) * (y1 - yy)), i64::from(y1 - y2)) as i32;
+            out.push((xx, yy));
+        }
     }
-    for step in 1..=range {
-        let x = src.0 as i32 + sx * step;
-        let y = src.1 as i32 + sy * step;
-        if x < 0 || y < 0 {
-            continue;
-        }
-        for w in -width_each..=width_each {
-            // 線方向に垂直なオフセット
-            let (ox, oy) = if sx != 0 { (0, w) } else { (w, 0) };
-            let xx = x + ox;
-            let yy = y + oy;
-            if xx >= 0 && yy >= 0 {
-                out.push((xx as u32, yy as u32));
-            }
-        }
+}
+
+/// `num / den` を VB の `Integer` 代入と同じ偶数丸め (銀行丸め) で整数にする。`den != 0`。
+fn vb_round_div(num: i64, den: i64) -> i64 {
+    let (num, den) = if den < 0 { (-num, -den) } else { (num, den) };
+    let (q, r) = (num.div_euclid(den), num.rem_euclid(den));
+    match (2 * r).cmp(&den) {
+        std::cmp::Ordering::Greater => q + 1,
+        std::cmp::Ordering::Equal if q % 2 != 0 => q + 1,
+        _ => q,
     }
 }
 
@@ -1926,6 +1986,87 @@ mod tests {
             with_lv1.damage, 450,
             "耐久無印 (Lv1): Defense=105 → def_power=1050 → ダメージ450"
         );
+    }
+
+    fn area_weapon(class: &str, min: i32, max: i32) -> WeaponData {
+        WeaponData {
+            name: "W".into(),
+            power: 1,
+            min_range: min,
+            max_range: max,
+            precision: 0,
+            bullet: -1,
+            en_consumption: 0,
+            necessary_morale: 0,
+            adaption: String::new(),
+            critical: 0,
+            class: class.into(),
+            extras: Vec::new(),
+        }
+    }
+
+    fn sorted(mut v: Vec<(u32, u32)>) -> Vec<(u32, u32)> {
+        v.sort_unstable();
+        v
+    }
+
+    /// 原典 `AreaInLine` / `AreaInCone` / `AreaInSector` / `AreaInPointToPoint` と同じ形。
+    #[test]
+    fn map_attack_area_shapes_match_original() {
+        // Ｍ直: 上下 → 左右の順で方向を決め、最小〜最大射程の直線。
+        let w = area_weapon("Ｍ直", 1, 3);
+        assert_eq!(
+            sorted(map_attack_area(&w, (5, 5), (6, 2))),
+            vec![(5, 2), (5, 3), (5, 4)]
+        );
+        assert_eq!(
+            sorted(map_attack_area(&w, (5, 5), (7, 5))),
+            vec![(6, 5), (7, 5), (8, 5)]
+        );
+        // Ｍ拡: 中央列は最小〜最大、両脇は最小+1〜最大-1。
+        let w = area_weapon("Ｍ拡", 1, 3);
+        assert_eq!(
+            sorted(map_attack_area(&w, (5, 5), (5, 1))),
+            vec![(4, 3), (5, 2), (5, 3), (5, 4), (6, 3)]
+        );
+        // Ｍ扇L2: 距離 i の半幅 i/2。縦横同距離なら上下を選ぶ。
+        let w = area_weapon("Ｍ扇L2", 1, 4);
+        assert_eq!(
+            sorted(map_attack_area(&w, (5, 5), (3, 3))),
+            vec![
+                (3, 1),
+                (4, 1),
+                (4, 2),
+                (4, 3),
+                (5, 1),
+                (5, 2),
+                (5, 3),
+                (5, 4),
+                (6, 1),
+                (6, 2),
+                (6, 3),
+                (7, 1),
+            ]
+        );
+        // Ｍ線: 長い軸に 1 マスずつ進め、もう一方は偶数丸め (0.5 → 0、0.75 → 1)。
+        let w = area_weapon("Ｍ線", 1, 4);
+        assert_eq!(
+            sorted(map_attack_area(&w, (0, 0), (4, 1))),
+            vec![(1, 0), (2, 0), (3, 0), (3, 1), (4, 1)]
+        );
+        // Ｍ全: 最小〜最大射程の菱形 (攻撃側のマスは含めない)。
+        let w = area_weapon("Ｍ全", 2, 2);
+        assert_eq!(map_attack_area(&w, (5, 5), (5, 5)).len(), 8);
+    }
+
+    #[test]
+    fn vb_round_div_rounds_half_to_even() {
+        assert_eq!(vb_round_div(1, 2), 0);
+        assert_eq!(vb_round_div(3, 2), 2);
+        assert_eq!(vb_round_div(-1, 2), 0);
+        assert_eq!(vb_round_div(-3, 2), -2);
+        assert_eq!(vb_round_div(3, 4), 1);
+        assert_eq!(vb_round_div(1, -4), 0);
     }
 
     #[test]

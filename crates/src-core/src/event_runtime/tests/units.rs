@@ -1220,8 +1220,8 @@ fn mapattack_area_m_zen_is_diamond_around_attacker() {
         extras: Vec::new(),
     };
     let area = map_attack_area(&w, (5, 5), (10, 10));
-    // 菱形 radius=2, 攻撃者中心 (5,5)
-    assert!(area.contains(&(5, 5)));
+    // 菱形 radius=2, 攻撃者中心 (5,5)。攻撃者自身のマスは含めない (原典は最後に除外)。
+    assert!(!area.contains(&(5, 5)));
     assert!(area.contains(&(7, 5)));
     assert!(area.contains(&(5, 7)));
     assert!(area.contains(&(6, 6)));
