@@ -2880,10 +2880,28 @@ fn support_guard_uses_effective_max_hp() {
         g.damage = base_hp - 1;
         g.upgrade_level = 5;
     }
+    // 攻撃側 (Hero) の武器は、援護役が実効 HP なら耐えられる威力にする。
+    place_player_unit(&mut app, "Hero", 5, 6);
+    add_weapon(&mut app, "Hero", 30, 1);
+    let hero = first_player_uid(&app);
+    let weapon = app
+        .database()
+        .unit_by_name("Hero")
+        .unwrap()
+        .weapons
+        .last()
+        .cloned()
+        .unwrap();
     let def_idx = app.database().idx_by_uid(&fuid).unwrap();
     let guard_idx = app.database().idx_by_uid(&guid).unwrap();
+    let atk_idx = app.database().idx_by_uid(&hero).unwrap();
+    let expected = app.forecast_strike(atk_idx, def_idx, &weapon).unwrap();
+    assert!(
+        expected.damage * 3 / 4 >= 1,
+        "前提: 基本 HP (残り 1) なら撃破される見込み"
+    );
     assert_eq!(
-        app.try_find_support_guard(def_idx, base_hp),
+        app.try_find_support_guard(atk_idx, def_idx, &weapon, &expected, true),
         Some(guard_idx),
         "実効 HP に余裕のある援護役が援護防御しない"
     );
@@ -4181,4 +4199,162 @@ fn support_guard_parries_as_the_guard() {
         "ガード役が被弾していない"
     );
     assert_eq!(db.unit_by_uid(&foe).unwrap().damage, 0, "防御側が被弾した");
+}
+
+/// `uid` のユニットの主パイロットを、`PILOT` を複製して `edit` を当てた `name` にする。
+fn give_pilot(
+    app: &mut App,
+    uid: &str,
+    name: &str,
+    edit: impl FnOnce(&mut crate::data::pilot::PilotData),
+) {
+    let mut p = app.database().pilot_by_name("PILOT").unwrap().clone();
+    p.name = name.into();
+    p.nickname = name.into();
+    edit(&mut p);
+    app.database_mut().catalog.pilots.push(p);
+    app.database_mut().unit_by_uid_mut(uid).unwrap().pilot_name = name.into();
+}
+
+/// Hero の最後の武器で Foe を攻撃するとき、援護防御するユニットの uid (手動選択扱い)。
+fn support_guard_for(app: &App, foe: &str) -> Option<String> {
+    let weapon = app
+        .database()
+        .unit_by_name("Hero")
+        .unwrap()
+        .weapons
+        .last()
+        .cloned()
+        .unwrap();
+    let hero = first_player_uid(app);
+    let atk_idx = app.database().idx_by_uid(&hero).unwrap();
+    let def_idx = app.database().idx_by_uid(foe).unwrap();
+    let expected = app.forecast_strike(atk_idx, def_idx, &weapon).unwrap();
+    app.try_find_support_guard(atk_idx, def_idx, &weapon, &expected, true)
+        .map(|i| app.database().unit_instances[i].uid.clone())
+}
+
+/// チーム (`チーム=名前`): チームを持つガード役は同じチームの味方だけをかばう。
+/// チームを持たないガード役は誰でもかばう (`その他の特殊能力(パイロット).md`)。
+#[test]
+fn support_guard_respects_team() {
+    let team = |t: &'static str| {
+        move |p: &mut crate::data::pilot::PilotData| p.features.push(("チーム".into(), t.into()))
+    };
+    let (mut app, foe, guard) = setup_support_guard(0, false, None);
+    give_pilot(&mut app, &guard, "TeamA", team("A"));
+    assert_eq!(
+        support_guard_for(&app, &foe),
+        None,
+        "チーム外 (チーム無し) をかばった"
+    );
+    give_pilot(&mut app, &foe, "TeamB", team("B"));
+    assert_eq!(support_guard_for(&app, &foe), None, "別チームをかばった");
+    give_pilot(&mut app, &foe, "TeamA2", team("A"));
+    assert_eq!(
+        support_guard_for(&app, &foe),
+        Some(guard.clone()),
+        "同じチームをかばわない"
+    );
+
+    let (mut app, foe, guard) = setup_support_guard(0, false, None);
+    give_pilot(&mut app, &foe, "TeamB", team("B"));
+    assert_eq!(
+        support_guard_for(&app, &foe),
+        Some(guard),
+        "チーム無しのガード役がかばわない"
+    );
+}
+
+/// 機械 (性格) をかばうのは機械だけ。
+#[test]
+fn support_guard_machine_only_guarded_by_machine() {
+    let machine = |p: &mut crate::data::pilot::PilotData| p.personality = Some("機械".into());
+    let (mut app, foe, guard) = setup_support_guard(0, false, None);
+    give_pilot(&mut app, &foe, "Drone", machine);
+    assert_eq!(
+        support_guard_for(&app, &foe),
+        None,
+        "機械でないユニットが機械をかばった"
+    );
+    give_pilot(&mut app, &guard, "Drone2", machine);
+    assert_eq!(
+        support_guard_for(&app, &foe),
+        Some(guard),
+        "機械が機械をかばわない"
+    );
+}
+
+/// 防御側の領域 (空中) に入れないガード役はかばわない。
+#[test]
+fn support_guard_requires_entering_defender_area() {
+    let (mut app, foe, guard) = setup_support_guard(0, false, None);
+    app.database_mut()
+        .unit_by_uid_mut(&foe)
+        .unwrap()
+        .current_area = "空中".into();
+    app.database_mut()
+        .unit_by_uid_mut(&guard)
+        .unwrap()
+        .current_area = "地上".into();
+    for u in app
+        .database_mut()
+        .catalog
+        .units
+        .iter_mut()
+        .filter(|u| u.name == "Wall")
+    {
+        u.transportation = "陸".into();
+    }
+    assert_eq!(
+        support_guard_for(&app, &foe),
+        None,
+        "飛べないユニットが空中の味方をかばった"
+    );
+    for u in app
+        .database_mut()
+        .catalog
+        .units
+        .iter_mut()
+        .filter(|u| u.name == "Wall")
+    {
+        u.transportation = "空陸".into();
+    }
+    assert_eq!(
+        support_guard_for(&app, &foe),
+        Some(guard),
+        "飛べるユニットがかばわない"
+    );
+}
+
+/// ガード役が撃破される見込みならかばわない (ボスが格下に守られる場合は例外)。
+/// マップ兵器はかばえない。
+#[test]
+fn support_guard_declines_when_it_would_fall_or_map_weapon() {
+    let (mut app, foe, guard) = setup_support_guard(0, false, None);
+    let hp = app.database().unit_by_name("Wall").unwrap().hp;
+    app.database_mut().unit_by_uid_mut(&guard).unwrap().damage = hp - 1;
+    assert_eq!(
+        support_guard_for(&app, &foe),
+        None,
+        "撃破される見込みでかばった"
+    );
+    app.database_mut().unit_by_uid_mut(&foe).unwrap().boss_rank = 1;
+    assert_eq!(
+        support_guard_for(&app, &foe),
+        Some(guard.clone()),
+        "格上のボスを守る格下は撃破されてもかばう"
+    );
+
+    let (mut app, foe, _) = setup_support_guard(0, false, None);
+    for u in app
+        .database_mut()
+        .catalog
+        .units
+        .iter_mut()
+        .filter(|u| u.name == "Hero")
+    {
+        u.weapons.last_mut().unwrap().class = "Ｍ全".into();
+    }
+    assert_eq!(support_guard_for(&app, &foe), None, "マップ兵器をかばった");
 }

@@ -336,10 +336,12 @@ impl App {
                 None
             } else {
                 match def_mode {
-                    "援護防御" => self.try_find_support_guard(def_idx, expected.damage),
+                    "援護防御" => {
+                        self.try_find_support_guard(atk_idx, def_idx, &weapon, &expected, true)
+                    }
                     "反撃" | "回避" | "防御" => None,
                     _ if self.turn.phase != crate::turn::Phase::Player => {
-                        self.try_find_support_guard(def_idx, expected.damage)
+                        self.try_find_support_guard(atk_idx, def_idx, &weapon, &expected, false)
                     }
                     _ => None,
                 }
@@ -1898,119 +1900,156 @@ impl App {
         dx + dy == 1
     }
 
-    /// 援護防御ユニット検索: `def_idx` のユニットが `expected_damage` のダメージを
-    /// 受けようとしている際、代わりにダメージを受けてくれる隣接ユニットを探す。
+    /// 援護防御ユニット検索 (原典 `Unit.LookForSupportGuard`): `atk_idx` の `weapon` による
+    /// 攻撃 (防御側への予測 `expected`) を、`def_idx` の代わりに受けてくれる隣接ユニットを
+    /// 探す。`always` (手動の反撃選択で援護防御を選んだ) ならダメージが小さくてもかばう。
     ///
-    /// SRC `Unit.cs::LookForSupportGuard` に準拠。
-    /// 戻り値: 援護防御を行うユニットのインデックス / 該当なしなら `None`。
+    /// 候補の条件は `support_guard_candidate`。そのうえで、ガード役が受けるダメージ
+    /// (防御扱いで半分、`防御不可` / 殺 属性なら等倍、特殊効果の無い武器は最悪のクリティカル
+    /// を見込んで 1.5 倍) で撃破されるならかばわない (ボスは自分より格下を守るときだけ例外)。
+    /// 格上のボスは、ダメージが大きければ格下をかばわない。HP の高いユニットを優先する。
     pub(super) fn try_find_support_guard(
         &self,
+        atk_idx: usize,
         def_idx: usize,
-        expected_damage: i64,
+        weapon: &crate::data::unit::WeaponData,
+        expected: &combat::CombatPreview,
+        always: bool,
     ) -> Option<usize> {
-        let def_inst = &self.database.unit_instances[def_idx];
-        let def_pos = (def_inst.x, def_inst.y);
-        let def_party = def_inst.party;
-        // 最大 HP は改造・アイテム・BossRank 込みの実効値 (戦闘本体と同じ基準)。
-        self.database.unit_by_name(&def_inst.unit_data_name)?;
-        let def_max_hp = self.database.effective_max_hp(def_inst);
-        let def_current_hp = def_max_hp - def_inst.damage;
-
-        // ダメージが最小閾値 (MaxHP の 5% or 現 HP の 20%) を下回る場合は発動しない。
-        // (SRC: `my_dmg < MaxHP / 20 & my_dmg < HP / 5` → 両方以下なら skip)
-        if expected_damage < def_max_hp / 20 && expected_damage < def_current_hp / 5 {
+        // マップ攻撃はかばえない。攻撃側の精神コマンドで無効化されていればかばえない。
+        if combat::is_map_weapon(weapon)
+            || self.unit_under_spirit_effect(atk_idx, "サポートガード無効化")
+        {
             return None;
+        }
+        let atk = &self.database.unit_instances[atk_idx];
+        let def = &self.database.unit_instances[def_idx];
+        // 同士討ちのときは本来の陣営のユニットだけを守る (魅了中・暴走中はかばわない)。
+        if (def.party == atk.party
+            || (def.party == crate::Party::Npc && atk.party == crate::Party::Player))
+            && (def.charm_revert_party.is_some() || def.has_condition("暴走"))
+        {
+            return None;
+        }
+        // かばう必要がない？ 手動反撃で援護防御を選んだときはダメージにかかわらずかばう。
+        let normal = combat::is_normal_weapon(&weapon.class);
+        if !always {
+            let def_max_hp = self.database.effective_max_hp(def);
+            let def_hp = def_max_hp - def.damage;
+            let needless = if normal {
+                expected.damage < def_max_hp / 20 && expected.damage < def_hp / 5
+            } else {
+                expected.critical_chance > 0
+            };
+            if needless {
+                return None;
+            }
         }
 
         let mut best: Option<(usize, i64)> = None; // (index, current_hp)
-        for (i, u) in self.database.unit_instances.iter().enumerate() {
-            if i == def_idx {
+        for i in 0..self.database.unit_instances.len() {
+            if !self.support_guard_candidate(def_idx, i) {
                 continue;
             }
-            // 援護できるのは同盟陣営 (同陣営 + 味方↔ＮＰＣ)。
-            if !u.party.is_ally_of(def_party) {
+            let u = &self.database.unit_instances[i];
+            let guard_max_hp = self.database.effective_max_hp(u);
+            let guard_hp = guard_max_hp - u.damage;
+            // HP が高いほうを優先
+            if best.is_some_and(|(_, best_hp)| best_hp >= guard_hp) {
                 continue;
             }
-            // 隣接していること
-            if !Self::is_adjacent((u.x, u.y), def_pos) {
+            // ガード役が受けるダメージの見込み。
+            let full = crate::feature::has_feature(&u.active_features, "防御不可")
+                || weapon.class.contains('殺');
+            let raw = self
+                .forecast_strike_as(atk_idx, i, weapon, StrikeKind::Main)
+                .map_or(0, |p| p.damage);
+            let dmg = match (full, normal) {
+                (true, true) => raw * 3 / 2,
+                (true, false) => raw,
+                (false, true) => raw * 3 / 4,
+                (false, false) => raw / 2,
+            };
+            // ボスはザコを見殺しにする (被るダメージが少なければ別)。
+            if u.boss_rank > def.boss_rank && (dmg >= guard_max_hp / 20 || dmg >= guard_hp / 5) {
                 continue;
             }
-            // 援護防御能力を持つこと ("サポートガード"/"援護防御"/"援護" のいずれか)
-            let has_guard_ability = u.conditions.iter().any(|c| {
-                c.name.contains("サポートガード") || c.name.contains("援護防御") || c.name == "援護"
-            }) || u.active_features.iter().any(|f| {
-                f.is_active
-                    && (f.name.contains("サポートガード")
-                        || f.name.contains("援護防御")
-                        || f.name == "援護")
-            });
-            if !has_guard_ability {
+            // 自分が倒されてしまうならかばわない (ボスが格上を守るときは例外)。
+            if dmg >= guard_hp && u.boss_rank >= def.boss_rank {
                 continue;
             }
-            // 援護防御回数が残っていること
-            if u.support_guard_remaining <= 0 {
-                continue;
-            }
-            // 混乱/暴走/恐怖/狂戦士状態でないこと
-            if u.has_condition("混乱")
-                || u.has_condition("暴走")
-                || u.has_condition("恐怖")
-                || u.has_condition("狂戦士")
-            {
-                continue;
-            }
-            // 代わりに受けても撃破されないこと (50% ダメージで HP が残る)
-            if self.database.unit_by_name(&u.unit_data_name).is_none() {
-                continue;
-            }
-            let guard_current_hp = self.database.effective_max_hp(u) - u.damage;
-            let guard_dmg = expected_damage / 2; // 防御扱い = 50%
-            if guard_dmg >= guard_current_hp {
-                // 倒れてしまうのでかばわない
-                continue;
-            }
-            // HP が最も高いユニットを優先
-            if let Some((_, best_hp)) = best {
-                if guard_current_hp <= best_hp {
-                    continue;
-                }
-            }
-            best = Some((i, guard_current_hp));
+            best = Some((i, guard_hp));
         }
         best.map(|(i, _)| i)
     }
 
-    /// 反撃メニューに「援護防御」選択肢を出すべきか (read-only)。`def_uid` の隣接に
-    /// 援護防御可能な同盟ユニット (能力あり・残回数 > 0・混乱/暴走/恐怖/狂戦士でない) が
-    /// いれば真。ダメージ依存の閾値/生存判定は解決時 (`try_find_support_guard`) に委ねる
-    /// ため、ここでは省く (選んでも条件を満たさなければ不発になるだけ)。
-    pub(super) fn support_guard_available(&self, def_uid: &str) -> bool {
-        let Some(def) = self.database.unit_by_uid(def_uid) else {
+    /// `i` のユニットが `def_idx` を援護防御できるか (ダメージに依らない条件。原典
+    /// `LookForSupportGuard`): 隣接する盤上の同盟ユニットで、援護防御能力と残回数があり、
+    /// 行動可能で、`サポートガード不能` の精神コマンド下になく、混乱/暴走/恐怖/狂戦士でない。
+    /// チーム (`チーム=名前`) が違えばかばわない (チームを持たないユニットは誰でもかばう)。
+    /// 防御側の領域 (空中/地上/水中/宇宙) に入れないならかばわない。機械は機械だけがかばう。
+    fn support_guard_candidate(&self, def_idx: usize, i: usize) -> bool {
+        let def = &self.database.unit_instances[def_idx];
+        let u = &self.database.unit_instances[i];
+        if i == def_idx
+            || u.off_map
+            || !u.party.is_ally_of(def.party)
+            || !Self::is_adjacent((u.x, u.y), (def.x, def.y))
+            || u.support_guard_remaining <= 0
+            || !has_support_guard_ability(u)
+            || u.attack_disabled()
+            || self.unit_under_spirit_effect(i, "サポートガード不能")
+            || ["混乱", "暴走", "恐怖", "狂戦士"]
+                .iter()
+                .any(|c| u.has_condition(c))
+        {
+            return false;
+        }
+        let Some(ud) = self.database.unit_by_name(&u.unit_data_name) else {
             return false;
         };
-        let def_pos = (def.x, def.y);
-        let def_party = def.party;
-        self.database.unit_instances.iter().any(|u| {
-            u.uid != def_uid
-                && u.party.is_ally_of(def_party)
-                && !u.off_map
-                && Self::is_adjacent((u.x, u.y), def_pos)
-                && u.support_guard_remaining > 0
-                && (u.conditions.iter().any(|c| {
-                    c.name.contains("サポートガード")
-                        || c.name.contains("援護防御")
-                        || c.name == "援護"
-                }) || u.active_features.iter().any(|f| {
-                    f.is_active
-                        && (f.name.contains("サポートガード")
-                            || f.name.contains("援護防御")
-                            || f.name == "援護")
-                }))
-                && !u.has_condition("混乱")
-                && !u.has_condition("暴走")
-                && !u.has_condition("恐怖")
-                && !u.has_condition("狂戦士")
-        })
+        let guard_team = self.main_pilot_team(i);
+        if !guard_team.is_empty() && guard_team != self.main_pilot_team(def_idx) {
+            return false;
+        }
+        let def_area = self.database.unit_area(def);
+        if def_area != self.database.unit_area(u) {
+            let adaption = ud.adaption.0;
+            let ok = match def_area.as_str() {
+                "空中" => {
+                    ud.transportation.contains('空')
+                        || u.active_features.iter().any(|f| f.name == "空中移動")
+                }
+                "地上" => adaption[1] != b'-',
+                "水中" | "水上" => adaption[2] != b'-',
+                "宇宙" => adaption[3] != b'-',
+                _ => true,
+            };
+            if !ok {
+                return false;
+            }
+        }
+        !self.main_pilot_is_mecha(def_idx) || self.main_pilot_is_mecha(i)
+    }
+
+    /// 主パイロットのチーム (パイロット用特殊能力 `チーム=名前`、無ければ空文字)。
+    fn main_pilot_team(&self, idx: usize) -> String {
+        self.database
+            .pilot_by_name(&self.database.unit_instances[idx].pilot_name)
+            .and_then(|p| p.features.iter().find(|(n, _)| n == "チーム"))
+            .map(|(_, v)| v.split(',').next().unwrap_or("").trim().to_string())
+            .unwrap_or_default()
+    }
+
+    /// 反撃メニューに「援護防御」選択肢を出すべきか (read-only)。`def_uid` を援護防御できる
+    /// ユニット (`support_guard_candidate`) がいれば真。ダメージ依存の生存判定は解決時
+    /// (`try_find_support_guard`) に委ねるため、ここでは省く (選んでも条件を満たさなければ
+    /// 不発になるだけ)。
+    pub(super) fn support_guard_available(&self, def_uid: &str) -> bool {
+        let Some(def_idx) = self.database.idx_by_uid(def_uid) else {
+            return false;
+        };
+        (0..self.database.unit_instances.len()).any(|i| self.support_guard_candidate(def_idx, i))
     }
 
     /// 撃破時に自動発火するラベルを試行。最初に見つかったものを 1 つだけ投函。
@@ -2340,4 +2379,13 @@ impl App {
                     .is_some_and(|d| d.weapons.iter().any(|w| w.class.contains('Ｍ')))
         })
     }
+}
+
+/// 援護防御能力 (状態 / 特殊能力の `サポートガード` / `援護防御` / `援護`) を持つか。
+fn has_support_guard_ability(u: &crate::UnitInstance) -> bool {
+    let is_guard = |n: &str| n.contains("サポートガード") || n.contains("援護防御") || n == "援護";
+    u.conditions.iter().any(|c| is_guard(&c.name))
+        || u.active_features
+            .iter()
+            .any(|f| f.is_active && is_guard(&f.name))
 }
