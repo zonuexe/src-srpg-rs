@@ -385,8 +385,15 @@ impl App {
                 // 援護防御: ガード役を攻撃対象としてダメージを計算し直し、防御扱いで受ける
                 // (切り払いは `resolve_strike` がガード役に対して判定済み)。
                 self.database.unit_instances[g_idx].support_guard_remaining -= 1;
-                let cover =
-                    self.strike_cover(g_idx, atk_idx, &weapon, StrikeKind::Main, critical, parried);
+                let cover = self.strike_cover(
+                    g_idx,
+                    def_idx,
+                    atk_idx,
+                    &weapon,
+                    StrikeKind::Main,
+                    critical,
+                    parried,
+                );
                 let (g, d) = (cover.nick, &def_pilot.nickname);
                 match cover.outcome {
                     CoverOutcome::Parried => format!("援護防御: {g} が {d} をかばった"),
@@ -752,10 +759,7 @@ impl App {
                 self.database.unit_instances[atk_idx].x,
                 self.database.unit_instances[atk_idx].y,
             ),
-            (
-                self.database.unit_instances[def_idx].x,
-                self.database.unit_instances[def_idx].y,
-            ),
+            (def_inst.x, def_inst.y),
         );
         let mut preview = preview.apply_scatter(&weapon.class, atk_def_dist);
         if kind == StrikeKind::Support
@@ -776,21 +780,31 @@ impl App {
         def_idx: usize,
         weapon: &crate::data::unit::WeaponData,
     ) -> Option<combat::CombatPreview> {
-        self.forecast_strike_as(atk_idx, def_idx, weapon, StrikeKind::Main)
+        self.forecast_strike_as(atk_idx, def_idx, weapon, StrikeKind::Main, None)
     }
 
     /// `forecast_strike` の攻撃種別つき版 (援護攻撃・反撃の補正を反映する)。
+    /// `in_place_of` を渡すと、`def_idx` をそのユニットの位置・領域に置いたものとして
+    /// 計算する (原典 `LookForSupportGuard` / `Unit.Attack` はかばうユニットを守られる側の
+    /// 位置へ動かしてからダメージを求めるので、地形補正は守られる側のマスのものになる)。
     fn forecast_strike_as(
         &self,
         atk_idx: usize,
         def_idx: usize,
         weapon: &crate::data::unit::WeaponData,
         kind: StrikeKind,
+        in_place_of: Option<usize>,
     ) -> Option<combat::CombatPreview> {
         let (atk_pilot, atk_unit) = self.database.effective_combat_data(atk_idx)?;
         let (def_pilot, mut def_unit) = self.database.effective_combat_data(def_idx)?;
         self.apply_defense_armor_mod(def_idx, &weapon.class, &mut def_unit);
-        let def_inst = self.database.unit_instances[def_idx].clone();
+        let mut def_inst = self.database.unit_instances[def_idx].clone();
+        if let Some(t) = in_place_of {
+            let target = &self.database.unit_instances[t];
+            def_inst.current_area = self.database.unit_area(target);
+            def_inst.x = target.x;
+            def_inst.y = target.y;
+        }
         let terrain_id = self
             .database
             .map
@@ -1244,7 +1258,7 @@ impl App {
             .conditions
             .retain(|c| c.name != "みがわり");
         Some(
-            self.strike_cover(sub_idx, atk_idx, weapon, kind, critical, parried)
+            self.strike_cover(sub_idx, def_idx, atk_idx, weapon, kind, critical, parried)
                 .nick,
         )
     }
@@ -1256,9 +1270,11 @@ impl App {
     /// (復活が無ければ) 撃破・破壊イベント発火・勝敗判定まで、生き残れば損傷率イベントまで
     /// 処理する。`su` が切り払った (`parried`、判定は `resolve_strike` が `su` に対して
     /// 行う) ならダメージは無い。
+    #[allow(clippy::too_many_arguments)]
     fn strike_cover(
         &mut self,
         sub_idx: usize,
+        def_idx: usize,
         atk_idx: usize,
         weapon: &crate::data::unit::WeaponData,
         kind: StrikeKind,
@@ -1273,9 +1289,9 @@ impl App {
                 outcome: CoverOutcome::Parried,
             };
         }
-        // 身代わりを対象にダメージを計算し直す。
+        // 身代わりを守られる側 (`def_idx`) の位置に置いてダメージを計算し直す。
         let dmg = self
-            .forecast_strike_as(atk_idx, sub_idx, weapon, kind)
+            .forecast_strike_as(atk_idx, sub_idx, weapon, kind, Some(def_idx))
             .map_or(0, |p| p.damage);
         let dmg = if critical { dmg * 3 / 2 } else { dmg }.max(0);
         let dmg = if self.defense_halves_damage(sub_idx, &weapon.class) {
@@ -1962,7 +1978,7 @@ impl App {
             let full = crate::feature::has_feature(&u.active_features, "防御不可")
                 || weapon.class.contains('殺');
             let raw = self
-                .forecast_strike_as(atk_idx, i, weapon, StrikeKind::Main)
+                .forecast_strike_as(atk_idx, i, weapon, StrikeKind::Main, Some(def_idx))
                 .map_or(0, |p| p.damage);
             let dmg = match (full, normal) {
                 (true, true) => raw * 3 / 2,
