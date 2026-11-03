@@ -22,6 +22,7 @@ pub enum DataKind {
     SpecialPower,
     Terrain,
     Animation,
+    Message,
     Map,
 }
 
@@ -36,6 +37,7 @@ impl DataKind {
             "sp.txt" | "mind.txt" => Self::SpecialPower,
             "terrain.txt" => Self::Terrain,
             "animation.txt" | "ext_animation.txt" => Self::Animation,
+            "pilot_message.txt" => Self::Message,
             n if n.ends_with(".map") => Self::Map,
             _ => return None,
         })
@@ -51,6 +53,7 @@ impl DataKind {
             Self::SpecialPower => "special_power",
             Self::Terrain => "terrain",
             Self::Animation => "戦闘アニメデータ",
+            Self::Message => "メッセージデータ",
             Self::Map => "map",
         }
     }
@@ -60,7 +63,7 @@ impl DataKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataIngest {
     pub kind: DataKind,
-    /// 取り込んだレコード数 (戦闘アニメは取り込み後の対象数、マップは 1)。
+    /// 取り込んだレコード数 (戦闘アニメ・メッセージは取り込み後の対象数、マップは 1)。
     pub count: usize,
     /// 読み飛ばしたレコードのエラー (レコード単位で寛容に解析する)。
     pub errors: Vec<String>,
@@ -134,6 +137,10 @@ pub fn ingest_data_file(app: &mut App, name: &str, text: &str) -> Option<DataIng
         DataKind::Animation => {
             db.merge_animation_data(text);
             (db.catalog.animation.entries.len(), Vec::new())
+        }
+        DataKind::Message => {
+            db.catalog.messages.merge_from_str(text);
+            (db.catalog.messages.entries.len(), Vec::new())
         }
         DataKind::Map => match mapdata::parse(text) {
             // `ChangeMap` で参照されるので basename で保存する。
