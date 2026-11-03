@@ -7,6 +7,7 @@
 //!
 //! クリック当たり判定は [`weapon_select_choice_at`] と描画ジオメトリを
 //! 共有する。選択 (1-based) → `rows[choice-1]` の武器 (使用不可行は選べない)。
+//! 援護攻撃の切り替え行があれば、その選択番号は `rows.len() + 1`。
 
 /// 武器選択ウィンドウ 1 件分の表示データ。`GameDatabase` 参照は持たない純データ。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,6 +20,9 @@ pub struct WeaponSelectWindowData {
     pub rows: Vec<WeaponSelectRow>,
     /// 反撃武器選択 (反撃手段「反撃」選択後) なら true。タイトル表示の切替に使う。
     pub is_counter: bool,
+    /// 武器行の次に出す「援護攻撃：使用する/しない」切り替え行 (原典 `WeaponListBox`)。
+    /// `Some(使用するか)` のときだけ表示し、選択番号は武器数 + 1。
+    pub support_attack: Option<bool>,
 }
 
 /// 武器選択ウィンドウの 1 行 (1 武器)。
@@ -103,6 +107,7 @@ impl crate::App {
             defender: pws.target,
             rows,
             is_counter: pws.is_counter(),
+            support_attack: pws.use_support_attack,
         })
     }
 }

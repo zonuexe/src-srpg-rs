@@ -328,12 +328,14 @@ impl App {
             }
         }
 
-        // 援護攻撃役は本線攻撃の前に決める (原典 `LookForSupportAttack`)。合体技では
-        // 援護攻撃しない。踊らされているユニットの攻撃も援護しない。
+        // 援護攻撃役は本線攻撃の前に決める (原典 `LookForSupportAttack`)。武器選択で
+        // 「援護攻撃：使用しない」を選んだときと合体技では援護攻撃しない。踊らされている
+        // ユニットの攻撃も援護しない。
         let supporter_uid = (!is_reattack
+            && !self.support_attack_declined
             && !weapon.class.contains('合')
             && !self.database.unit_instances[atk_idx].has_condition("踊り"))
-        .then(|| self.look_for_support_attack(atk_idx, def_idx))
+        .then(|| self.look_for_support_attack(atk_idx, Some(def_idx)))
         .flatten()
         .map(|i| self.database.unit_instances[i].uid.clone());
 
@@ -1903,11 +1905,16 @@ impl App {
     /// 攻撃側と同じ陣営 (ＮＰＣ は味方の攻撃も援護する) で、チーム (`チーム=名前`) を
     /// 持つなら攻撃側と同じチームであること。援護に使える武器の攻撃力が最も高い
     /// ユニットを選ぶ。攻撃側が混乱しているか、同じ陣営どうしの攻撃なら援護しない。
-    pub(super) fn look_for_support_attack(&self, atk_idx: usize, def_idx: usize) -> Option<usize> {
+    /// `def_idx` が `None` (目標が未定) なら武器を見ずに最初の候補を返す。
+    pub(super) fn look_for_support_attack(
+        &self,
+        atk_idx: usize,
+        def_idx: Option<usize>,
+    ) -> Option<usize> {
         use crate::Party;
         let units = &self.database.unit_instances;
-        let (atk, def) = (&units[atk_idx], &units[def_idx]);
-        if atk.has_condition("混乱") || atk.party == def.party {
+        let atk = &units[atk_idx];
+        if atk.has_condition("混乱") || def_idx.is_some_and(|d| units[d].party == atk.party) {
             return None;
         }
         let team = self.main_pilot_team(atk_idx);
@@ -1946,6 +1953,9 @@ impl App {
             if !uteam.is_empty() && uteam != team {
                 continue;
             }
+            let Some(def_idx) = def_idx else {
+                return Some(i);
+            };
             let Some(w) = self.support_attack_weapon(i, def_idx) else {
                 continue;
             };

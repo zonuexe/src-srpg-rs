@@ -1752,7 +1752,7 @@ fn support_attack_at(app: &mut App, atk_idx: usize, x: u32, y: u32) -> Option<St
         .database()
         .uid_at(x, y)
         .and_then(|uid| app.database().idx_by_uid(uid))?;
-    let sup_idx = app.look_for_support_attack(atk_idx, def_idx)?;
+    let sup_idx = app.look_for_support_attack(atk_idx, Some(def_idx))?;
     app.try_support_attack(atk_idx, sup_idx, def_idx, "")
 }
 
@@ -3020,7 +3020,7 @@ fn support_attacker_chosen_by_original_rules() {
     let pick = |app: &App| {
         let db = app.database();
         let (a, d) = (db.idx_by_uid(&hero).unwrap(), db.idx_by_uid(&foe).unwrap());
-        app.look_for_support_attack(a, d)
+        app.look_for_support_attack(a, Some(d))
             .map(|i| db.unit_instances[i].unit_data_name.clone())
     };
     assert_eq!(pick(&app).as_deref(), Some("Strong"));
@@ -3157,6 +3157,60 @@ fn support_attack_kill_rewards_main_attacker() {
         gain(&hero, hero_morale),
         gain(&sup, sup_morale)
     );
+}
+
+/// 武器選択の最後に「援護攻撃：使用する」の切り替え行が出て (援護攻撃してくれるユニットが
+/// 隣にいるときだけ。原典 `WeaponListBox`)、選ぶたびに使用する/しないが入れ替わる。
+/// 「使用しない」にして攻撃すると援護攻撃しない。
+#[test]
+fn weapon_select_offers_support_attack_toggle() {
+    let last_option = |app: &App| match &app.pending_dialog {
+        Some(crate::dialog::PendingDialog::Menu { options, .. }) => options.last().cloned(),
+        _ => None,
+    };
+    let toggle = |app: &App| app.weapon_select_window_data().unwrap().support_attack;
+    let (mut app, hero, sup, _) = setup_support_attack(1_000_000, 1_000_000, 0);
+    app.begin_weapon_select(hero, (6, 6), false);
+    assert_eq!(last_option(&app).as_deref(), Some("援護攻撃：使用する"));
+    assert_eq!(toggle(&app), Some(true));
+    // Hero の武器は 1 つなので、切り替え行は 2 番。
+    assert!(app.respond_dialog(2));
+    assert_eq!(last_option(&app).as_deref(), Some("援護攻撃：使用しない"));
+    assert_eq!(toggle(&app), Some(false));
+    assert!(app.respond_dialog(1));
+    assert!(
+        app.pending_weapon_select.is_none(),
+        "武器を選んでも攻撃していない"
+    );
+    assert!(
+        app.messages().iter().any(|m| m.contains("テスト砲")),
+        "攻撃していない: {:?}",
+        app.messages()
+    );
+    assert!(
+        !app.messages()
+            .iter()
+            .any(|m| m.contains("サポートアタック")),
+        "「使用しない」なのに援護攻撃した"
+    );
+    assert_eq!(
+        app.database()
+            .unit_by_uid(&sup)
+            .unwrap()
+            .used_support_attack,
+        0
+    );
+
+    // 援護攻撃してくれるユニットがいなければ切り替え行は出ない。
+    let (mut app, hero, sup, _) = setup_support_attack(1_000_000, 1_000_000, 0);
+    app.database_mut()
+        .unit_by_uid_mut(&sup)
+        .unwrap()
+        .conditions
+        .retain(|c| c.name != "援護攻撃");
+    app.begin_weapon_select(hero, (6, 6), false);
+    assert_eq!(last_option(&app).as_deref(), Some("テスト砲"));
+    assert_eq!(toggle(&app), None);
 }
 
 /// 援護攻撃 (原典 `Attack w2, target, "援護攻撃", def_mode`) も `Unit.Attack` を通るので、
