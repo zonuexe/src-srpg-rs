@@ -244,6 +244,23 @@ impl App {
                 }
                 true
             }
+            ActionMode::MapAbilitySelect {
+                caster,
+                ability_idx,
+                point,
+            } => {
+                // 仮決めした目標地点があれば取り消すだけ。無ければユニットメニューへ戻る。
+                if point.is_some() {
+                    self.action_mode = ActionMode::MapAbilitySelect {
+                        caster,
+                        ability_idx,
+                        point: None,
+                    };
+                } else {
+                    self.return_to_unit_menu(&caster, None);
+                }
+                true
+            }
             ActionMode::AbilityTarget { caster, .. } => {
                 // アビリティ対象選択キャンセル: 効果なし。発動主体のメニューへ戻る。
                 self.action_mode = ActionMode::Browse;
@@ -757,8 +774,8 @@ impl App {
                 }
                 true
             }
-            ActionMode::MapAttackSelect { .. } => {
-                self.click_map_attack_target(target);
+            ActionMode::MapAttackSelect { .. } | ActionMode::MapAbilitySelect { .. } => {
+                self.click_map_target(target);
                 true
             }
             ActionMode::SpiritTarget {

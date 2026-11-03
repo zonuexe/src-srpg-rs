@@ -232,6 +232,14 @@ pub enum ActionMode {
         point: Option<(u32, u32)>,
         snapshot: Option<MoveSnapshot>,
     },
+    /// マップアビリティ (`Ｍ全` 以外) の目標地点選択中。`caster` が使用者、`ability_idx` は
+    /// `UnitData.abilities` のインデックス。`point` は仮決めした目標地点 (マップ攻撃と同じく
+    /// もう一度選ぶと使用)。
+    MapAbilitySelect {
+        caster: String,
+        ability_idx: usize,
+        point: Option<(u32, u32)>,
+    },
     /// 発進/分離ユニットの**着地点選択中** (原典: 移動範囲から対話選択)。
     /// `uid` が配置するユニット、`candidates` が着地可能なマス (移動範囲内の空きマス)、
     /// `carrier` は母艦の uid (発進の場合。配置後にメニュー再表示・None なら分離)。

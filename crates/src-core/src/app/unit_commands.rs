@@ -438,11 +438,14 @@ impl App {
             self.reopen_unit_menu_for(&pa.uid);
             return true;
         };
-        if ab.is_map_type() {
-            // マップ型 (Ｍ全/Ｍ投/…): 座標選択を省略し射程内の全有効対象へ即適用。
+        if ab.is_map_all() {
+            // Ｍ全: 目標地点を選ばず、使用者の周りに即適用。
             let caster = pa.uid.clone();
             self.apply_ability(&caster, ability_idx, &caster);
             self.finish_ability(&caster);
+        } else if ab.is_map_type() {
+            // Ｍ投 / Ｍ直 等: マップ攻撃と同じく目標地点を選ぶ。
+            self.begin_map_ability_target(&pa.uid, ability_idx);
         } else if ab.is_self_only() {
             // 射程0: 自分に即適用 (召喚も射程0)。
             let caster = pa.uid.clone();
@@ -560,6 +563,51 @@ impl App {
         let Some(ab) = self.ability_at(caster, ability_idx) else {
             return false;
         };
+        if ab.is_map_type() {
+            // マップ型: 対象ユニットの位置を目標地点にする (AI / `UseAbility`)。
+            let point = self
+                .database
+                .unit_by_uid(target)
+                .or_else(|| self.database.unit_by_uid(caster))
+                .map(|u| (u.x, u.y));
+            return point.is_some_and(|p| self.execute_ability_at(caster, ability_idx, p));
+        }
+        self.consume_ability(caster, ability_idx, &ab);
+        self.apply_ability_effects(caster, target, &ab.effect);
+        self.apply_ability_attributes(target, &ab);
+        let tnick = self
+            .database
+            .unit_by_uid(target)
+            .map(|u| u.pilot_name.clone())
+            .unwrap_or_default();
+        self.push_message(format!("アビリティ【{}】→ {tnick}", ab.display_name()));
+        true
+    }
+
+    /// マップアビリティを目標地点 `point` (内部座標) に使う (原典 `ExecuteMapAbility`)。
+    /// 回数 / EN を消費し、効果範囲内の有効な対象へ効果と属性を適用する。行動消費・
+    /// 経験値・使用イベントは扱わない。アビリティが無ければ `false`。
+    pub(crate) fn execute_ability_at(
+        &mut self,
+        caster: &str,
+        ability_idx: usize,
+        point: (u32, u32),
+    ) -> bool {
+        let Some(ab) = self.ability_at(caster, ability_idx) else {
+            return false;
+        };
+        self.consume_ability(caster, ability_idx, &ab);
+        self.apply_ability_area(caster, &ab, point);
+        true
+    }
+
+    /// アビリティの回数 (有限のみ) と EN を消費する。
+    fn consume_ability(
+        &mut self,
+        caster: &str,
+        ability_idx: usize,
+        ab: &crate::data::unit::AbilityData,
+    ) {
         // 回数を消費 (有限のみ)。
         if let Some(ci) = self.database.idx_by_uid(caster) {
             if let Some(ua) = self.database.unit_instances[ci]
@@ -577,30 +625,30 @@ impl App {
                 u.en_consumed += en;
             }
         }
-        if ab.is_map_type() {
-            // マップ型: 射程内の全有効対象へ効果と属性を適用する。
-            self.apply_ability_area(caster, &ab);
-        } else {
-            self.apply_ability_effects(caster, target, &ab.effect);
-            self.apply_ability_attributes(target, &ab);
-            let tnick = self
-                .database
-                .unit_by_uid(target)
-                .map(|u| u.pilot_name.clone())
-                .unwrap_or_default();
-            self.push_message(format!("アビリティ【{}】→ {tnick}", ab.display_name()));
-        }
-        true
     }
 
-    /// マップ型アビリティの効果を、射程内 (`Ｍ全` は盤上全体) の全有効対象へ
-    /// 適用する。対象勢力は属性で決まる (脱/除=敵、それ以外=味方)。
-    pub(super) fn apply_ability_area(&mut self, caster: &str, ab: &crate::data::unit::AbilityData) {
+    /// マップ型アビリティの効果を、目標地点 `point` を狙った効果範囲 (原典 `Map.AreaIn*`、
+    /// `combat::map_area`) 内の全有効対象へ適用する。対象勢力は属性で決まる (脱/除=敵、
+    /// それ以外=味方)。目標地点は `X(目標地点)` 等で読める。
+    pub(super) fn apply_ability_area(
+        &mut self,
+        caster: &str,
+        ab: &crate::data::unit::AbilityData,
+        point: (u32, u32),
+    ) {
         let Some(c) = self.database.unit_by_uid(caster) else {
             return;
         };
         let (cx, cy, cparty) = (c.x, c.y, c.party);
-        let range = ab.range.max(0) as u32;
+        let area = combat::map_area(
+            &ab.attributes,
+            ab.min_range(),
+            ab.range,
+            (cx, cy),
+            point,
+            true,
+        );
+        self.selected_point = Some(point);
         let targets: Vec<String> = self
             .database
             .unit_instances
@@ -615,8 +663,7 @@ impl App {
             })
             // 援: 自分自身は対象外。
             .filter(|u| !(ab.attributes.contains('援') && u.uid == caster))
-            // Ｍ全 は射程・座標を無視。それ以外は発動者からの射程内。
-            .filter(|u| ab.is_map_all() || combat::manhattan((cx, cy), (u.x, u.y)) <= range)
+            .filter(|u| area.contains(&(u.x, u.y)))
             .map(|u| u.uid.clone())
             .collect();
         for t in &targets {
