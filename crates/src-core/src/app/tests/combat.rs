@@ -4846,3 +4846,77 @@ fn counter_attack_can_reattack() {
         "{msgs:?}"
     );
 }
+
+/// `setup_support_attack` の敵のパイロットを `FOE` (愛称 FOE) に替え、`pilot_message.txt`
+/// を取り込む。
+fn setup_pilot_messages(text: &str) -> (App, String, String, String) {
+    let (mut app, hero, sup, foe) = setup_support_attack(1_000_000, 1_000_000, 3000);
+    push_pilot_with_features(&mut app, "FOE", Vec::new());
+    app.database_mut().unit_by_uid_mut(&foe).unwrap().pilot_name = "FOE".into();
+    let ingest = crate::scenario::ingest_data_file(&mut app, "Data/pilot_message.txt", text)
+        .expect("pilot_message.txt はデータファイル");
+    assert_eq!(ingest.count, 2);
+    (app, hero, sup, foe)
+}
+
+/// パイロットの台詞 (`pilot_message.txt`) が原典 `Unit.Attack` の順に出る: 攻撃の台詞 →
+/// 目標の被弾の台詞 → 反撃の台詞 → 援護攻撃の台詞。
+#[test]
+fn pilot_messages_follow_battle_flow() {
+    let (mut app, ..) = setup_pilot_messages(
+        "PILOT\n攻撃, 撃つぞ！\nサポートアタック, 援護する！;続け:！\n\n\
+         FOE\nダメージ小, 効かんな！\n攻撃(反撃), 返すぞ！\n回避, 遅い！\n",
+    );
+    app.map_cursor = Some((5, 6));
+    assert!(app.attack_resolve_and_run(Some((6, 6)), false, ""));
+    let msgs = app.messages().to_vec();
+    let pos = |pat: &str| {
+        msgs.iter()
+            .position(|m| m == pat)
+            .unwrap_or_else(|| panic!("{pat} が無い: {msgs:?}"))
+    };
+    let attack = pos("P「撃つぞ！」");
+    let damaged = pos("FOE「効かんな！」");
+    let counter = pos("FOE「返すぞ！」");
+    let support = pos("P「援護する！」");
+    // `;` はページ送り、`:` は消える。
+    let support2 = pos("P「続け！」");
+    assert!(
+        attack < damaged && damaged < counter && counter < support && support < support2,
+        "{msgs:?}"
+    );
+    // 援護役の攻撃の台詞は援護の台詞の後。
+    assert!(
+        msgs[support2..].iter().any(|m| m == "P「撃つぞ！」"),
+        "{msgs:?}"
+    );
+    assert!(!msgs.iter().any(|m| m == "FOE「遅い！」"), "{msgs:?}");
+}
+
+/// 沈黙中のパイロットは台詞の代わりに「…………」と言い、麻痺していれば何も言わない。
+#[test]
+fn silenced_pilot_says_nothing_but_dots() {
+    let run = |condition: &str| {
+        let (mut app, hero, sup, _) =
+            setup_pilot_messages("PILOT\n攻撃, 撃つぞ！\n\nFOE\n回避, 遅い！\n");
+        // 援護役も同じパイロットなので援護攻撃させない。
+        app.database_mut()
+            .unit_by_uid_mut(&sup)
+            .unwrap()
+            .conditions
+            .retain(|c| c.name != "援護攻撃");
+        app.database_mut()
+            .unit_by_uid_mut(&hero)
+            .unwrap()
+            .add_condition(crate::Condition::new(condition, -1));
+        app.map_cursor = Some((5, 6));
+        app.attack_resolve_and_run(Some((6, 6)), false, "");
+        app.messages()
+            .iter()
+            .filter(|m| m.starts_with("P「"))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(run("沈黙")[0], "P「…………」");
+    assert!(!run("麻痺").iter().any(|m| m == "P「撃つぞ！」"));
+}
