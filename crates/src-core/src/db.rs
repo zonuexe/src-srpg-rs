@@ -77,6 +77,9 @@ pub struct Catalog {
     /// サブルーチン名の解決に使う。SRC `MessageDataList`(animation) 相当。
     #[serde(default)]
     pub animation: crate::data::animation::AnimationData,
+    /// メッセージデータ (`pilot_message.txt`)。戦闘中のパイロットの台詞。SRC `MDList`。
+    #[serde(default)]
+    pub messages: crate::data::message::MessageData,
 }
 
 /// ゲーム全体のデータ: 静的データ ([`Catalog`]) と、実行時の盤面 (マップ・ユニット実体・
@@ -135,6 +138,9 @@ impl GameDatabase {
                 terrains: Vec::new(),
                 maps: BTreeMap::new(),
                 animation: crate::data::animation::AnimationData {
+                    entries: BTreeMap::new(),
+                },
+                messages: crate::data::message::MessageData {
                     entries: BTreeMap::new(),
                 },
             },

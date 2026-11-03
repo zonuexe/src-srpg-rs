@@ -728,6 +728,7 @@ mod dialog;
 mod input;
 mod intermission;
 mod map_attack;
+mod pilot_message;
 mod reaction;
 mod script_flow;
 mod spirit;

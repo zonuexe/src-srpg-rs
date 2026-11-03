@@ -1,5 +1,6 @@
 //! プレイヤー/AI 共通の戦闘の進行 (本線攻撃・援護攻撃・援護防御・先制反撃・反撃)。
 
+use super::pilot_message::{MsgCtx, Opening, StrikeReport};
 use super::*;
 
 /// `resolve_strike` の入力。攻撃側 / 防御側の実効データ (育成・強化パーツ・状態込み) と
@@ -366,6 +367,19 @@ impl App {
         };
         // 原典 `Unit.Attack` はガード役を切り払いの判定より前に選び、攻撃対象をガード役に
         // 差し替える。選ぶのは予測 (乱数を使わない) で、使うのは命中したときだけ。
+        // 攻撃の前の台詞 (原典 `Unit.Attack` の攻撃メッセージ)。
+        let atk_snap = self.database.unit_instances[atk_idx].clone();
+        let atk_ctx = MsgCtx {
+            target: Some(&def_inst),
+            weapon: Some(&weapon),
+            ..Default::default()
+        };
+        let opening = if is_reattack {
+            Opening::Reattack
+        } else {
+            Opening::Normal
+        };
+        self.attack_opening_messages(&atk_snap, opening, &atk_ctx);
         let guard_idx = self.pick_support_guard(atk_idx, def_idx, &setup, StrikeKind::Main);
         let strike = self.resolve_strike(
             atk_idx,
@@ -384,6 +398,8 @@ impl App {
             damage: applied_damage,
         } = strike;
         let mut defender_killed = false;
+        // みがわり・援護防御で目標が攻撃を受けなかった。
+        let mut covered = false;
         let guard_idx = guard_idx.filter(|_| hit);
 
         let msg = if hit {
@@ -397,6 +413,7 @@ impl App {
             ) {
                 // みがわり (身代わり, 最優先・SRC Unit.cls:14855): 指定された身代わりユニットが
                 // 防御側のダメージを 1 回肩代わりする。防御側は無傷、condition は消費される。
+                covered = true;
                 format!(
                     "みがわり: {} が {} の身代わりになった！ [{}]",
                     sub, def_pilot.nickname, weapon.name
@@ -405,6 +422,9 @@ impl App {
                 // 援護防御: ガード役を攻撃対象としてダメージを計算し直し、防御扱いで受ける
                 // (切り払いは `resolve_strike` がガード役に対して判定済み)。
                 self.database.unit_instances[g_idx].used_support_guard += 1;
+                covered = true;
+                let guard = self.database.unit_instances[g_idx].clone();
+                self.support_guard_messages(&guard, &def_inst);
                 let cover = self.strike_cover(
                     g_idx,
                     def_idx,
@@ -580,6 +600,26 @@ impl App {
             )
         };
         self.push_message(msg);
+        // 攻撃の結果の台詞。
+        let report = self.strike_report(
+            &def_inst,
+            def_unit.hp,
+            StrikeReport {
+                hit,
+                critical,
+                parried,
+                killed: defender_killed,
+                covered,
+                ..Default::default()
+            },
+        );
+        let def_now = self.unit_snapshot(&def_inst);
+        let def_ctx = MsgCtx {
+            target: Some(&atk_snap),
+            target_weapon: Some(&weapon),
+            ..Default::default()
+        };
+        self.strike_result_messages(&atk_snap, &def_now, &atk_ctx, &def_ctx, &report);
 
         // 戦闘演出 (animate_battle 時のみ)。`animation.txt` で戦闘アニメサブルーチンが
         // 解決でき、かつそれが script_library に存在すればスクリプト再生を優先する
@@ -1842,6 +1882,18 @@ impl App {
             def_damage_mod,
             sure_critical: sync,
         };
+        // 攻撃の前の台詞。援護役は攻撃の当事者でないので相手限定の台詞は選ばない。
+        let sup_snap = self.database.unit_instances[sup_idx].clone();
+        let leader = self.database.unit_instances[atk_idx].clone();
+        let sup_ctx = MsgCtx {
+            weapon: Some(&weapon),
+            ..Default::default()
+        };
+        self.attack_opening_messages(&sup_snap, Opening::Support(&leader), &sup_ctx);
+        let def_ctx = MsgCtx {
+            target: Some(&leader),
+            ..Default::default()
+        };
         let guard_idx = self.pick_support_guard(sup_idx, def_idx, &setup, StrikeKind::Support);
         let strike = self.resolve_strike(
             sup_idx,
@@ -1856,6 +1908,8 @@ impl App {
             if self.migawari_sub_idx(def_idx).is_none() {
                 // 援護防御: ガード役が攻撃対象に差し替わり、防御側は何も受けない。
                 self.database.unit_instances[g_idx].used_support_guard += 1;
+                let guard = self.database.unit_instances[g_idx].clone();
+                self.support_guard_messages(&guard, &def_inst);
                 let cover = self.strike_cover(
                     g_idx,
                     def_idx,
@@ -1871,9 +1925,16 @@ impl App {
                     weapon.name,
                     cover.support_guard_message(&def_pilot.nickname)
                 ));
+                let report = StrikeReport {
+                    hit: true,
+                    covered: true,
+                    ..Default::default()
+                };
+                self.strike_result_messages(&sup_snap, &def_inst, &sup_ctx, &def_ctx, &report);
                 return Some(sup_uid);
             }
         }
+        let mut covered = false;
         if strike.hit {
             let dmg = strike.damage;
             // みがわり (身代わり, 最優先・SRC Unit.cls:14855): 防御側が みがわり を持てば
@@ -1890,6 +1951,7 @@ impl App {
                     "みがわり: {} が {} の身代わりになった！",
                     sub, def_pilot.nickname
                 ));
+                covered = true;
                 0
             } else {
                 // バリア/アクティブフィールド/シールド吸収 → 不死身キャップ。
@@ -1951,6 +2013,21 @@ impl App {
             self.apply_combat_morale_skills(sup_idx, def_idx, false);
             self.push_message(format!("{} の{label}はミス", sup_pilot.nickname));
         }
+        // 攻撃の結果の台詞。
+        let report = self.strike_report(
+            &def_inst,
+            def_unit.hp,
+            StrikeReport {
+                hit: strike.hit,
+                critical: strike.critical,
+                parried: strike.parried,
+                killed: strike.hit && !covered && self.database.idx_by_uid(&def_inst.uid).is_none(),
+                covered,
+                ..Default::default()
+            },
+        );
+        let def_now = self.unit_snapshot(&def_inst);
+        self.strike_result_messages(&sup_snap, &def_now, &sup_ctx, &def_ctx, &report);
         Some(sup_uid)
     }
 
@@ -2328,7 +2405,9 @@ impl App {
                 .map(|p| p.nickname.clone())
                 .unwrap_or_else(|| self.database.unit_instances[def_idx].pilot_name.clone())
         ));
-        self.try_counterattack(def_pos.0, def_pos.1, atk_pos);
+        // 攻撃側の武器が 後 なら原典の攻撃モードは「先制攻撃」、ほかは「カウンター」。
+        let counter = !atk_weapon_class.contains('後');
+        self.counter_strike(def_pos.0, def_pos.1, atk_pos, false, counter);
         true
     }
 
@@ -2341,16 +2420,18 @@ impl App {
         dy: u32,
         target: (u32, u32),
     ) -> Option<(String, usize)> {
-        self.counter_strike(dx, dy, target, false)
+        self.counter_strike(dx, dy, target, false, false)
     }
 
     /// 反撃 1 回分。`second` は再攻撃 (原典 `Unit.Attack` の `second_attack`) の 2 回目。
+    /// `counter` はカウンター (原典の攻撃モード `カウンター`) として先に反撃するとき。
     fn counter_strike(
         &mut self,
         dx: u32,
         dy: u32,
         target: (u32, u32),
         second: bool,
+        counter: bool,
     ) -> Option<(String, usize)> {
         let def_idx = self
             .database
@@ -2414,6 +2495,22 @@ impl App {
         self.consume_weapon_resources(def_idx, weapon_num - 1);
         // 命中・クリティカル・即死・切り払い・防御特性は本線攻撃と同じ判定 (原典の反撃は
         // `Attack w, target, "", ""`)。反撃側 = defender (def_idx)、被弾側 = attacker (atk_idx)。
+        // 攻撃の前の台詞。反撃側が話し手。
+        let counter_snap = self.database.unit_instances[def_idx].clone();
+        let counter_ctx = MsgCtx {
+            target: Some(&atk_inst),
+            weapon: Some(&weapon),
+            defending: true,
+            ..Default::default()
+        };
+        let opening = if second {
+            Opening::Reattack
+        } else if counter {
+            Opening::Counter
+        } else {
+            Opening::Normal
+        };
+        self.attack_opening_messages(&counter_snap, opening, &counter_ctx);
         let strike = self.resolve_strike(
             def_idx,
             atk_idx,
@@ -2432,6 +2529,7 @@ impl App {
             StrikeKind::Counter,
             None,
         );
+        let (mut killed, mut covered) = (false, false);
         let msg = if strike.hit {
             let counter_dmg = strike.damage;
             // みがわり (身代わり, 最優先・SRC Unit.cls:14855): 反撃を受ける側 (atk_idx) が
@@ -2448,6 +2546,7 @@ impl App {
                     "みがわり: {} が {} の身代わりになった！",
                     sub, atk_unit.name
                 ));
+                covered = true;
                 0
             } else {
                 // バリア/アクティブフィールド/シールド吸収 → 不死身キャップ
@@ -2467,6 +2566,7 @@ impl App {
                 )
             } else if remaining <= 0 {
                 // 反撃側 (def, 位置 dx,dy) が撃破 → 報酬は反撃側へ。
+                killed = true;
                 let doubled = self.database.unit_instances[def_idx].has_condition("努力");
                 let exp = atk_pilot.exp_value * if doubled { 2 } else { 1 };
                 let victim_value = atk_unit.value;
@@ -2532,6 +2632,32 @@ impl App {
             )
         };
         self.push_message(msg);
+        // 攻撃の結果の台詞。
+        let report = self.strike_report(
+            &atk_inst,
+            atk_unit.hp,
+            StrikeReport {
+                hit: strike.hit,
+                critical: strike.critical,
+                parried: strike.parried,
+                killed,
+                covered,
+                ..Default::default()
+            },
+        );
+        let target_now = self.unit_snapshot(&atk_inst);
+        let target_ctx = MsgCtx {
+            target: Some(&counter_snap),
+            target_weapon: Some(&weapon),
+            ..Default::default()
+        };
+        self.strike_result_messages(
+            &counter_snap,
+            &target_now,
+            &counter_ctx,
+            &target_ctx,
+            &report,
+        );
         // 再攻撃: 原典の反撃 (先制攻撃・カウンターを含む) も `Unit.Attack` なので、双方が
         // 生存し、合体技でなく、同じ武器がまだ使えて射程内なら再攻撃の判定をする。
         if !second && !weapon.class.contains('合') {
@@ -2548,7 +2674,7 @@ impl App {
                 {
                     self.push_message(format!("{} の再攻撃！", def_pilot.nickname));
                     self.forced_counter_weapon = Some(weapon_num - 1);
-                    self.counter_strike(dx, dy, target, true);
+                    self.counter_strike(dx, dy, target, true, false);
                 }
             }
         }

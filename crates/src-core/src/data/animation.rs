@@ -192,7 +192,7 @@ impl AnimationData {
 
 /// 物理行 → 論理行（コメント除去・`_` 継続連結・全角コンマ正規化）。
 /// 空行は区切りとして残す。`#` 行頭コメントは完全に除去する。
-fn prepare_lines(src: &str) -> Vec<String> {
+pub(crate) fn prepare_lines(src: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut acc = String::new();
     let mut continuing = false;
