@@ -62,6 +62,19 @@ impl App {
             self.attack_resolve_and_run(Some(tile), false, "防御");
             return;
         }
+        self.show_reaction_prompt(atk_uid, def_uid, tile, true);
+    }
+
+    /// 反撃手段の選択メニューを出す。援護防御を受けられるなら、原典 `COM.bas` と同じく
+    /// 反撃/回避/防御とは別に「援護防御：使用する (ガード役)」の切り替え行を置く
+    /// (選ぶと使用する/しないが入れ替わってメニューが出し直される)。
+    fn show_reaction_prompt(
+        &mut self,
+        atk_uid: String,
+        def_uid: String,
+        tile: (u32, u32),
+        use_support_guard: bool,
+    ) {
         let can_counter = self.defender_can_counter(&def_uid, &atk_uid);
         let mut options: Vec<String> = Vec::new();
         let mut modes: Vec<String> = Vec::new();
@@ -73,10 +86,23 @@ impl App {
         modes.push("回避".to_string());
         options.push("防御".to_string());
         modes.push("防御".to_string());
-        // 隣接に援護防御可能な味方がいれば「援護防御」を選べる (SRC 反撃モード)。
-        if self.support_guard_available(&def_uid) {
-            options.push("援護防御".to_string());
-            modes.push("援護防御".to_string());
+        if let Some(g) = self.reaction_support_guard_unit(&atk_uid, &def_uid) {
+            let g = &self.database.unit_instances[g];
+            let unit = self
+                .database
+                .unit_by_name(&g.unit_data_name)
+                .map_or_else(|| g.unit_data_name.clone(), |d| d.nickname.clone());
+            let pilot = self
+                .database
+                .pilot_by_name(&g.pilot_name)
+                .map_or_else(|| g.pilot_name.clone(), |p| p.nickname.clone());
+            let state = if use_support_guard {
+                "使用する"
+            } else {
+                "使用しない"
+            };
+            options.push(format!("援護防御：{state} ({unit}/{pilot})"));
+            modes.push(REACTION_TOGGLE_SUPPORT_GUARD.to_string());
         }
         let nick = self
             .database
@@ -87,6 +113,8 @@ impl App {
             atk_uid,
             target_tile: tile,
             modes,
+            labels: options.clone(),
+            use_support_guard,
         });
         self.set_pending_dialog(crate::dialog::PendingDialog::Menu {
             prompt: format!("{nick} 反撃手段を選択"),
@@ -106,6 +134,30 @@ impl App {
         }
     }
 
+    /// 反撃メニューに出す援護防御のガード役 (原典 `COM.bas` の
+    /// `SupportGuardUnit = SelectedTarget.LookForSupportGuard(SelectedUnit, w)`)。
+    /// 攻撃側の武器は `attack_resolve_and_run` と同じ選定。
+    fn reaction_support_guard_unit(&self, atk_uid: &str, def_uid: &str) -> Option<usize> {
+        let atk_idx = self.database.idx_by_uid(atk_uid)?;
+        let def_idx = self.database.idx_by_uid(def_uid)?;
+        let (_, atk_unit) = self.database.effective_combat_data(atk_idx)?;
+        let a = &self.database.unit_instances[atk_idx];
+        let d = &self.database.unit_instances[def_idx];
+        let dist = combat::manhattan((a.x, a.y), (d.x, d.y));
+        let weapon = Self::pick_attack_weapon(
+            &atk_unit,
+            dist,
+            None,
+            a.charged,
+            false,
+            a.has_condition("突撃"),
+            |w| self.weapon_firable(atk_idx, w),
+            |w| self.weapon_skill_ok(atk_idx, w),
+        )?;
+        let expected = self.forecast_strike(atk_idx, def_idx, &weapon)?;
+        self.try_find_support_guard(atk_idx, def_idx, &weapon, &expected, true)
+    }
+
     /// 反撃モードのメニュー応答を処理する。`respond_dialog` から委譲される。
     /// `choice` は 1-based のメニュー選択 (0/範囲外は先頭=反撃/回避にフォールバック)。
     pub(super) fn resolve_reaction(&mut self, choice: u32) -> bool {
@@ -119,6 +171,23 @@ impl App {
         } else {
             pr.modes.first().cloned().unwrap_or_default()
         };
+        if mode == REACTION_TOGGLE_SUPPORT_GUARD {
+            if let Some(def_uid) = self
+                .database
+                .unit_instances
+                .iter()
+                .find(|u| !u.off_map && (u.x, u.y) == pr.target_tile)
+                .map(|u| u.uid.clone())
+            {
+                self.show_reaction_prompt(
+                    pr.atk_uid,
+                    def_uid,
+                    pr.target_tile,
+                    !pr.use_support_guard,
+                );
+                return true;
+            }
+        }
         self.set_cursor_to_uid(&pr.atk_uid);
         // 「反撃」選択時、反撃武器が複数あり武器選択ウィンドウが有効なら、どの反撃
         // 武器で反撃するかを選ばせる (使用可能が 1 本以下なら自動選定のまま解決)。
@@ -146,12 +215,15 @@ impl App {
                         atk_tile,
                         pr.atk_uid.clone(),
                         pr.target_tile,
+                        pr.use_support_guard,
                     );
                     return true;
                 }
             }
         }
+        self.support_guard_declined = !pr.use_support_guard;
         self.attack_resolve_and_run(Some(pr.target_tile), false, &mode);
+        self.support_guard_declined = false;
         // ランナーは pending_dialog が消えたので次 tick で継続する。
         true
     }
@@ -299,6 +371,7 @@ impl App {
         atk_tile: (u32, u32),
         main_atk_uid: String,
         main_target: (u32, u32),
+        use_support_guard: bool,
     ) {
         let names: Vec<String> = self
             .database
@@ -313,6 +386,7 @@ impl App {
             counter: Some(CounterCtx {
                 main_atk_uid,
                 main_target,
+                use_support_guard,
             }),
         });
         self.set_pending_dialog(crate::dialog::PendingDialog::Menu {
@@ -411,9 +485,11 @@ impl App {
             // 反撃武器選択: 選んだ武器を反撃武器に固定し、主攻撃を「反撃」で解決する
             // (try_counterattack が forced_counter_weapon を take して使う)。
             self.forced_counter_weapon = Some(widx - 1);
+            self.support_guard_declined = !cc.use_support_guard;
             self.set_cursor_to_uid(&cc.main_atk_uid);
             self.attack_resolve_and_run(Some(cc.main_target), false, "反撃");
             self.forced_counter_weapon = None;
+            self.support_guard_declined = false;
             return true;
         }
         // 通常攻撃: 選んだ武器を固定して攻撃 (1回限り; 終了後に W キー設定へ戻す)。

@@ -21,17 +21,18 @@ pub struct ReactionWindowData {
     pub power: i64,
     /// 攻撃側の基準命中率 (% / タイトル "… 命中率=<base_hit>%")。
     pub base_hit: i32,
-    /// 各選択肢 (反撃 / 回避 / 防御 / 援護防御) と、その防御モードでの攻撃側命中率。
+    /// 各選択肢 (反撃 / 回避 / 防御 / 援護防御の切り替え) と、その防御モードでの攻撃側命中率。
     pub options: Vec<ReactionOption>,
 }
 
 /// 反撃ウィンドウの 1 選択肢。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReactionOption {
-    /// 選択肢ラベル (反撃 / 回避 / 防御 / 援護防御)。
+    /// 選択肢ラベル (反撃 / 回避 / 防御 / 「援護防御：使用する (ユニット/パイロット)」)。
     pub label: String,
-    /// この防御モードを選んだ場合の攻撃側命中率 (%)。回避は半減。
-    pub hit_pct: i32,
+    /// この防御モードを選んだ場合の攻撃側命中率 (%)。回避は半減。援護防御の切り替え行は
+    /// 防御モードではないので `None`。
+    pub hit_pct: Option<i32>,
 }
 
 // ── 反撃ウィンドウのレイアウト ────────────────────────────────────────────
@@ -93,15 +94,16 @@ impl crate::App {
         let options = pr
             .modes
             .iter()
-            .map(|m| {
+            .zip(&pr.labels)
+            .map(|(m, label)| {
                 // 回避は命中半減 (SRC 反撃モード / attack_resolve_and_run の def_mode="回避")。
-                let hit = if m == "回避" {
-                    (base_hit / 2).max(0)
-                } else {
-                    base_hit
+                let hit = match m.as_str() {
+                    "回避" => Some((base_hit / 2).max(0)),
+                    crate::app::REACTION_TOGGLE_SUPPORT_GUARD => None,
+                    _ => Some(base_hit),
                 };
                 ReactionOption {
-                    label: m.clone(),
+                    label: label.clone(),
                     hit_pct: hit,
                 }
             })

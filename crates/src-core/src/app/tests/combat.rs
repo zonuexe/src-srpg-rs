@@ -2814,10 +2814,11 @@ fn reaction_prompt_skipped_when_defender_action_disabled() {
     assert!(!prompted, "行動不能の防御側に反撃メニューが出てしまった");
 }
 
+/// 反撃メニューには、援護防御を受けられるときだけ「援護防御：使用する (ユニット/パイロット)」
+/// の切り替え行が出る (原典 `COM.bas`)。選ぶと「使用しない」に変わってメニューが出し直される。
 #[test]
 fn support_guard_reaction_option_offered_only_when_available() {
-    // 反撃メニューに「援護防御」が出るのは、隣接に援護防御可能な味方が居るときだけ。
-    fn reaction_menu_options(with_guard: bool) -> Vec<String> {
+    fn reaction_app(with_guard: bool) -> App {
         let mut app = App::new();
         enter_mapview_with_demo_map(&mut app);
         place_player_unit(&mut app, "Hero", 5, 6);
@@ -2834,6 +2835,7 @@ fn support_guard_reaction_option_offered_only_when_available() {
             g.support_guard_remaining = 1;
         }
         place_player_unit(&mut app, "Foe", 9, 9);
+        add_weapon(&mut app, "Foe", 50, 1);
         let euid = spawn_party(&mut app, "Foe", crate::Party::Enemy, 4, 6);
         let hero_uid = app
             .database()
@@ -2845,19 +2847,31 @@ fn support_guard_reaction_option_offered_only_when_available() {
             .clone();
         app.set_stage_state(crate::stage::StageState::Battle);
         app.begin_reaction_prompt(euid, hero_uid, (5, 6));
+        app
+    }
+    fn options(app: &App) -> Vec<String> {
         match app.pending_dialog() {
             Some(crate::PendingDialog::Menu { options, .. }) => options.clone(),
             _ => Vec::new(),
         }
     }
-    let with = reaction_menu_options(true);
-    let without = reaction_menu_options(false);
+    let mut app = reaction_app(true);
+    let with = options(&app);
+    let toggle = with
+        .iter()
+        .position(|o| o.starts_with("援護防御：使用する ("))
+        .unwrap_or_else(|| panic!("援護防御 が出ていない: {with:?}"));
+    assert!(app.resolve_reaction(toggle as u32 + 1));
+    let toggled = options(&app);
     assert!(
-        with.contains(&"援護防御".to_string()),
-        "援護防御 が出ていない: {with:?}"
+        toggled[toggle].starts_with("援護防御：使用しない ("),
+        "切り替わっていない: {toggled:?}"
     );
+    assert!(!app.pending_reaction().unwrap().use_support_guard);
+
+    let without = options(&reaction_app(false));
     assert!(
-        !without.contains(&"援護防御".to_string()),
+        !without.iter().any(|o| o.starts_with("援護防御")),
         "援護防御 が誤って出ている: {without:?}"
     );
 }
@@ -2907,51 +2921,81 @@ fn support_guard_uses_effective_max_hp() {
     );
 }
 
+/// 原典の援護防御は反撃/防御/回避の選択とは別の切り替え (`UseSupportGuard`、既定は使用する)。
+/// 防御側が自分のフェイズでなければ、味方の攻撃を受ける敵もかばわれる。「使用しない」を
+/// 選んだときだけ防御側が自分で受ける。
 #[test]
-fn support_guard_intercepts_on_choice_and_suppressed_on_personal_reaction() {
-    // "援護防御" 選択 → 隣接の援護役が肩代わり (防御側被弾 0)。個別反撃 ("防御")
-    // 選択 → 援護防御は発動せず防御側が受ける。必中で命中確定し RNG 非依存。
-    fn run(def_mode: &str) -> (i64, i64) {
-        let mut app = App::new();
-        enter_mapview_with_demo_map(&mut app);
-        place_player_unit(&mut app, "Hero", 5, 6);
-        add_weapon(&mut app, "Hero", 60, 1);
-        app.database_mut()
-            .unit_instances
-            .iter_mut()
-            .find(|u| u.unit_data_name == "Hero")
-            .unwrap()
-            .add_condition(crate::condition::Condition::new("必中", 9));
-        place_player_unit(&mut app, "Foe", 9, 9);
-        let fuid = spawn_party(&mut app, "Foe", crate::Party::Enemy, 6, 6); // 防御側
-        let guid = spawn_party(&mut app, "Foe", crate::Party::Enemy, 6, 5); // 援護する敵
-        {
-            let g = app.database_mut().unit_by_uid_mut(&guid).unwrap();
-            g.add_condition(crate::condition::Condition::new("サポートガード", 9));
-            g.support_guard_remaining = 1;
-        }
-        app.set_stage_state(crate::stage::StageState::Battle);
-        app.set_map_cursor(5, 6);
+fn support_guard_applies_regardless_of_reaction_choice() {
+    for def_mode in ["", "反撃", "防御"] {
+        let (mut app, foe, guard) = setup_support_guard(0, false, None);
         assert!(app.attack_resolve_and_run(Some((6, 6)), false, def_mode));
-        let foe = app
-            .database()
-            .unit_by_uid(&fuid)
-            .map(|u| u.damage)
-            .unwrap_or(-1);
-        let guard = app
-            .database()
-            .unit_by_uid(&guid)
-            .map(|u| u.damage)
-            .unwrap_or(-1);
-        (foe, guard)
+        let db = app.database();
+        assert_eq!(
+            db.unit_by_uid(&foe).unwrap().damage,
+            0,
+            "{def_mode:?}: 防御側が被弾した"
+        );
+        assert!(
+            db.unit_by_uid(&guard).unwrap().damage > 0,
+            "{def_mode:?}: ガード役がかばっていない"
+        );
     }
-    let (foe_guarded, guard_guarded) = run("援護防御");
-    assert_eq!(foe_guarded, 0, "援護防御で防御側が被弾している");
-    assert!(guard_guarded > 0, "援護役が肩代わりしていない");
+    let (mut app, foe, guard) = setup_support_guard(0, false, None);
+    app.support_guard_declined = true;
+    assert!(app.attack_resolve_and_run(Some((6, 6)), false, "防御"));
+    let db = app.database();
+    assert!(
+        db.unit_by_uid(&foe).unwrap().damage > 0,
+        "使用しない のに防御側が受けていない"
+    );
+    assert_eq!(
+        db.unit_by_uid(&guard).unwrap().damage,
+        0,
+        "使用しない のにかばった"
+    );
+}
 
-    let (foe_defend, guard_defend) = run("防御");
-    assert!(foe_defend > 0, "個別防御で防御側が受けていない");
-    assert_eq!(guard_defend, 0, "個別反撃選択時に援護防御が発動している");
+/// 援護攻撃 (原典 `Attack w2, target, "援護攻撃", def_mode`) も `Unit.Attack` を通るので、
+/// 援護防御を受ける。
+#[test]
+fn support_guard_covers_support_attack() {
+    let (mut app, foe, guard) = setup_support_guard(0, false, None);
+    // 援護攻撃する味方 (Hero と同じデータ) を Hero の隣に置く。
+    let sup = spawn_party(&mut app, "Hero", crate::Party::Player, 5, 7);
+    {
+        let s = app.database_mut().unit_by_uid_mut(&sup).unwrap();
+        s.add_condition(crate::Condition::new("サポートアタック", -1));
+        s.add_condition(crate::Condition::new("必中", -1));
+        s.support_attack_remaining = 1;
+    }
+    {
+        let g = app.database_mut().unit_by_uid_mut(&guard).unwrap();
+        g.support_guard_remaining = 2;
+    }
+    // 援護役 (5,7) から防御側 (6,6) までは距離 2。
+    if let Some(w) = app
+        .database_mut()
+        .catalog
+        .units
+        .iter_mut()
+        .find(|u| u.name == "Hero")
+        .and_then(|u| u.weapons.last_mut())
+    {
+        w.max_range = 2;
+    }
+    let hero = first_player_uid(&app);
+    let hero_idx = app.database().idx_by_uid(&hero).unwrap();
+    assert_eq!(
+        app.try_support_attack(hero_idx, 6, 6, "").as_deref(),
+        Some(sup.as_str())
+    );
+    let db = app.database();
+    assert_eq!(db.unit_by_uid(&foe).unwrap().damage, 0, "防御側が被弾した");
+    assert!(
+        db.unit_by_uid(&guard).unwrap().damage > 0,
+        "援護攻撃をガード役がかばっていない"
+    );
+    assert_eq!(db.unit_by_uid(&guard).unwrap().support_guard_remaining, 1);
 }
 
 #[test]
@@ -4162,7 +4206,7 @@ fn support_guard_recomputes_damage_against_guard() {
         "前提: ガード役への予測 {vs_guard} が防御側 {vs_foe} より十分大きい"
     );
 
-    assert!(app.attack_resolve_and_run(Some((6, 6)), false, "援護防御"));
+    assert!(app.attack_resolve_and_run(Some((6, 6)), false, ""));
     let db = app.database();
     let taken = db.unit_by_uid(&guard).unwrap().damage;
     assert_eq!(db.unit_by_uid(&foe).unwrap().damage, 0, "防御側が被弾した");
@@ -4212,7 +4256,7 @@ fn support_guard_damage_uses_defender_tile() {
     set_terrain(&mut app, 6, 5, 0);
     set_terrain(&mut app, 6, 6, 5);
 
-    assert!(app.attack_resolve_and_run(Some((6, 6)), false, "援護防御"));
+    assert!(app.attack_resolve_and_run(Some((6, 6)), false, ""));
     let db = app.database();
     let taken = db.unit_by_uid(&guard).unwrap().damage;
     assert_eq!(db.unit_by_uid(&foe).unwrap().damage, 0, "防御側が被弾した");
@@ -4226,7 +4270,7 @@ fn support_guard_damage_uses_defender_tile() {
 #[test]
 fn support_guard_parries_as_the_guard() {
     let (mut app, foe, guard) = setup_support_guard(0, true, Some("Guard"));
-    assert!(app.attack_resolve_and_run(Some((6, 6)), false, "援護防御"));
+    assert!(app.attack_resolve_and_run(Some((6, 6)), false, ""));
     let db = app.database();
     assert_eq!(
         db.unit_by_uid(&guard).unwrap().damage,
@@ -4242,7 +4286,7 @@ fn support_guard_parries_as_the_guard() {
 
     // かばわれた防御側の切り払いは判定されず、ガード役が被弾する。
     let (mut app, foe, guard) = setup_support_guard(0, true, Some("Foe"));
-    assert!(app.attack_resolve_and_run(Some((6, 6)), false, "援護防御"));
+    assert!(app.attack_resolve_and_run(Some((6, 6)), false, ""));
     let db = app.database();
     assert!(
         db.unit_by_uid(&guard).unwrap().damage > 0,
@@ -4336,6 +4380,58 @@ fn support_guard_machine_only_guarded_by_machine() {
 }
 
 /// 防御側の領域 (空中) に入れないガード役はかばわない。
+/// オプション `対ＮＰＣサポートガード無効`: 味方は ＮＰＣ をかばわなくなる。
+/// ＮＰＣ が味方をかばうのはオプションがあっても変わらない。
+#[test]
+fn support_guard_option_disables_player_guarding_npc() {
+    let (mut app, foe, guard) = setup_support_guard(0, false, None);
+    let hero = first_player_uid(&app);
+    let set_party = |app: &mut App, uid: &str, party: crate::Party| {
+        app.database_mut().unit_by_uid_mut(uid).unwrap().party = party;
+    };
+    let weapon = app
+        .database()
+        .unit_by_name("Hero")
+        .unwrap()
+        .weapons
+        .last()
+        .cloned()
+        .unwrap();
+    let find = |app: &App, def: &str| {
+        let atk_idx = app.database().idx_by_uid(&hero).unwrap();
+        let def_idx = app.database().idx_by_uid(def).unwrap();
+        let expected = app.forecast_strike(atk_idx, def_idx, &weapon).unwrap();
+        app.try_find_support_guard(atk_idx, def_idx, &weapon, &expected, true)
+            .map(|i| app.database().unit_instances[i].uid.clone())
+    };
+    // 敵 (Hero) が ＮＰＣ (Foe) を攻撃し、味方 (Wall) がかばう。
+    set_party(&mut app, &hero, crate::Party::Enemy);
+    set_party(&mut app, &foe, crate::Party::Npc);
+    set_party(&mut app, &guard, crate::Party::Player);
+    assert_eq!(
+        find(&app, &foe),
+        Some(guard.clone()),
+        "前提: 味方が ＮＰＣ をかばう"
+    );
+    app.set_script_var(
+        "Option(対ＮＰＣサポートガード無効)".to_string(),
+        "1".to_string(),
+    );
+    assert_eq!(
+        find(&app, &foe),
+        None,
+        "オプション下で味方が ＮＰＣ をかばった"
+    );
+    // 立場を入れ替えると (ＮＰＣ が味方をかばう) オプションの影響を受けない。
+    set_party(&mut app, &foe, crate::Party::Player);
+    set_party(&mut app, &guard, crate::Party::Npc);
+    assert_eq!(
+        find(&app, &foe),
+        Some(guard.clone()),
+        "ＮＰＣ が味方をかばわなくなった"
+    );
+}
+
 #[test]
 fn support_guard_requires_entering_defender_area() {
     let (mut app, foe, guard) = setup_support_guard(0, false, None);
