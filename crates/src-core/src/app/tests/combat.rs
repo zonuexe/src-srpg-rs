@@ -3872,3 +3872,153 @@ fn defense_does_not_halve_against_exceptions() {
         }),
     );
 }
+
+/// みがわり と切り払いの組み立て: Hero が格闘武器 (必中) で Caster を攻撃し、Sub
+/// (パイロット Guard) が Caster の身代わり。`parrier` に渡したユニットだけが
+/// 切り払い + 見切り (必ず切り払う) を持つ。
+fn setup_migawari_parry(parrier: &str) -> (App, String, String) {
+    let mut app = App::new();
+    enter_mapview_with_demo_map(&mut app);
+    place_player_unit(&mut app, "Hero", 2, 6);
+    add_weapon(&mut app, "Hero", 30, 1);
+    if let Some(w) = app
+        .database_mut()
+        .catalog
+        .units
+        .iter_mut()
+        .find(|u| u.name == "Hero")
+        .and_then(|u| u.weapons.last_mut())
+    {
+        w.class = "武".into();
+    }
+    register_enemy_data(&mut app, "Caster");
+    register_enemy_data(&mut app, "Sub");
+    {
+        let mut p = app.database().pilot_by_name("PILOT").unwrap().clone();
+        p.name = "Guard".into();
+        p.nickname = "Guard".into();
+        p.features = vec![("切り払いLv1".into(), String::new())];
+        app.database_mut().catalog.pilots.push(p);
+        let mut p = app.database().pilot_by_name("PILOT").unwrap().clone();
+        p.name = "Ward".into();
+        p.nickname = "Ward".into();
+        p.features = vec![("切り払いLv1".into(), String::new())];
+        app.database_mut().catalog.pilots.push(p);
+    }
+    let (caster_pilot, sub_pilot) = if parrier == "Sub" {
+        ("PILOT", "Guard")
+    } else {
+        ("Ward", "PILOT")
+    };
+    let caster = app.database_mut().register_unit(crate::UnitInstance::new(
+        "Caster",
+        caster_pilot,
+        crate::Party::Enemy,
+        3,
+        6,
+    ));
+    let sub = app.database_mut().register_unit(crate::UnitInstance::new(
+        "Sub",
+        sub_pilot,
+        crate::Party::Enemy,
+        3,
+        5,
+    ));
+    let parrier_uid = if parrier == "Sub" { &sub } else { &caster };
+    app.database_mut()
+        .unit_by_uid_mut(parrier_uid)
+        .unwrap()
+        .add_condition(crate::Condition::new("見切り", -1));
+    let hero = first_player_uid(&app);
+    app.database_mut()
+        .unit_by_uid_mut(&hero)
+        .unwrap()
+        .add_condition(crate::Condition::new("必中", -1));
+    app.set_stage_state(crate::stage::StageState::Battle);
+    let script = crate::data::event::parse("SpecialPower Sub みがわり Caster\n").unwrap();
+    crate::event_runtime::execute(&mut app, &script).unwrap();
+    assert!(
+        app.database()
+            .unit_by_uid(&caster)
+            .unwrap()
+            .has_condition("みがわり"),
+        "前提: Caster に みがわり が掛かっている"
+    );
+    (app, caster, sub)
+}
+
+fn hero_attacks_caster(app: &mut App) {
+    click_tile(app, 2, 6);
+    let ai = attack_item_index(app);
+    click_menu_item(app, ai);
+    click_tile(app, 3, 6);
+}
+
+/// 原典 `Unit.Attack` は みがわり の身代わりを攻撃対象に差し替えてから
+/// `CheckParryFeature` を呼ぶ: 切り払うのは身代わりのほうで、切り払えば誰も被弾しない
+/// (みがわり は消費される)。
+#[test]
+fn migawari_substitute_parries_the_attack() {
+    let (mut app, caster, sub) = setup_migawari_parry("Sub");
+    hero_attacks_caster(&mut app);
+    let db = app.database();
+    assert_eq!(
+        db.unit_by_uid(&sub).unwrap().damage,
+        0,
+        "身代わりが切り払えていない"
+    );
+    assert_eq!(
+        db.unit_by_uid(&caster).unwrap().damage,
+        0,
+        "保護対象が被弾した"
+    );
+    assert!(
+        !db.unit_by_uid(&caster).unwrap().has_condition("みがわり"),
+        "切り払っても みがわり は消費される"
+    );
+    assert!(
+        app.messages()
+            .iter()
+            .any(|m| m.contains("Guard は") && m.contains("切り払った")),
+        "切り払いの主語が身代わりでない: {:?}",
+        app.messages()
+    );
+}
+
+/// 保護対象が切り払いを持っていても、身代わりが攻撃を受ける以上は保護対象の切り払いは
+/// 判定されない (身代わりが被弾する)。
+#[test]
+fn migawari_protected_unit_does_not_parry() {
+    let (mut app, caster, sub) = setup_migawari_parry("Caster");
+    hero_attacks_caster(&mut app);
+    let db = app.database();
+    assert!(
+        db.unit_by_uid(&sub).unwrap().damage > 0,
+        "身代わりが被弾していない"
+    );
+    assert_eq!(
+        db.unit_by_uid(&caster).unwrap().damage,
+        0,
+        "保護対象が被弾した"
+    );
+}
+
+/// `Attack` コマンドの戦闘でも みがわり が働く (原典は `is_event` の判定より前に調べる)。
+#[test]
+fn migawari_applies_to_attack_command() {
+    let (mut app, caster, sub) = setup_migawari_parry("Caster");
+    let hero = first_player_uid(&app);
+    let script =
+        crate::data::event::parse(&format!("Attack {hero} テスト砲 {caster} 無抵抗\n")).unwrap();
+    crate::event_runtime::execute(&mut app, &script).unwrap();
+    let db = app.database();
+    assert!(
+        db.unit_by_uid(&sub).unwrap().damage > 0,
+        "身代わりが被弾していない"
+    );
+    assert_eq!(
+        db.unit_by_uid(&caster).unwrap().damage,
+        0,
+        "保護対象が被弾した"
+    );
+}
