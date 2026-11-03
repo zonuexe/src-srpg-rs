@@ -52,24 +52,39 @@ fn exec_mapattack(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
 
 fn exec_mapability(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     let Cmd { xargs, pc, .. } = *c;
-    // MapAbility は MapAttack と同じ書式の汎用版。本実装では同じ処理。
+    // SRC `MapAbility [unit] ability X Y` (`MapAbilityコマンド.md`): マップアビリティを
+    // 目標地点 (X, Y) に使う。使用条件 (EN・気力) は問わず、使用 / 使用後イベントも
+    // 経験値も発生しない。`unit` 省略時は最初の味方ユニット。
     if xargs.len() < 3 {
         return Ok(pc + 1);
     }
     let n = xargs.len();
-    let (cx, cy) = coord::clamp_from_script(
+    let point = coord::clamp_from_script(
         app,
         c.long(app, n - 2).unwrap_or(0),
         c.long(app, n - 1).unwrap_or(0),
     );
-    let weapon_name = xargs[n - 3].clone();
-    let unit_key = if n >= 4 {
-        Some(xargs[n - 4].clone())
-    } else {
-        None
-    };
-    // スクリプト経由の MapAbility も既定で is_event=true (イベント非発火)。
-    script_map_attack(app, unit_key.as_deref(), &weapon_name, cx, cy, true);
+    let ability_name = &xargs[n - 3];
+    let unit_key = (n >= 4).then(|| xargs[n - 4].as_str());
+    let found = app
+        .database()
+        .unit_instances
+        .iter()
+        .find(|u| match unit_key {
+            Some(k) => matches_unit_handle(u, k),
+            None => u.party == crate::Party::Player,
+        })
+        .and_then(|u| {
+            let def = app.database().unit_by_name(&u.unit_data_name)?;
+            let idx = def
+                .abilities
+                .iter()
+                .position(|a| a.name == *ability_name || a.display_name() == ability_name)?;
+            Some((u.uid.clone(), idx))
+        });
+    if let Some((uid, idx)) = found {
+        app.execute_ability_at(&uid, idx, point);
+    }
     Ok(pc + 1)
 }
 
@@ -409,7 +424,7 @@ fn exec_useability(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     Ok(pc + 1)
 }
 
-/// `MapAttack` / `MapAbility` の攻撃側を解決して `App::execute_map_attack` に渡す。
+/// `MapAttack` の攻撃側を解決して `App::execute_map_attack` に渡す。
 /// `unit_key` が無ければ最初の味方ユニットを攻撃元とみなす。
 fn script_map_attack(
     app: &mut App,

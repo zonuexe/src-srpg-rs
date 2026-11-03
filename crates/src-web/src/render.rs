@@ -340,8 +340,9 @@ fn draw_action_overlays(
                 }
             }
         }
-        ActionMode::MapAttackSelect { .. } => {
-            // マップ攻撃: 目標地点に選べるマスを橙、仮決め / カーソル位置を狙った効果範囲を赤で塗る。
+        ActionMode::MapAttackSelect { .. } | ActionMode::MapAbilitySelect { .. } => {
+            // マップ攻撃 / マップアビリティ: 目標地点に選べるマスを橙、仮決め / カーソル位置を
+            // 狙った効果範囲を赤で塗る。
             if let Some(t) = map_attack_tiles {
                 for (tiles, color) in [
                     (&t.targets, "rgba(255,152,0,0.30)"),

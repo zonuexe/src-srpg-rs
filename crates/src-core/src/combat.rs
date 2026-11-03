@@ -952,9 +952,29 @@ pub fn map_attack_area(
     src: (u32, u32),
     target: (u32, u32),
 ) -> Vec<(u32, u32)> {
-    let cls = weapon.class.as_str();
-    let max = weapon.max_range.max(0);
-    let min = weapon.min_range.max(0);
+    map_area(
+        &weapon.class,
+        weapon.min_range,
+        weapon.max_range,
+        src,
+        target,
+        false,
+    )
+}
+
+/// マップ攻撃・マップアビリティ共通の効果範囲 (`map_attack_area` の本体)。`cls` は属性
+/// 文字列、`min` / `max` は射程。`include_src` なら使用者自身のマスも含める (マップ
+/// アビリティ。原典 `ExecuteMapAbility` は使用者を除外しない)。
+pub fn map_area(
+    cls: &str,
+    min: i32,
+    max: i32,
+    src: (u32, u32),
+    target: (u32, u32),
+    include_src: bool,
+) -> Vec<(u32, u32)> {
+    let max = max.max(0);
+    let min = min.max(0);
     let lvl_after = |key: &str| -> Option<i32> {
         cls.find(key).map(|idx| {
             let tail = &cls[idx + key.len()..];
@@ -1039,7 +1059,7 @@ pub fn map_attack_area(
     }
     let mut out: Vec<(u32, u32)> = Vec::new();
     for (cx, cy) in cells {
-        if cx >= 0 && cy >= 0 && (cx, cy) != (x, y) {
+        if cx >= 0 && cy >= 0 && (include_src || (cx, cy) != (x, y)) {
             let c = (cx as u32, cy as u32);
             if !out.contains(&c) {
                 out.push(c);

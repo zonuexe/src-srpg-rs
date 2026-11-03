@@ -282,8 +282,7 @@ enum MapAim {
     Point,
 }
 
-fn map_aim(weapon: &crate::data::unit::WeaponData) -> MapAim {
-    let c = weapon.class.as_str();
+fn map_aim(c: &str) -> MapAim {
     if c.contains("Ｍ全") {
         MapAim::Around
     } else if c.contains("Ｍ直") || c.contains("Ｍ拡") || c.contains("Ｍ扇") {
@@ -295,7 +294,31 @@ fn map_aim(weapon: &crate::data::unit::WeaponData) -> MapAim {
     }
 }
 
-/// プレイヤーのマップ攻撃 (ユニットコマンド「マップ攻撃」)。
+/// 目標地点選択中のマップ兵器 / マップアビリティ (使用者・属性・射程・仮決めした地点)。
+struct MapShape {
+    uid: String,
+    point: Option<(u32, u32)>,
+    class: String,
+    min: i32,
+    max: i32,
+    /// 使用者自身のマスを効果範囲に含めるか (マップアビリティ)。
+    include_src: bool,
+}
+
+impl MapShape {
+    fn area(&self, src: (u32, u32), target: (u32, u32)) -> Vec<(u32, u32)> {
+        combat::map_area(
+            &self.class,
+            self.min,
+            self.max,
+            src,
+            target,
+            self.include_src,
+        )
+    }
+}
+
+/// プレイヤーのマップ攻撃 (ユニットコマンド「マップ攻撃」) とマップアビリティの目標地点選択。
 impl App {
     /// ユニット `idx` が精神コマンド効果 `effect` (`識別攻撃` / `隠れ身` 等) の下にあるか。
     /// 効果は付いている精神コマンド (状態) の sp.txt の効果名で判定する。
@@ -383,7 +406,9 @@ impl App {
             self.return_to_unit_menu(&pm.uid, pm.snapshot);
             return true;
         }
-        let aim = self.map_weapon_of(&pm.uid, &weapon).map(|w| map_aim(&w));
+        let aim = self
+            .map_weapon_of(&pm.uid, &weapon)
+            .map(|w| map_aim(&w.class));
         if aim == Some(MapAim::Around) {
             let pos = self.database.unit_by_uid(&pm.uid).map(|u| (u.x, u.y));
             if let Some(pos) = pos {
@@ -432,12 +457,63 @@ impl App {
             .cloned()
     }
 
-    /// `target` をマップ兵器 `weapon` の目標地点に選べるか (射程・方向・空きマス)。
-    fn map_attack_target_ok(&self, uid: &str, weapon: &str, target: (u32, u32)) -> bool {
-        let (Some(u), Some(w)) = (
-            self.database.unit_by_uid(uid),
-            self.map_weapon_of(uid, weapon),
-        ) else {
+    /// マップアビリティ (`Ｍ全` 以外) の目標地点選択を始める。
+    pub(super) fn begin_map_ability_target(&mut self, caster: &str, ability_idx: usize) {
+        self.pending_dialog = None;
+        self.command_menu = None;
+        self.action_mode = crate::command_menu::ActionMode::MapAbilitySelect {
+            caster: caster.to_string(),
+            ability_idx,
+            point: None,
+        };
+        let name = self
+            .ability_at(caster, ability_idx)
+            .map(|a| a.display_name().to_string())
+            .unwrap_or_default();
+        self.push_message(format!(
+            "{name}: 目標地点を選択 (もう一度選ぶと使用・右クリックでキャンセル)"
+        ));
+    }
+
+    /// 目標地点選択中なら、使用者・形・仮決めした目標地点。
+    fn map_select_state(&self) -> Option<MapShape> {
+        use crate::command_menu::ActionMode;
+        match &self.action_mode {
+            ActionMode::MapAttackSelect {
+                uid, weapon, point, ..
+            } => {
+                let w = self.map_weapon_of(uid, weapon)?;
+                Some(MapShape {
+                    uid: uid.clone(),
+                    point: *point,
+                    class: w.class,
+                    min: w.min_range,
+                    max: w.max_range,
+                    include_src: false,
+                })
+            }
+            ActionMode::MapAbilitySelect {
+                caster,
+                ability_idx,
+                point,
+            } => {
+                let ab = self.ability_at(caster, *ability_idx)?;
+                Some(MapShape {
+                    uid: caster.clone(),
+                    point: *point,
+                    min: ab.min_range(),
+                    max: ab.range,
+                    class: ab.attributes,
+                    include_src: true,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// `target` を目標地点に選べるか (射程・方向・空きマス)。
+    fn map_target_ok(&self, uid: &str, shape: &MapShape, target: (u32, u32)) -> bool {
+        let Some(u) = self.database.unit_by_uid(uid) else {
             return false;
         };
         if let Some(m) = self.database.map.as_ref() {
@@ -446,42 +522,57 @@ impl App {
             }
         }
         let pos = (u.x, u.y);
-        let dist = combat::manhattan(pos, target);
-        match map_aim(&w) {
+        let dist = i64::from(combat::manhattan(pos, target));
+        let in_range = (i64::from(shape.min)..=i64::from(shape.max)).contains(&dist);
+        match map_aim(&shape.class) {
             MapAim::Around => target == pos,
-            MapAim::Direction => {
-                (target.0 == pos.0 || target.1 == pos.1) && combat::weapon_in_range(&w, dist)
-            }
+            MapAim::Direction => (target.0 == pos.0 || target.1 == pos.1) && in_range,
             MapAim::EmptyTile => {
-                // 原典: 武器の最大射程を移動力とした移動範囲の空きマス。
+                // 原典: 最大射程を移動力とした移動範囲の空きマス。
                 target != pos
                     && self.database.uid_at(target.0, target.1).is_none()
                     && self
                         .database
-                        .move_action_range(uid, w.max_range)
+                        .move_action_range(uid, shape.max)
                         .contains_key(&target)
             }
-            MapAim::Point => combat::weapon_in_range(&w, dist),
+            MapAim::Point => in_range,
         }
     }
 
     /// 目標地点選択中のクリック。選べないマスは無視し、初回は目標地点を仮決めして効果
-    /// 範囲を表示する。仮決めした地点をもう一度選ぶと発射する。
-    pub(super) fn click_map_attack_target(&mut self, target: (u32, u32)) {
+    /// 範囲を表示する。仮決めした地点をもう一度選ぶと発射 / 使用する。
+    pub(super) fn click_map_target(&mut self, target: (u32, u32)) {
         use crate::command_menu::ActionMode;
-        let ActionMode::MapAttackSelect {
-            uid, weapon, point, ..
-        } = self.action_mode.clone()
-        else {
+        let Some(shape) = self.map_select_state() else {
             return;
         };
-        if !self.map_attack_target_ok(&uid, &weapon, target) {
+        let uid = shape.uid.clone();
+        if !self.map_target_ok(&uid, &shape, target) {
             return;
         }
-        if point == Some(target) {
-            self.fire_player_map_attack(&uid, &weapon, target);
-        } else if let ActionMode::MapAttackSelect { point, .. } = &mut self.action_mode {
-            *point = Some(target);
+        if shape.point != Some(target) {
+            if let ActionMode::MapAttackSelect { point, .. }
+            | ActionMode::MapAbilitySelect { point, .. } = &mut self.action_mode
+            {
+                *point = Some(target);
+            }
+            return;
+        }
+        match self.action_mode.clone() {
+            ActionMode::MapAttackSelect { weapon, .. } => {
+                self.fire_player_map_attack(&uid, &weapon, target);
+            }
+            ActionMode::MapAbilitySelect { ability_idx, .. } => {
+                self.command_menu = None;
+                self.action_mode = ActionMode::Browse;
+                if let Some(u) = self.database.unit_by_uid_mut(&uid) {
+                    u.has_acted = true;
+                }
+                self.execute_ability_at(&uid, ability_idx, target);
+                self.finish_ability(&uid);
+            }
+            _ => {}
         }
     }
 
@@ -494,24 +585,19 @@ impl App {
         self.finish_player_attack(uid);
     }
 
-    /// 目標地点選択中の表示用マス (目標地点に選べるマスと効果範囲)。目標地点選択中で
-    /// なければ `None`。src-web はこれを塗るだけにする。
+    /// 目標地点選択中 (マップ攻撃 / マップアビリティ) の表示用マス (目標地点に選べるマスと
+    /// 効果範囲)。目標地点選択中でなければ `None`。src-web はこれを塗るだけにする。
     pub fn map_attack_select_tiles(&self) -> Option<crate::scene::map_view::MapAttackTiles> {
-        let crate::command_menu::ActionMode::MapAttackSelect {
-            uid, weapon, point, ..
-        } = &self.action_mode
-        else {
-            return None;
-        };
+        let shape = self.map_select_state()?;
+        let uid = shape.uid.as_str();
         let u = self.database.unit_by_uid(uid)?;
-        let w = self.map_weapon_of(uid, weapon)?;
         let m = self.database.map.as_ref()?;
         let pos = (u.x, u.y);
-        let r = u32::try_from(w.max_range.max(0)).unwrap_or(0);
+        let r = u32::try_from(shape.max.max(0)).unwrap_or(0);
         let mut targets = Vec::new();
-        if map_aim(&w) == MapAim::EmptyTile {
+        if map_aim(&shape.class) == MapAim::EmptyTile {
             // 移動範囲は 1 回だけ求める (マスごとに求め直さない)。
-            let range = self.database.move_action_range(uid, w.max_range);
+            let range = self.database.move_action_range(uid, shape.max);
             targets.extend(
                 range
                     .keys()
@@ -521,14 +607,16 @@ impl App {
         } else {
             for y in pos.1.saturating_sub(r)..=(pos.1 + r).min(m.height.saturating_sub(1)) {
                 for x in pos.0.saturating_sub(r)..=(pos.0 + r).min(m.width.saturating_sub(1)) {
-                    if self.map_attack_target_ok(uid, weapon, (x, y)) {
+                    if self.map_target_ok(uid, &shape, (x, y)) {
                         targets.push((x, y));
                     }
                 }
             }
         }
-        let aim = point.or(self.map_cursor.filter(|c| targets.contains(c)));
-        let area = aim.map_or_else(Vec::new, |t| combat::map_attack_area(&w, pos, t));
+        let aim = shape
+            .point
+            .or(self.map_cursor.filter(|c| targets.contains(c)));
+        let area = aim.map_or_else(Vec::new, |t| shape.area(pos, t));
         Some(crate::scene::map_view::MapAttackTiles { targets, area })
     }
 }

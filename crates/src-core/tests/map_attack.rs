@@ -155,14 +155,16 @@ MapAttack メガキャノン 6 5
 }
 
 #[test]
-fn mapability_alias_works_like_mapattack() {
-    // MapAbility は MapAttack の汎用版 (同じ処理に分岐)。
+fn mapability_does_not_fire_weapons() {
+    // MapAbility はマップアビリティ専用 (`MapAbilityコマンド.md`)。武器名を渡しても
+    // マップ攻撃にはならない。
     let app = run(r#"
 Place "ブレイバー" "リオ" 味方 5 5
 Place "ゾルダII" "ガロ" 敵 6 5
 MapAbility リオ メガキャノン 6 5
 "#);
-    assert_eq!(alive_count(&app, src_core::Party::Enemy), 0);
+    assert_eq!(alive_count(&app, src_core::Party::Enemy), 1);
+    assert_eq!(damage_of(&app, "ガロ"), 0);
 }
 
 #[test]

@@ -329,7 +329,7 @@ fn ability_nouryoku_copy_transforms_caster_with_size_limit() {
     );
 }
 
-/// マップ型アビリティ (Ｍ全) は射程内 (Ｍ全 は盤上全体) の全味方へ効果を及ぼす。
+/// マップ型アビリティ (Ｍ全) は使用者から射程内の全味方へ効果を及ぼす (目標地点は選ばない)。
 #[test]
 fn ability_map_type_heals_all_allies() {
     let mut app = App::new();
@@ -363,6 +363,108 @@ fn ability_map_type_heals_all_allies() {
             .damage;
         assert_eq!(dmg, 0, "Ｍ全 回復で全味方が回復する");
     }
+}
+
+/// 目標地点を選ぶマップアビリティ (`Ｍ投`): メニューから選ぶと目標地点の選択になり、
+/// 目標地点の周りだけに効く (射程内の全味方ではない。原典 `ExecuteMapAbility`)。
+/// 同じ地点をもう一度選ぶと使用し、目標地点は `X(目標地点)` で読める。
+#[test]
+fn ability_map_throw_heals_around_target_point() {
+    use crate::command_menu::{ActionMode, UnitMenuItem};
+    let mut app = App::new();
+    enter_mapview_with_demo_map(&mut app);
+    place_player_unit(&mut app, "Caster", 2, 6);
+    place_player_unit(&mut app, "AllyA", 5, 6);
+    place_player_unit(&mut app, "AllyB", 5, 7);
+    place_player_unit(&mut app, "AllyC", 2, 5);
+    let caster = first_player_uid(&app);
+    let uid_of = |app: &App, name: &str| {
+        app.database()
+            .unit_instances
+            .iter()
+            .find(|u| u.unit_data_name == name)
+            .unwrap()
+            .uid
+            .clone()
+    };
+    let allies = ["AllyA", "AllyB", "AllyC"].map(|n| uid_of(&app, n));
+    for uid in &allies {
+        app.database_mut().unit_by_uid_mut(uid).unwrap().damage = 50;
+    }
+    let mut ab = mk_ability("ヒールショット", "回復Lv1", 4, None);
+    ab.attributes = "Ｍ投L1".into();
+    give_ability(&mut app, "Caster", &caster, ab);
+    app.set_stage_state(crate::stage::StageState::Battle);
+
+    click_tile(&mut app, 2, 6);
+    let mi = match app.command_menu() {
+        Some(crate::CommandMenu::Unit { items, .. }) => items
+            .iter()
+            .position(|i| *i == UnitMenuItem::Ability)
+            .expect("アビリティがメニューに無い")
+            as i32,
+        other => panic!("ユニットメニューが開いていない: {other:?}"),
+    };
+    click_menu_item(&mut app, mi);
+    app.respond_dialog(1);
+    assert!(matches!(
+        app.action_mode(),
+        ActionMode::MapAbilitySelect { point: None, .. }
+    ));
+    click_tile(&mut app, 5, 6);
+    let dmg = |app: &App, uid: &str| app.database().unit_by_uid(uid).unwrap().damage;
+    assert_eq!(dmg(&app, &allies[0]), 50, "仮決めの段階で使っている");
+    click_tile(&mut app, 5, 6);
+    assert_eq!(dmg(&app, &allies[0]), 0, "目標地点の味方が回復していない");
+    assert_eq!(dmg(&app, &allies[1]), 0, "範囲内の味方が回復していない");
+    assert_eq!(
+        dmg(&app, &allies[2]),
+        50,
+        "範囲外 (射程内) の味方まで回復している"
+    );
+    assert!(app.database().unit_by_uid(&caster).unwrap().has_acted);
+    assert_eq!(app.selected_point(), Some((5, 6)));
+}
+
+/// `.eve MapAbility [unit] ability X Y` はマップアビリティを目標地点に使う
+/// (使用条件は問わない)。
+#[test]
+fn mapability_command_uses_map_ability_at_point() {
+    let mut app = App::new();
+    enter_mapview_with_demo_map(&mut app);
+    place_player_unit(&mut app, "Caster", 2, 6);
+    place_player_unit(&mut app, "AllyA", 5, 6);
+    place_player_unit(&mut app, "AllyC", 2, 5);
+    let caster = first_player_uid(&app);
+    let a = app
+        .database()
+        .unit_instances
+        .iter()
+        .find(|u| u.unit_data_name == "AllyA")
+        .unwrap()
+        .uid
+        .clone();
+    let c = app
+        .database()
+        .unit_instances
+        .iter()
+        .find(|u| u.unit_data_name == "AllyC")
+        .unwrap()
+        .uid
+        .clone();
+    for uid in [&a, &c] {
+        app.database_mut().unit_by_uid_mut(uid).unwrap().damage = 50;
+    }
+    let mut ab = mk_ability("ヒールショット", "回復Lv1", 4, None);
+    ab.attributes = "Ｍ投L1".into();
+    ab.morale = Some(150);
+    give_ability(&mut app, "Caster", &caster, ab);
+    // スクリプト座標は 1 始まり: (6, 7) = 内部 (5, 6)。
+    let stmts =
+        crate::data::event::parse(&format!("MapAbility {caster} ヒールショット 6 7\n")).unwrap();
+    crate::event_runtime::execute(&mut app, &stmts).unwrap();
+    assert_eq!(app.database().unit_by_uid(&a).unwrap().damage, 0);
+    assert_eq!(app.database().unit_by_uid(&c).unwrap().damage, 50);
 }
 
 /// 敵対象アビリティ (脱=気力低下 / 除=特殊効果解除) は味方ではなく敵を対象に取る。

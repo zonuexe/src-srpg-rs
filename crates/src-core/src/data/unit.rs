@@ -153,6 +153,24 @@ impl AbilityData {
         }
     }
 
+    /// 最小射程 (原典 `AbilityMinRange`)。アビリティデータの最小射程は 0 で、`小` 属性
+    /// (`小L<n>`) なら n を足す (最大射程まで)。
+    pub fn min_range(&self) -> i32 {
+        let Some(i) = self.attributes.find('小') else {
+            return 0;
+        };
+        let lv: i32 = self.attributes[i + '小'.len_utf8()..]
+            .strip_prefix('L')
+            .map(|r| {
+                r.chars()
+                    .take_while(char::is_ascii_digit)
+                    .collect::<String>()
+            })
+            .and_then(|d| d.parse().ok())
+            .unwrap_or(1);
+        lv.min(self.range.max(0))
+    }
+
     /// 射程 0 (自分のみ / 召喚) で対象選択が不要か。
     pub fn is_self_only(&self) -> bool {
         self.range <= 0
@@ -164,7 +182,7 @@ impl AbilityData {
         self.attributes.contains('Ｍ')
     }
 
-    /// 全体型マップアビリティ (`Ｍ全`)。射程・座標を無視して盤上全体が対象。
+    /// 全体型マップアビリティ (`Ｍ全`)。目標地点を選ばず、使用者から射程内の菱形が効果範囲。
     pub fn is_map_all(&self) -> bool {
         self.attributes.contains("Ｍ全")
     }
