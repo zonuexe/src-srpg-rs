@@ -2024,6 +2024,14 @@ impl App {
         let Some(ud) = self.database.unit_by_name(&u.unit_data_name) else {
             return false;
         };
+        // オプション `対ＮＰＣサポートガード無効`: 味方は ＮＰＣ をかばわない
+        // (ＮＰＣ が味方をかばうのは変わらない)。
+        if u.party == crate::Party::Player
+            && def.party != crate::Party::Player
+            && self.is_script_var_defined("Option(対ＮＰＣサポートガード無効)")
+        {
+            return false;
+        }
         let guard_team = self.main_pilot_team(i);
         if !guard_team.is_empty() && guard_team != self.main_pilot_team(def_idx) {
             return false;

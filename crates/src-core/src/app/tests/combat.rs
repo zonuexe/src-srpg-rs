@@ -4336,6 +4336,58 @@ fn support_guard_machine_only_guarded_by_machine() {
 }
 
 /// 防御側の領域 (空中) に入れないガード役はかばわない。
+/// オプション `対ＮＰＣサポートガード無効`: 味方は ＮＰＣ をかばわなくなる。
+/// ＮＰＣ が味方をかばうのはオプションがあっても変わらない。
+#[test]
+fn support_guard_option_disables_player_guarding_npc() {
+    let (mut app, foe, guard) = setup_support_guard(0, false, None);
+    let hero = first_player_uid(&app);
+    let set_party = |app: &mut App, uid: &str, party: crate::Party| {
+        app.database_mut().unit_by_uid_mut(uid).unwrap().party = party;
+    };
+    let weapon = app
+        .database()
+        .unit_by_name("Hero")
+        .unwrap()
+        .weapons
+        .last()
+        .cloned()
+        .unwrap();
+    let find = |app: &App, def: &str| {
+        let atk_idx = app.database().idx_by_uid(&hero).unwrap();
+        let def_idx = app.database().idx_by_uid(def).unwrap();
+        let expected = app.forecast_strike(atk_idx, def_idx, &weapon).unwrap();
+        app.try_find_support_guard(atk_idx, def_idx, &weapon, &expected, true)
+            .map(|i| app.database().unit_instances[i].uid.clone())
+    };
+    // 敵 (Hero) が ＮＰＣ (Foe) を攻撃し、味方 (Wall) がかばう。
+    set_party(&mut app, &hero, crate::Party::Enemy);
+    set_party(&mut app, &foe, crate::Party::Npc);
+    set_party(&mut app, &guard, crate::Party::Player);
+    assert_eq!(
+        find(&app, &foe),
+        Some(guard.clone()),
+        "前提: 味方が ＮＰＣ をかばう"
+    );
+    app.set_script_var(
+        "Option(対ＮＰＣサポートガード無効)".to_string(),
+        "1".to_string(),
+    );
+    assert_eq!(
+        find(&app, &foe),
+        None,
+        "オプション下で味方が ＮＰＣ をかばった"
+    );
+    // 立場を入れ替えると (ＮＰＣ が味方をかばう) オプションの影響を受けない。
+    set_party(&mut app, &foe, crate::Party::Player);
+    set_party(&mut app, &guard, crate::Party::Npc);
+    assert_eq!(
+        find(&app, &foe),
+        Some(guard.clone()),
+        "ＮＰＣ が味方をかばわなくなった"
+    );
+}
+
 #[test]
 fn support_guard_requires_entering_defender_area() {
     let (mut app, foe, guard) = setup_support_guard(0, false, None);
