@@ -593,51 +593,9 @@ fn fn_area(app: &App, c: &FnCall) -> Option<String> {
     let FnCall { args, .. } = *c;
     // `Area(unit)` — SRC 仕様: "地上"/"空中"/"水上"/"水中"/"宇宙" を返す。
     // SRC.Sharp `Expressions/Functions/Unit/Unit.cs::Area` 同等。
-    // 1) UnitInstance.current_area が空でなければ優先 (`.eve` コマンドで明示設定)。
-    // 2) それ以外は unit の transportation/adaption/features と
-    //    現在地の地形クラスから `movement::unit_area_on_terrain` で推定。
-    // 地形未定義 / マップ範囲外 / ユニット未検出時は空文字。
+    // 推定は `GameDatabase::unit_area`。ユニット未検出時は `None`。
     let u = find_unit(app, args.first().copied().unwrap_or(""))?;
-    if !u.current_area.is_empty() {
-        return Some(u.current_area.clone());
-    }
-    let Some(map) = app.database().map.as_ref() else {
-        return Some(String::new());
-    };
-    if u.x >= map.width || u.y >= map.height {
-        return Some(String::new());
-    }
-    let terrain_id = map.cell(u.x, u.y).terrain_id;
-    let raw_class = app
-        .database()
-        .catalog
-        .terrains
-        .iter()
-        .find(|t| t.id == terrain_id)
-        .map(|t| t.class.clone())
-        .or_else(|| {
-            crate::data::terrain::DEFAULT_TERRAINS
-                .iter()
-                .find(|t| t.id == terrain_id)
-                .map(|t| t.class.to_string())
-        })
-        .unwrap_or_default();
-    // ユニット静的データを引いて area 推定
-    let unit_data_name = u.unit_data_name.clone();
-    let active_feature_names: Vec<String> =
-        u.active_features.iter().map(|f| f.name.clone()).collect();
-    let (transportation, adaption) = app
-        .database()
-        .unit_by_name(&unit_data_name)
-        .map(|ud| (ud.transportation.clone(), ud.adaption.0))
-        .unwrap_or_else(|| ("陸".to_string(), *b"AAAA"));
-    let area = crate::movement::unit_area_on_terrain(
-        &raw_class,
-        &transportation,
-        &adaption,
-        &active_feature_names,
-    );
-    Some(area.to_string())
+    Some(app.database().unit_area(u))
 }
 
 fn fn_distance(app: &App, c: &FnCall) -> Option<String> {

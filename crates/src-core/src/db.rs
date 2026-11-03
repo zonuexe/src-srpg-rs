@@ -349,6 +349,41 @@ impl GameDatabase {
         self.catalog.terrains.iter().find(|t| t.id == id)
     }
 
+    /// 地形 id の地形クラス。シナリオ定義優先、無ければビルトイン、それも無ければ空文字。
+    pub fn terrain_class(&self, id: u32) -> String {
+        if let Some(t) = self.terrain_by_id(id) {
+            return t.class.clone();
+        }
+        crate::data::terrain::DEFAULT_TERRAINS
+            .iter()
+            .find(|t| t.id == id)
+            .map(|t| t.class.to_string())
+            .unwrap_or_default()
+    }
+
+    /// ユニットの領域 (原典 `Unit.Area`: "地上" / "空中" / "水上" / "水中" / "宇宙")。
+    /// `current_area` で上書きされていればそれ、無ければ現在地の地形クラスと移動タイプ・
+    /// 地形適応から推定する。盤面が無い / 範囲外なら空文字。
+    pub fn unit_area(&self, u: &UnitInstance) -> String {
+        if !u.current_area.is_empty() {
+            return u.current_area.clone();
+        }
+        let Some(map) = self.map.as_ref() else {
+            return String::new();
+        };
+        if u.x >= map.width || u.y >= map.height {
+            return String::new();
+        }
+        let class = self.terrain_class(map.cell(u.x, u.y).terrain_id);
+        let features: Vec<String> = u.active_features.iter().map(|f| f.name.clone()).collect();
+        let (transportation, adaption) = self
+            .unit_by_name(&u.unit_data_name)
+            .map(|ud| (ud.transportation.clone(), ud.adaption.0))
+            .unwrap_or_else(|| ("陸".to_string(), *b"AAAA"));
+        crate::movement::unit_area_on_terrain(&class, &transportation, &adaption, &features)
+            .to_string()
+    }
+
     /// 地形 id から移動コストを引く。シナリオ定義優先、無ければビルトイン、それも無ければ 1。
     pub fn terrain_move_cost(&self, id: u32) -> i32 {
         if let Some(t) = self.terrain_by_id(id) {

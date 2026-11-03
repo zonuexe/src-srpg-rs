@@ -239,6 +239,13 @@ pub fn weapon_reaches_env(weapon: &WeaponData, env: i32) -> bool {
         .map_or(true, |&c| c != b'-')
 }
 
+/// 特殊効果属性を持たない武器か (原典 `Unit.IsNormalWeapon`)。
+pub fn is_normal_weapon(class: &str) -> bool {
+    const EFFECTS: &str =
+        "Ｓ縛劣中石凍痺眠乱魅恐踊狂ゾ害憑盲毒撹不止黙除即告脱Ｄ低吹Ｋ引転衰滅盗習写化弱効剋";
+    !class.chars().any(|c| EFFECTS.contains(c))
+}
+
 /// 識別型のマップ兵器 (`識` 属性) か。味方を巻き込まない。
 pub fn is_discriminating_map_weapon(weapon: &WeaponData) -> bool {
     weapon.class.contains('識')
