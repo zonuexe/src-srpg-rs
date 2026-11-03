@@ -590,11 +590,16 @@ impl App {
             }
         }
 
-        // 援護攻撃: 攻撃側と同じ陣営の隣接ユニットで、主パイロットの技能 `援護攻撃` /
-        // `援護` の回数が残っているユニットが、防御側を武器射程内に収めていれば 1 回追撃する。
+        // 援護攻撃: 攻撃側に隣接する味方が防御側を 1 回攻撃する (`look_for_support_attack`)。
         // 援護防御でガード機が除去された場合 atk_idx がずれ得るため uid で引き直す。
+        // 合体技では援護攻撃しない。踊らされているユニットの攻撃も援護しない。
         let support_uid = match (defender_killed, self.database.idx_by_uid(&atk_uid)) {
-            (false, Some(ai)) => self.try_support_attack(ai, def_inst.x, def_inst.y, def_mode),
+            (false, Some(ai))
+                if !weapon.class.contains('合')
+                    && !self.database.unit_instances[ai].has_condition("踊り") =>
+            {
+                self.try_support_attack(ai, def_inst.x, def_inst.y, def_mode)
+            }
             _ => None,
         };
         // 反撃: 防御側が生存しており、攻撃側まで射程内の武器を持っていれば 1 回反撃。
@@ -1711,10 +1716,9 @@ impl App {
         );
     }
 
-    /// `atk_idx` のユニットが (def_x, def_y) を攻撃した直後、同陣営の隣接ユニットで
-    /// サポートアタック特殊能力を持つものから 1 体追撃。残り回数を 1 消費。
-    /// 命中・ダメージは `predict_with_status` のダメージを 75% に減衰させる。
-    /// 戻り値: 援護攻撃を実施したユニットの UID / サポートアタック不能なら `None`。
+    /// `atk_idx` のユニットが (def_x, def_y) を攻撃した直後、`look_for_support_attack` で
+    /// 選んだユニットが `support_attack_weapon` の武器で 1 回援護攻撃し、援護攻撃の使用回数を
+    /// 1 増やす。戻り値: 援護攻撃を実施したユニットの UID / サポートアタック不能なら `None`。
     pub(super) fn try_support_attack(
         &mut self,
         atk_idx: usize,
@@ -1722,44 +1726,18 @@ impl App {
         def_y: u32,
         def_mode: &str,
     ) -> Option<String> {
-        let atk_party = self.database.unit_instances[atk_idx].party;
-        let atk_pos = (
-            self.database.unit_instances[atk_idx].x,
-            self.database.unit_instances[atk_idx].y,
-        );
-        // 隣接した同盟陣営 (味方↔ＮＰＣ 含む) でサポートアタック可能なユニットを探す
-        let supporter_idx = self
-            .database
-            .unit_instances
-            .iter()
-            .enumerate()
-            .find(|(i, u)| {
-                *i != atk_idx
-                    && u.party.is_ally_of(atk_party)
-                    && u.used_support_attack < self.max_support_attack(*i)
-                    && Self::is_adjacent((u.x, u.y), atk_pos)
-            })
-            .map(|(i, _)| i);
-        let sup_idx = supporter_idx?;
-
         let def_idx = self
             .database
             .unit_instances
             .iter()
             .position(|u| u.x == def_x && u.y == def_y)?;
+        let sup_idx = self.look_for_support_attack(atk_idx, def_idx)?;
 
         // 援護攻撃を行うユニットの UID を退避 (戻り値用)
         let sup_uid = self.database.unit_instances[sup_idx].uid.clone();
 
         let (sup_pilot, sup_unit) = self.database.effective_combat_data(sup_idx)?;
-        let dist = combat::manhattan(
-            (
-                self.database.unit_instances[sup_idx].x,
-                self.database.unit_instances[sup_idx].y,
-            ),
-            (def_x, def_y),
-        );
-        let weapon = self.best_firable_weapon_in_range(sup_idx, &sup_unit, dist)?;
+        let weapon = self.support_attack_weapon(sup_idx, def_idx)?;
         // 援護武器の EN・残弾消費 (撃破前=index 失効前に消費)。
         if let Some(wi) = sup_unit.weapons.iter().position(|w| w.name == weapon.name) {
             self.consume_weapon_resources(sup_idx, wi);
@@ -1914,6 +1892,112 @@ impl App {
         let dx = (a.0 as i64 - b.0 as i64).abs();
         let dy = (a.1 as i64 - b.1 as i64).abs();
         dx + dy == 1
+    }
+
+    /// `atk_idx` の `def_idx` への攻撃を援護攻撃するユニットを選ぶ (原典
+    /// `Unit.LookForSupportAttack`)。攻撃側の上下左右に隣接し、援護攻撃の回数が残り、
+    /// このフェイズに行動しておらず、混乱/暴走/恐怖/狂戦士/踊り でないユニットが候補。
+    /// 攻撃側と同じ陣営 (ＮＰＣ は味方の攻撃も援護する) で、チーム (`チーム=名前`) を
+    /// 持つなら攻撃側と同じチームであること。援護に使える武器の攻撃力が最も高い
+    /// ユニットを選ぶ。攻撃側が混乱しているか、同じ陣営どうしの攻撃なら援護しない。
+    pub(super) fn look_for_support_attack(&self, atk_idx: usize, def_idx: usize) -> Option<usize> {
+        use crate::Party;
+        let units = &self.database.unit_instances;
+        let (atk, def) = (&units[atk_idx], &units[def_idx]);
+        if atk.has_condition("混乱") || atk.party == def.party {
+            return None;
+        }
+        let team = self.main_pilot_team(atk_idx);
+        let phase_party = self.turn.phase.party();
+        let mut best: Option<(usize, i64)> = None;
+        for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            let (Some(x), Some(y)) = (atk.x.checked_add_signed(dx), atk.y.checked_add_signed(dy))
+            else {
+                continue;
+            };
+            let Some(i) = self
+                .database
+                .uid_at(x, y)
+                .and_then(|uid| self.database.idx_by_uid(uid))
+            else {
+                continue;
+            };
+            let u = &units[i];
+            // 行動数が残っている (自陣営以外の行動回数はフェイズ開始で戻る)。
+            let acted = u.party == phase_party && u.has_acted;
+            let ally = match u.party {
+                Party::Npc => !matches!(atk.party, Party::Enemy | Party::Neutral),
+                p => p == atk.party,
+            };
+            if u.used_support_attack >= self.max_support_attack(i)
+                || acted
+                || u.attack_disabled()
+                || ["混乱", "暴走", "恐怖", "狂戦士", "踊り"]
+                    .iter()
+                    .any(|c| u.has_condition(c))
+                || !ally
+            {
+                continue;
+            }
+            let uteam = self.main_pilot_team(i);
+            if !uteam.is_empty() && uteam != team {
+                continue;
+            }
+            let Some(w) = self.support_attack_weapon(i, def_idx) else {
+                continue;
+            };
+            if best.map_or(true, |(_, power)| w.power > power) {
+                best = Some((i, w.power));
+            }
+        }
+        best.map(|(i, _)| i)
+    }
+
+    /// `sup_idx` が `def_idx` への援護攻撃に使う武器 (原典 `LookForSupportAttack` の武器の
+    /// 選考)。射程内で今撃てる武器のうち攻撃力が最も高いもの。マップ兵器 (Ｍ) と合体技 (合)
+    /// は使わない。味方 (魅了されていない) は自爆攻撃 (自) を使わず、自動反撃モードでは
+    /// 残弾の少ない武器 (永 を除き残弾 1 か最大弾数 2〜3)・EN 消費が現在 EN の半分か最大 EN の
+    /// 1/4 以上の武器・尽 の武器も使わない。
+    fn support_attack_weapon(
+        &self,
+        sup_idx: usize,
+        def_idx: usize,
+    ) -> Option<crate::data::unit::WeaponData> {
+        let (_, sup_unit) = self.database.effective_combat_data(sup_idx)?;
+        let u = &self.database.unit_instances[sup_idx];
+        let def = &self.database.unit_instances[def_idx];
+        let dist = combat::manhattan((u.x, u.y), (def.x, def.y));
+        let own_player = u.party == crate::Party::Player && u.charm_revert_party.is_none();
+        let max_en = self.database.effective_max_en(u);
+        let en = max_en - u.en_consumed;
+        let scarce = |wi: usize, w: &crate::data::unit::WeaponData| {
+            let bullet = u
+                .weapons
+                .iter()
+                .find(|uw| uw.weapon_index == wi)
+                .map_or(w.bullet, |uw| uw.bullet_remaining);
+            let few_bullets =
+                !w.class.contains('永') && (bullet == 1 || w.bullet == 2 || w.bullet == 3);
+            let costly = w.en_consumption > 0
+                && (w.en_consumption >= en / 2 || w.en_consumption >= max_en / 4);
+            few_bullets || costly || w.class.contains('尽')
+        };
+        sup_unit
+            .weapons
+            .iter()
+            .enumerate()
+            .filter(|(wi, w)| {
+                !combat::is_map_weapon(w)
+                    && !w.class.contains('合')
+                    && (u.charged || !combat::is_charge_weapon(w))
+                    && combat::weapon_in_range(w, dist)
+                    && self.weapon_firable(sup_idx, w)
+                    && !(own_player
+                        && (w.class.contains('自') || (self.auto_counter && scarce(*wi, w))))
+            })
+            .map(|(_, w)| w)
+            .max_by_key(|w| w.power)
+            .cloned()
     }
 
     /// 攻撃を援護防御するガード役を選ぶ (原典 `Unit.Attack` の

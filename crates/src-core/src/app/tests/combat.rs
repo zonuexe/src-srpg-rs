@@ -2977,6 +2977,84 @@ fn support_counts_follow_pilot_skill_level() {
     }
 }
 
+/// 援護攻撃役は原典 `LookForSupportAttack` の条件で選ぶ。候補が複数なら援護に使える武器の
+/// 攻撃力が高いほう。行動済み・混乱・回数切れのユニットは援護しない。味方は自爆攻撃 (自) を
+/// 援護に使わない。
+#[test]
+fn support_attacker_chosen_by_original_rules() {
+    let mut app = App::new();
+    enter_mapview_with_demo_map(&mut app);
+    place_player_unit(&mut app, "Hero", 5, 6);
+    place_player_unit(&mut app, "Weak", 4, 6);
+    place_player_unit(&mut app, "Strong", 5, 7);
+    add_weapon(&mut app, "Weak", 500, 2);
+    add_weapon(&mut app, "Strong", 900, 2);
+    let hero = first_player_uid(&app);
+    let uid_of = |app: &App, name: &str| {
+        app.database()
+            .unit_instances
+            .iter()
+            .find(|u| u.unit_data_name == name)
+            .unwrap()
+            .uid
+            .clone()
+    };
+    let (weak, strong) = (uid_of(&app, "Weak"), uid_of(&app, "Strong"));
+    let foe = spawn_party(&mut app, "Hero", crate::Party::Enemy, 6, 6);
+    for uid in [&weak, &strong] {
+        app.database_mut()
+            .unit_by_uid_mut(uid)
+            .unwrap()
+            .add_condition(crate::Condition::new("援護攻撃", -1));
+    }
+    let pick = |app: &App| {
+        let db = app.database();
+        let (a, d) = (db.idx_by_uid(&hero).unwrap(), db.idx_by_uid(&foe).unwrap());
+        app.look_for_support_attack(a, d)
+            .map(|i| db.unit_instances[i].unit_data_name.clone())
+    };
+    assert_eq!(pick(&app).as_deref(), Some("Strong"));
+    app.database_mut()
+        .unit_by_uid_mut(&strong)
+        .unwrap()
+        .has_acted = true;
+    assert_eq!(pick(&app).as_deref(), Some("Weak"), "行動済みは援護しない");
+    app.database_mut()
+        .unit_by_uid_mut(&strong)
+        .unwrap()
+        .has_acted = false;
+    if let Some(w) = app
+        .database_mut()
+        .catalog
+        .units
+        .iter_mut()
+        .find(|u| u.name == "Strong")
+        .and_then(|u| u.weapons.last_mut())
+    {
+        w.class = "自".into();
+    }
+    assert_eq!(
+        pick(&app).as_deref(),
+        Some("Weak"),
+        "味方は自爆攻撃で援護しない"
+    );
+    app.database_mut()
+        .unit_by_uid_mut(&weak)
+        .unwrap()
+        .add_condition(crate::Condition::new("混乱", -1));
+    assert_eq!(pick(&app), None, "混乱していると援護しない");
+    app.database_mut()
+        .unit_by_uid_mut(&weak)
+        .unwrap()
+        .conditions
+        .retain(|c| c.name != "混乱");
+    app.database_mut()
+        .unit_by_uid_mut(&weak)
+        .unwrap()
+        .used_support_attack = 1;
+    assert_eq!(pick(&app), None, "援護攻撃の回数を使い切ると援護しない");
+}
+
 /// 援護攻撃 (原典 `Attack w2, target, "援護攻撃", def_mode`) も `Unit.Attack` を通るので、
 /// 援護防御を受ける。
 #[test]
