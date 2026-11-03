@@ -656,3 +656,31 @@ ChangeMode ガロ 2 (1 + 2)
     // 陣営指定 (`敵 固定`) の後、ユニット指定の座標モードで上書きする。
     assert_eq!(units[1].ai_mode, "2 3");
 }
+
+/// 回帰: `Font` は指定した属性だけを変え、ほかは今のフォントのまま (原典 `ExecFontCmd`)。
+/// スパロボ戦記の SubTitle は `Font 37pt 色` のあと `Font 色` で白い文字を描くが、以前は
+/// 色だけの `Font` でサイズが 14pt に戻り、ステージ名が小さく描かれていた。
+#[test]
+fn font_keeps_unspecified_attributes() {
+    let src = "Font Ｐ明朝 Bold\nFont Regular\nFont 37pt #505050\nFont #FFFFFF\n";
+    let stmts = event::parse(src).unwrap();
+    let mut app = App::new();
+    execute(&mut app, &stmts).unwrap();
+    let fonts: Vec<(String, u32, String)> = app
+        .script_overlay()
+        .cmds
+        .iter()
+        .filter_map(|c| match c {
+            crate::DrawCmd::SetFont {
+                family,
+                size_pt,
+                color,
+            } => Some((family.clone(), *size_pt, color.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fonts[0].0, "bold Ｐ明朝");
+    // Regular は太字を外すだけで、書体名にはならない。
+    assert_eq!(fonts[1].0, "Ｐ明朝");
+    assert_eq!(fonts[3], ("Ｐ明朝".into(), 37, "#FFFFFF".into()));
+}

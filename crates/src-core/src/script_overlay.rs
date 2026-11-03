@@ -253,6 +253,18 @@ impl ScriptOverlay {
         self.cmds.push(c);
     }
 
+    /// 現在のフォントで `text` を描いたときの幅と高さ (原典 `TextWidth` / `TextHeight`)。
+    /// 文字幅は測れないので、フォントサイズ (描画側は pt をそのまま px として使う) を
+    /// 全角 1 文字の幅、その半分を半角 1 文字の幅とし、高さはサイズの 4/3 とする。
+    pub fn text_size(&self, text: &str) -> (i32, i32) {
+        let size = self.current_font.as_ref().map_or(14, |f| f.1) as i32;
+        let w = text
+            .chars()
+            .map(|ch| if ch.is_ascii() { size / 2 } else { size })
+            .sum();
+        (w, size * 4 / 3)
+    }
+
     /// `BaseX = N` / `BaseY = N` 代入 (script 側からの明示的カーソル設定)。
     pub fn set_cursor(&mut self, x: f64, y: f64) {
         self.cursor_x = x;

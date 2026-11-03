@@ -170,21 +170,10 @@ fn exec_hotpointstring(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     // `HotpointString x y text...` — 文字列を描画しつつ、描いた文字列の矩形を
     // クリック領域として登録する。クリック名はテキストそのもの。原典 SRC には無く、
     // スパロボ戦記 `lib/String.eve` のサブルーチン `HotPointString` と同じ動き
-    // (`-` は `240 - TextWidth / 2`、矩形は `TextWidth` × `TextHeight`)。文字列の大きさは
-    // 現在のフォントサイズから見積もる (半角は全角の半分の幅)。
+    // (`-` は `240 - TextWidth / 2`、矩形は `TextWidth` × `TextHeight`)。
     let a = parse_paintstring_args(xargs);
     if !a.text.is_empty() {
-        let size = app
-            .script_overlay()
-            .current_font
-            .as_ref()
-            .map_or(14, |f| f.1) as i32;
-        let w = a
-            .text
-            .chars()
-            .map(|ch| if ch.is_ascii() { size / 2 } else { size })
-            .sum::<i32>();
-        let h = size + size / 4;
+        let (w, h) = app.script_overlay().text_size(&a.text);
         let x = if a.center_x {
             a.x as i32 - w / 2
         } else {
@@ -303,6 +292,24 @@ fn exec_font(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
             tokens.push(t.to_string());
         }
     }
+    // 引数があれば、指定しなかった属性は今のフォントのまま (原典 `ExecFontCmd` は
+    // picMain のフォントを書き換えるだけ)。引数が無ければ既定値に戻す。
+    if !tokens.is_empty() {
+        if let Some((cur_family, cur_size, cur_color)) = app.script_overlay().current_font.clone() {
+            let mut f = cur_family.as_str();
+            if let Some(rest) = f.strip_prefix("italic ") {
+                style_italic = true;
+                f = rest;
+            }
+            if let Some(rest) = f.strip_prefix("bold ") {
+                style_bold = true;
+                f = rest;
+            }
+            family = f.to_string();
+            size = cur_size;
+            color = cur_color;
+        }
+    }
     for tok in &tokens {
         let t = tok.trim();
         if t.is_empty() {
@@ -337,7 +344,13 @@ fn exec_font(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
                 style_italic = true;
                 continue;
             }
-            "Underline" | "underline" => continue,
+            "Regular" => {
+                style_bold = false;
+                style_italic = false;
+                continue;
+            }
+            // 文字列の描画モード (通常 / 背景 / 保持) はフォントではない。
+            "Underline" | "underline" | "通常" | "背景" | "保持" => continue,
             "黒" | "白" | "赤" | "緑" | "青" | "黄" | "灰" => {
                 color = canonical_color(t);
                 continue;

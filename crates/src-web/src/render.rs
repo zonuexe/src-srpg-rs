@@ -443,6 +443,13 @@ fn draw_script_overlay(
         .then(|| overlay_layer(out))
         .flatten();
     let ctx: &CanvasRenderingContext2d = layer.as_ref().map_or(out, |(_, c)| c);
+    // 原典の描画先はマップウィンドウ (480×480)。はみ出した分 (画面外から滑り込む
+    // 文字列など) は右のステータス欄に描かない。
+    let window = f64::from(TILE_SIZE * VIEW_TILES_X);
+    ctx.save();
+    ctx.begin_path();
+    ctx.rect(0.0, 0.0, window, window);
+    ctx.clip();
     // ペン状態は overlay の永続フィールドから seed する。SRC の ObjColor/ObjFillStyle/
     // ObjFillColor/ObjDrawWidth は ClearPicture を跨いで保持されるため、毎フレーム
     // ClearPicture される戦闘アニメで cmds から SetColor 等が消えても色/塗りが残る
@@ -715,6 +722,7 @@ fn draw_script_overlay(
             }
         }
     }
+    ctx.restore();
     if let Some((canvas, _)) = layer {
         let _ = out.draw_image_with_html_canvas_element(&canvas, 0.0, 0.0);
     }
