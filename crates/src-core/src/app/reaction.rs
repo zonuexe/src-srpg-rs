@@ -333,9 +333,8 @@ impl App {
         target: (u32, u32),
         post_move: bool,
     ) {
-        let names: Vec<String> = self
-            .database
-            .idx_by_uid(&atk_uid)
+        let atk_idx = self.database.idx_by_uid(&atk_uid);
+        let mut names: Vec<String> = atk_idx
             .and_then(|i| self.database.unit_instances.get(i))
             .and_then(|u| self.database.unit_by_name(&u.unit_data_name))
             .map(|d| d.weapons.iter().map(|w| w.name.clone()).collect())
@@ -346,11 +345,20 @@ impl App {
             }
             return;
         }
+        // 援護攻撃してくれるユニットが隣にいれば、武器の下に切り替え行を足す (原典
+        // `WeaponListBox` の `LookForSupportAttack(Nothing)`)。既定は「使用する」。
+        let use_support_attack = atk_idx
+            .and_then(|i| self.look_for_support_attack(i, None))
+            .map(|_| true);
+        if let Some(on) = use_support_attack {
+            names.push(PendingWeaponSelect::support_attack_label(on));
+        }
         self.pending_weapon_select = Some(PendingWeaponSelect {
             atk_uid,
             target,
             post_move,
             counter: None,
+            use_support_attack,
         });
         self.set_pending_dialog(crate::dialog::PendingDialog::Menu {
             prompt: "武器選択".to_string(),
@@ -388,6 +396,7 @@ impl App {
                 main_target,
                 use_support_guard,
             }),
+            use_support_attack: None,
         });
         self.set_pending_dialog(crate::dialog::PendingDialog::Menu {
             prompt: "反撃武器選択".to_string(),
@@ -463,7 +472,26 @@ impl App {
             return false;
         };
         let widx = choice as usize; // 1-based 武器番号
-                                    // 選んだ武器の使用可否を検証 (× 行は無視)。
+        let weapon_count = self
+            .database
+            .effective_combat_data(atk_idx)
+            .map_or(0, |(_, u)| u.weapons.len());
+        if let Some(on) = pws.use_support_attack.filter(|_| widx == weapon_count + 1) {
+            // 援護攻撃の切り替え行: 使用する/しない を入れ替えて窓を継続する。
+            let label = PendingWeaponSelect::support_attack_label(!on);
+            if let Some(crate::dialog::PendingDialog::Menu { options, .. }) =
+                &mut self.pending_dialog
+            {
+                if let Some(last) = options.last_mut() {
+                    *last = label;
+                }
+            }
+            if let Some(p) = self.pending_weapon_select.as_mut() {
+                p.use_support_attack = Some(!on);
+            }
+            return true;
+        }
+        // 選んだ武器の使用可否を検証 (× 行は無視)。
         let usable = self
             .database
             .effective_combat_data(atk_idx)
@@ -495,7 +523,9 @@ impl App {
         // 通常攻撃: 選んだ武器を固定して攻撃 (1回限り; 終了後に W キー設定へ戻す)。
         let prev = self.selected_weapon_idx;
         self.selected_weapon_idx = widx;
+        self.support_attack_declined = pws.use_support_attack == Some(false);
         let attacked = self.attack_unit_at(&pws.atk_uid, pws.target, pws.post_move);
+        self.support_attack_declined = false;
         self.selected_weapon_idx = prev;
         if attacked {
             self.finish_player_attack(&pws.atk_uid);

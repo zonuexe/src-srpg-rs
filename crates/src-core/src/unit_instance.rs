@@ -128,14 +128,18 @@ pub struct UnitInstance {
     /// そのまま使用するフォールバック。`Some(0)` だと SP 系コマンドは不発。
     #[serde(default)]
     pub sp_consumed: i32,
-    /// 当ターン残り援護攻撃回数。0 だとサポートアタックは発動しない。
-    /// `begin_phase` で `default_support_attack` 値にリセット。
-    #[serde(default = "default_support_attack")]
-    pub support_attack_remaining: i32,
-    /// 当ターン残り援護防御回数。0 だとサポートガードは発動しない。
-    /// `begin_phase` で 1 にリセット。
-    #[serde(default = "default_support_guard")]
-    pub support_guard_remaining: i32,
+    /// 当ターン使用済みサポートアタック回数 (原典 `UsedSupportAttack`)。主パイロットの
+    /// 技能 `援護攻撃` / `援護` のレベル回まで援護攻撃できる。自陣営のフェイズ開始で 0。
+    #[serde(default)]
+    pub used_support_attack: i32,
+    /// 当ターン使用済みサポートガード回数 (原典 `UsedSupportGuard`)。主パイロットの
+    /// 技能 `援護防御` / `援護` のレベル回まで援護防御できる。自陣営のフェイズ開始で 0。
+    #[serde(default)]
+    pub used_support_guard: i32,
+    /// 当ターン使用済み同時援護攻撃回数 (原典 `UsedSyncAttack`)。主パイロットの技能
+    /// `統率` のレベル回まで、援護攻撃が同時援護攻撃になる。自陣営のフェイズ開始で 0。
+    #[serde(default)]
+    pub used_sync_attack: i32,
     /// 当ターン使用済みカウンター (先制反撃) 回数。`カウンター` 技能 Lv 回まで先制反撃でき、
     /// 攻撃を受けるたびに加算する。`begin_phase` で 0 にリセット (SRC `UsedCounterAttack`)。
     #[serde(default)]
@@ -248,14 +252,6 @@ impl UnitInstance {
     }
 }
 
-fn default_support_attack() -> i32 {
-    1
-}
-
-fn default_support_guard() -> i32 {
-    1
-}
-
 fn default_morale() -> i32 {
     100
 }
@@ -285,8 +281,9 @@ impl UnitInstance {
             has_acted: false,
             has_moved: false,
             sp_consumed: 0,
-            support_attack_remaining: default_support_attack(),
-            support_guard_remaining: default_support_guard(),
+            used_support_attack: 0,
+            used_support_guard: 0,
+            used_sync_attack: 0,
             used_counter_attack: 0,
             off_map: false,
             life_state: String::new(),

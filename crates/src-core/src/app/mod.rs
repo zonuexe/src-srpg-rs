@@ -107,12 +107,27 @@ pub(crate) struct PendingWeaponSelect {
     pub(crate) post_move: bool,
     /// `Some` なら反撃武器選択。選択後に主攻撃を `def_mode="反撃"` で解決する。
     counter: Option<CounterCtx>,
+    /// 武器行の下の「援護攻撃：使用する/しない」切り替え行 (原典 `WeaponListBox`)。
+    /// 援護攻撃してくれるユニットが隣にいるときだけ `Some(使用するか)`。
+    pub(crate) use_support_attack: Option<bool>,
 }
 
 impl PendingWeaponSelect {
     /// 反撃武器の選択か (主攻撃の反撃手段で「反撃」を選んだ後)。
     pub(crate) fn is_counter(&self) -> bool {
         self.counter.is_some()
+    }
+
+    /// 援護攻撃の切り替え行の表示名。
+    pub(crate) fn support_attack_label(use_support_attack: bool) -> String {
+        format!(
+            "援護攻撃：{}",
+            if use_support_attack {
+                "使用する"
+            } else {
+                "使用しない"
+            }
+        )
     }
 }
 
@@ -404,6 +419,10 @@ pub struct App {
     /// その攻撃の解決中だけ立てる。transient。
     #[serde(skip)]
     support_guard_declined: bool,
+    /// 武器選択で「援護攻撃：使用しない」を選んだ (原典 `UseSupportAttack = False`)。
+    /// その攻撃の解決中だけ立てる。transient。
+    #[serde(skip)]
+    support_attack_declined: bool,
     /// 精神コマンドのサブメニュー選択待ち文脈 (Some のとき発動待ち)。transient。
     #[serde(skip)]
     pending_spirit: Option<PendingSpirit>,
@@ -775,6 +794,7 @@ impl App {
             pending_weapon_select: None,
             forced_counter_weapon: None,
             support_guard_declined: false,
+            support_attack_declined: false,
             pending_spirit: None,
             pending_transform: None,
             pending_ability: None,

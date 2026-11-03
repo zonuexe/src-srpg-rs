@@ -1732,6 +1732,18 @@ fn draw_weapon_select_window(
         let _ = ctx.fill_text(&ct, col_ct, mid);
         let _ = ctx.fill_text(&r.ammo, col_ammo, mid);
     }
+    // 武器行の次: 援護攻撃の使用/不使用の切り替え行 (原典 `WeaponListBox`)。
+    if let Some(on) = data.support_attack.filter(|_| data.rows.len() < 9) {
+        let mid = row_top + data.rows.len() as f64 * WEAPON_ROW_H + WEAPON_ROW_H / 2.0;
+        ctx.set_fill_style_str("#13409a");
+        ctx.set_text_align("left");
+        let label = if on {
+            " 援護攻撃：使用する"
+        } else {
+            " 援護攻撃：使用しない"
+        };
+        let _ = ctx.fill_text(label, col_name, mid);
+    }
 
     ctx.set_text_align("right");
     ctx.set_text_baseline("bottom");
