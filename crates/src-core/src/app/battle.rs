@@ -904,13 +904,21 @@ impl App {
             } else {
                 applied_damage
             };
-        // 切り払い: 格闘系の攻撃を防御側が確率で無効化する (攻撃側 直撃 で無効化されない)。
+        // 切り払い: 格闘系の攻撃を受け手が確率で無効化する (攻撃側 直撃 で無効化されない)。
+        // 原典 `Unit.Attack` は回避判定の後で みがわり の身代わりを攻撃対象に差し替えてから
+        // `CheckParryFeature` を呼ぶので、身代わりが居れば切り払うのは身代わりのほう。
         let atk_has_chokugeki = atk_statuses.iter().any(|s| s.contains("直撃"));
-        let parried = hit && !atk_has_chokugeki && self.roll_parry(atk_idx, def_idx, &weapon.class);
+        let parrier = self.migawari_sub_idx(def_idx).unwrap_or(def_idx);
+        let parried = hit && !atk_has_chokugeki && self.roll_parry(atk_idx, parrier, &weapon.class);
         if parried {
+            let parrier_nick = if parrier == def_idx {
+                def_pilot.nickname.clone()
+            } else {
+                self.unit_nickname(parrier)
+            };
             self.push_message(format!(
                 "{} は {} の [{}] を切り払った！",
-                def_pilot.nickname, atk_pilot.nickname, weapon.name
+                parrier_nick, atk_pilot.nickname, weapon.name
             ));
         }
         let applied_damage = if parried { 0 } else { applied_damage };
@@ -1021,6 +1029,22 @@ impl App {
             self.push_message(format!(
                 "{} の [{}] を {} は回避した",
                 atk_pilot.nickname, weapon.name, def_pilot.nickname
+            ));
+            return;
+        }
+        // みがわり は原典 `Unit.Attack` でイベント戦闘 (`is_event`) の判定より前に
+        // 調べられるので、`Attack` コマンドの戦闘でも身代わりが肩代わりする。
+        if let Some(sub) = self.apply_migawari(
+            def_idx,
+            atk_idx,
+            &weapon,
+            StrikeKind::Main,
+            strike.critical,
+            strike.parried,
+        ) {
+            self.push_message(format!(
+                "みがわり: {} が {} の身代わりになった！ [{}]",
+                sub, def_pilot.nickname, weapon.name
             ));
             return;
         }
@@ -1194,16 +1218,38 @@ impl App {
             && !crate::feature::has_feature(&u.active_features, "防御不可")
     }
 
+    /// 防御側 `def_idx` に掛かった `みがわり` の身代わりユニット (盤上に居り、防御側自身で
+    /// ないもの)。condition は消費しない。
+    fn migawari_sub_idx(&self, def_idx: usize) -> Option<usize> {
+        let sub_uid = self.database.unit_instances[def_idx]
+            .conditions
+            .iter()
+            .find(|c| c.name == "みがわり" && !c.data.is_empty())
+            .map(|c| c.data.as_str())?;
+        self.database
+            .idx_by_uid(sub_uid)
+            .filter(|&i| i != def_idx && !self.database.unit_instances[i].off_map)
+    }
+
+    /// ユニット `idx` のパイロットの愛称 (パイロットが引けなければユニット名)。
+    fn unit_nickname(&self, idx: usize) -> String {
+        let u = &self.database.unit_instances[idx];
+        self.database
+            .pilot_by_name(&u.pilot_name)
+            .map(|p| p.nickname.clone())
+            .unwrap_or_else(|| u.unit_data_name.clone())
+    }
+
     /// みがわり (身代わり, SRC `Unit.cls:14855`): 防御側 `def_idx` が `みがわり` condition
     /// (data=身代わりユニット uid) を持つとき、攻撃を身代わりユニットへ **1 回だけ**
     /// 肩代わりさせる。肩代わりが成立したら身代わりユニットの愛称を返し condition を
-    /// 消費する。身代わりが盤上に居ない / 防御側自身 / 防御側が切り払った なら `None`
-    /// (通常処理)。
+    /// 消費する。身代わりが盤上に居ない / 防御側自身 なら `None` (通常処理)。
     ///
     /// 原典どおり身代わりを新しい攻撃対象としてダメージを計算し直し (`Damage(w, su)`、
     /// クリティカルなら 1.5 倍)、常に防御扱いで半減する。そのうえで身代わり自身の
     /// 防御特性・バリア・フィールド・シールド・不死身を適用し、HP0 なら (復活が無ければ)
-    /// 撃破・破壊イベント発火・勝敗判定まで処理する。
+    /// 撃破・破壊イベント発火・勝敗判定まで処理する。身代わりが切り払った (`parried`、
+    /// 判定は `resolve_strike` が身代わりに対して行う) ならダメージは無い。
     fn apply_migawari(
         &mut self,
         def_idx: usize,
@@ -1213,22 +1259,14 @@ impl App {
         critical: bool,
         parried: bool,
     ) -> Option<String> {
-        if parried {
-            return None;
-        }
-        let sub_uid = self.database.unit_instances[def_idx]
-            .conditions
-            .iter()
-            .find(|c| c.name == "みがわり" && !c.data.is_empty())
-            .map(|c| c.data.clone())?;
-        let sub_idx = self
-            .database
-            .idx_by_uid(&sub_uid)
-            .filter(|&i| i != def_idx && !self.database.unit_instances[i].off_map)?;
+        let sub_idx = self.migawari_sub_idx(def_idx)?;
         // condition を消費（1 回限り）。
         self.database.unit_instances[def_idx]
             .conditions
             .retain(|c| c.name != "みがわり");
+        if parried {
+            return Some(self.unit_nickname(sub_idx));
+        }
         // 身代わりを対象にダメージを計算し直す。
         let dmg = self
             .forecast_strike_as(atk_idx, sub_idx, weapon, kind)
@@ -1249,11 +1287,7 @@ impl App {
         let dmg = self.apply_shield_defense(sub_idx, &weapon.class, dmg);
         let dmg = self.cap_damage_for_immortal(sub_idx, sub_max_hp, dmg);
         let sub_name = self.database.unit_instances[sub_idx].unit_data_name.clone();
-        let sub_nick = self
-            .database
-            .pilot_by_name(&self.database.unit_instances[sub_idx].pilot_name)
-            .map(|p| p.nickname.clone())
-            .unwrap_or_else(|| sub_name.clone());
+        let sub_nick = self.unit_nickname(sub_idx);
         // 吸収 (負のダメージ) は回復として扱い、損傷は 0 未満にしない。
         let sub_dmg = &mut self.database.unit_instances[sub_idx].damage;
         *sub_dmg = (*sub_dmg + dmg).max(0);
