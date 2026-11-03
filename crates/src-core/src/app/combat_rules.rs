@@ -317,6 +317,41 @@ impl App {
             .unwrap_or(0)
     }
 
+    /// 主パイロットの技能 `skill` のレベル (原典 `Pilot.SkillLevel`)。`unit_pilot_skill_level`
+    /// と違い技能名は完全一致で、`援護` を引いても `援護攻撃` / `援護防御` には当たらない。
+    /// パイロットの技能・パイロットデータの特殊能力・`付加` でユニットに付いた状態を見て、
+    /// いちばん高いレベルを返す (`Lv` 表記が無ければ 1、技能が無ければ 0)。
+    pub(super) fn main_pilot_skill_level(&self, idx: usize, skill: &str) -> i32 {
+        let u = &self.database.unit_instances[idx];
+        let inst = u
+            .pilot_ids
+            .first()
+            .and_then(|id| self.database.pilot_instance_by_id(id));
+        let data = self.database.pilot_by_name(&u.pilot_name);
+        inst.into_iter()
+            .flat_map(|p| p.skills.iter().map(String::as_str))
+            .chain(
+                data.into_iter()
+                    .flat_map(|p| p.features.iter().map(|(n, _)| n.as_str())),
+            )
+            .chain(u.conditions.iter().map(|c| c.name.as_str()))
+            .filter_map(|name| exact_skill_level(name, skill))
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// サポートアタックできる回数 (原典 `MaxSupportAttack`: 技能 `援護攻撃` / `援護`)。
+    pub(super) fn max_support_attack(&self, idx: usize) -> i32 {
+        self.main_pilot_skill_level(idx, "援護攻撃")
+            .max(self.main_pilot_skill_level(idx, "援護"))
+    }
+
+    /// サポートガードできる回数 (原典 `MaxSupportGuard`: 技能 `援護防御` / `援護`)。
+    pub(super) fn max_support_guard(&self, idx: usize) -> i32 {
+        self.main_pilot_skill_level(idx, "援護防御")
+            .max(self.main_pilot_skill_level(idx, "援護"))
+    }
+
     /// 撃破者のメインパイロットの撃墜数を +1 する (SRC `Pilot.Kills`)。撃墜数は
     /// パイロット用特殊能力として扱われ (`撃墜数LvN`)、`(撃墜数Lv20)` 等の必要技能
     /// ゲートが読む。これにより「規定数撃墜でエース専用武器が解禁される」原典の挙動を再現。
@@ -1074,5 +1109,29 @@ impl App {
                 party,
             );
         }
+    }
+}
+
+/// 技能名 `name` (`援護攻撃Lv2` / `援護攻撃` など) が技能 `skill` ならそのレベルを返す。
+/// 名前は `skill` そのものか、`skill` に `Lv<n>` が続く形のときだけ一致とみなす。
+fn exact_skill_level(name: &str, skill: &str) -> Option<i32> {
+    let rest = name.strip_prefix(skill)?;
+    if rest.is_empty() {
+        return Some(1);
+    }
+    rest.strip_prefix("Lv")?.parse().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::exact_skill_level;
+
+    #[test]
+    fn exact_skill_level_matches_whole_skill_name_only() {
+        assert_eq!(exact_skill_level("援護", "援護"), Some(1));
+        assert_eq!(exact_skill_level("援護Lv3", "援護"), Some(3));
+        assert_eq!(exact_skill_level("援護攻撃Lv2", "援護"), None);
+        assert_eq!(exact_skill_level("援護攻撃Lv2", "援護攻撃"), Some(2));
+        assert_eq!(exact_skill_level("援護防御", "援護攻撃"), None);
     }
 }

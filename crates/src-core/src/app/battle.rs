@@ -378,7 +378,7 @@ impl App {
             } else if let Some(g_idx) = guard_idx {
                 // 援護防御: ガード役を攻撃対象としてダメージを計算し直し、防御扱いで受ける
                 // (切り払いは `resolve_strike` がガード役に対して判定済み)。
-                self.database.unit_instances[g_idx].support_guard_remaining -= 1;
+                self.database.unit_instances[g_idx].used_support_guard += 1;
                 let cover = self.strike_cover(
                     g_idx,
                     def_idx,
@@ -590,9 +590,8 @@ impl App {
             }
         }
 
-        // 援護攻撃: 攻撃側と同じ陣営の隣接ユニットで `support_attack_remaining > 0`
-        // かつ "サポートアタック" / "援護攻撃" 特殊能力を持つユニットが、防御側を
-        // 武器射程内に収めていれば 1 回追撃する。
+        // 援護攻撃: 攻撃側と同じ陣営の隣接ユニットで、主パイロットの技能 `援護攻撃` /
+        // `援護` の回数が残っているユニットが、防御側を武器射程内に収めていれば 1 回追撃する。
         // 援護防御でガード機が除去された場合 atk_idx がずれ得るため uid で引き直す。
         let support_uid = match (defender_killed, self.database.idx_by_uid(&atk_uid)) {
             (false, Some(ai)) => self.try_support_attack(ai, def_inst.x, def_inst.y, def_mode),
@@ -1737,11 +1736,8 @@ impl App {
             .find(|(i, u)| {
                 *i != atk_idx
                     && u.party.is_ally_of(atk_party)
-                    && u.support_attack_remaining > 0
+                    && u.used_support_attack < self.max_support_attack(*i)
                     && Self::is_adjacent((u.x, u.y), atk_pos)
-                    && u.conditions
-                        .iter()
-                        .any(|c| c.name.contains("サポートアタック") || c.name.contains("援護攻撃"))
             })
             .map(|(i, _)| i);
         let sup_idx = supporter_idx?;
@@ -1802,12 +1798,11 @@ impl App {
             StrikeKind::Support,
             guard_idx,
         );
-        // SP コスト消費 (= サポートアタック回数を 1 減らす)
-        self.database.unit_instances[sup_idx].support_attack_remaining -= 1;
+        self.database.unit_instances[sup_idx].used_support_attack += 1;
         if let Some(g_idx) = guard_idx.filter(|_| strike.hit) {
             if self.migawari_sub_idx(def_idx).is_none() {
                 // 援護防御: ガード役が攻撃対象に差し替わり、防御側は何も受けない。
-                self.database.unit_instances[g_idx].support_guard_remaining -= 1;
+                self.database.unit_instances[g_idx].used_support_guard += 1;
                 let cover = self.strike_cover(
                     g_idx,
                     def_idx,
@@ -2030,8 +2025,8 @@ impl App {
     }
 
     /// `i` のユニットが `def_idx` を援護防御できるか (ダメージに依らない条件。原典
-    /// `LookForSupportGuard`): 隣接する盤上の同盟ユニットで、援護防御能力と残回数があり、
-    /// 行動可能で、`サポートガード不能` の精神コマンド下になく、混乱/暴走/恐怖/狂戦士でない。
+    /// `LookForSupportGuard`): 隣接する盤上の同盟ユニットで、主パイロットの技能
+    /// `援護防御` / `援護` のレベル回をこのターンにまだ使い切っておらず、行動可能で、`サポートガード不能` の精神コマンド下になく、混乱/暴走/恐怖/狂戦士でない。
     /// チーム (`チーム=名前`) が違えばかばわない (チームを持たないユニットは誰でもかばう)。
     /// 防御側の領域 (空中/地上/水中/宇宙) に入れないならかばわない。機械は機械だけがかばう。
     fn support_guard_candidate(&self, def_idx: usize, i: usize) -> bool {
@@ -2041,8 +2036,7 @@ impl App {
             || u.off_map
             || !u.party.is_ally_of(def.party)
             || !Self::is_adjacent((u.x, u.y), (def.x, def.y))
-            || u.support_guard_remaining <= 0
-            || !has_support_guard_ability(u)
+            || u.used_support_guard >= self.max_support_guard(i)
             || u.attack_disabled()
             || self.unit_under_spirit_effect(i, "サポートガード不能")
             || ["混乱", "暴走", "恐怖", "狂戦士"]
@@ -2422,13 +2416,4 @@ impl App {
                     .is_some_and(|d| d.weapons.iter().any(|w| w.class.contains('Ｍ')))
         })
     }
-}
-
-/// 援護防御能力 (状態 / 特殊能力の `サポートガード` / `援護防御` / `援護`) を持つか。
-fn has_support_guard_ability(u: &crate::UnitInstance) -> bool {
-    let is_guard = |n: &str| n.contains("サポートガード") || n.contains("援護防御") || n == "援護";
-    u.conditions.iter().any(|c| is_guard(&c.name))
-        || u.active_features
-            .iter()
-            .any(|f| f.is_active && is_guard(&f.name))
 }

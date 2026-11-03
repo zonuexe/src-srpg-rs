@@ -1788,7 +1788,7 @@ fn support_attack_procs_weapon_special_effect() {
     app.database_mut()
         .unit_by_uid_mut(&sup)
         .unwrap()
-        .add_condition(crate::Condition::new("サポートアタック", -1));
+        .add_condition(crate::Condition::new("援護攻撃", -1));
     app.database_mut()
         .unit_by_uid_mut(&sup)
         .unwrap()
@@ -1855,7 +1855,7 @@ fn support_attack_damage_follows_original_rules() {
             .unwrap()
             .uid
             .clone();
-        for c in ["サポートアタック", "必中"].into_iter().chain(extra) {
+        for c in ["援護攻撃", "必中"].into_iter().chain(extra) {
             app.database_mut()
                 .unit_by_uid_mut(&sup)
                 .unwrap()
@@ -2831,8 +2831,7 @@ fn support_guard_reaction_option_offered_only_when_available() {
                 .iter_mut()
                 .find(|u| u.unit_data_name == "Guard")
                 .unwrap();
-            g.add_condition(crate::condition::Condition::new("サポートガード", 9));
-            g.support_guard_remaining = 1;
+            g.add_condition(crate::condition::Condition::new("援護防御", 9));
         }
         place_player_unit(&mut app, "Foe", 9, 9);
         add_weapon(&mut app, "Foe", 50, 1);
@@ -2888,8 +2887,7 @@ fn support_guard_uses_effective_max_hp() {
     let base_hp = app.database().unit_by_name("Foe").unwrap().hp;
     {
         let g = app.database_mut().unit_by_uid_mut(&guid).unwrap();
-        g.add_condition(crate::condition::Condition::new("サポートガード", 9));
-        g.support_guard_remaining = 1;
+        g.add_condition(crate::condition::Condition::new("援護防御", 9));
         // 基本 HP ではほぼ瀕死だが、改造 5 段階で実効 HP には十分な余裕がある。
         g.damage = base_hp - 1;
         g.upgrade_level = 5;
@@ -2955,6 +2953,30 @@ fn support_guard_applies_regardless_of_reaction_choice() {
     );
 }
 
+/// 援護攻撃・援護防御の回数は主パイロットの技能のレベル (原典 `MaxSupportAttack` /
+/// `MaxSupportGuard`)。`援護` は両方に効き、`援護攻撃` を持っていても援護防御はできない。
+#[test]
+fn support_counts_follow_pilot_skill_level() {
+    let mut app = App::new();
+    enter_mapview_with_demo_map(&mut app);
+    place_player_unit(&mut app, "Hero", 5, 6);
+    let hero = first_player_uid(&app);
+    let idx = app.database().idx_by_uid(&hero).unwrap();
+    let counts = |app: &App| (app.max_support_attack(idx), app.max_support_guard(idx));
+    assert_eq!(counts(&app), (0, 0));
+    for (skill, want) in [
+        ("援護攻撃Lv2", (2, 0)),
+        ("援護", (2, 1)),
+        ("援護防御Lv3", (2, 3)),
+    ] {
+        app.database_mut()
+            .unit_by_uid_mut(&hero)
+            .unwrap()
+            .add_condition(crate::Condition::new(skill, -1));
+        assert_eq!(counts(&app), want, "{skill} を足したあと");
+    }
+}
+
 /// 援護攻撃 (原典 `Attack w2, target, "援護攻撃", def_mode`) も `Unit.Attack` を通るので、
 /// 援護防御を受ける。
 #[test]
@@ -2964,13 +2986,12 @@ fn support_guard_covers_support_attack() {
     let sup = spawn_party(&mut app, "Hero", crate::Party::Player, 5, 7);
     {
         let s = app.database_mut().unit_by_uid_mut(&sup).unwrap();
-        s.add_condition(crate::Condition::new("サポートアタック", -1));
+        s.add_condition(crate::Condition::new("援護攻撃", -1));
         s.add_condition(crate::Condition::new("必中", -1));
-        s.support_attack_remaining = 1;
     }
     {
         let g = app.database_mut().unit_by_uid_mut(&guard).unwrap();
-        g.support_guard_remaining = 2;
+        g.add_condition(crate::Condition::new("援護防御Lv2", -1));
     }
     // 援護役 (5,7) から防御側 (6,6) までは距離 2。
     if let Some(w) = app
@@ -2995,7 +3016,7 @@ fn support_guard_covers_support_attack() {
         db.unit_by_uid(&guard).unwrap().damage > 0,
         "援護攻撃をガード役がかばっていない"
     );
-    assert_eq!(db.unit_by_uid(&guard).unwrap().support_guard_remaining, 1);
+    assert_eq!(db.unit_by_uid(&guard).unwrap().used_support_guard, 1);
 }
 
 #[test]
@@ -3233,8 +3254,7 @@ fn support_attack_fires_when_adjacent_supporter_has_status() {
         7,
     ));
     // サポーターに能力付与
-    app.database_mut().unit_instances[1]
-        .add_condition(crate::Condition::new("サポートアタック", -1));
+    app.database_mut().unit_instances[1].add_condition(crate::Condition::new("援護攻撃", -1));
     app.set_stage_state(crate::stage::StageState::Battle);
     // Player ユニット (Hero) に攻撃用武器を持たせる
     app.database_mut().catalog.units[0]
@@ -3267,15 +3287,15 @@ fn support_attack_fires_when_adjacent_supporter_has_status() {
     let damaged_or_dead = enemy.map(|u| u.damage > 0).unwrap_or(true);
     assert!(damaged_or_dead, "expected enemy hit");
     // サポーターの残りサポート攻撃が 0 になっていること (使った場合)
-    // ※本攻撃でミス → サポートアタック発動 (1→0) のケース、
-    // 　本攻撃で撃破 → サポートアタック発動せず (1 のまま) のケース、両方許容。
+    // ※本攻撃でミス → サポートアタック発動 (使用回数 0→1) のケース、
+    // 　本攻撃で撃破 → サポートアタック発動せず (0 のまま) のケース、両方許容。
     let sup = app
         .database()
         .unit_instances
         .iter()
         .find(|u| u.unit_data_name == "Supporter")
         .unwrap();
-    assert!(sup.support_attack_remaining <= 1);
+    assert!(sup.used_support_attack <= 1);
 }
 
 #[test]
@@ -3297,7 +3317,7 @@ fn support_guard_fires_during_enemy_phase() {
             .iter_mut()
             .find(|u| u.unit_data_name == "Guard")
             .unwrap();
-        guard.add_condition(crate::Condition::new("サポートガード", -1));
+        guard.add_condition(crate::Condition::new("援護防御", -1));
     }
     // 敵ユニット (2, 6): Target に隣接、武器あり、必中
     app.database_mut().register_unit(crate::UnitInstance::new(
@@ -3376,7 +3396,7 @@ fn chokugeki_disables_support_guard() {
         .iter_mut()
         .find(|u| u.unit_data_name == "Guard")
         .unwrap()
-        .add_condition(crate::Condition::new("サポートガード", -1));
+        .add_condition(crate::Condition::new("援護防御", -1));
     app.database_mut().register_unit(crate::UnitInstance::new(
         "Target",
         "PILOT",
@@ -4158,8 +4178,7 @@ fn setup_support_guard(
     ));
     {
         let g = app.database_mut().unit_by_uid_mut(&guard).unwrap();
-        g.add_condition(crate::Condition::new("サポートガード", 9));
-        g.support_guard_remaining = 1;
+        g.add_condition(crate::Condition::new("援護防御", 9));
     }
     if let Some(who) = parrier {
         let uid = if who == "Foe" { &foe } else { &guard };
@@ -4279,8 +4298,8 @@ fn support_guard_parries_as_the_guard() {
     );
     assert_eq!(db.unit_by_uid(&foe).unwrap().damage, 0, "防御側が被弾した");
     assert_eq!(
-        db.unit_by_uid(&guard).unwrap().support_guard_remaining,
-        0,
+        db.unit_by_uid(&guard).unwrap().used_support_guard,
+        1,
         "切り払っても援護防御の回数は使う"
     );
 

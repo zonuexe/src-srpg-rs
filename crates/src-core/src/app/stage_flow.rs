@@ -340,9 +340,10 @@ impl App {
             if u.party == party {
                 u.has_acted = false;
                 u.has_moved = false;
-                // サポートアタック / サポートガード回数は毎フェイズ 1 リセット
-                u.support_attack_remaining = 1;
-                u.support_guard_remaining = 1;
+                // サポートアタック / サポートガードの使用回数は自陣営のフェイズ開始で戻る
+                // (原典 `Unit.Rest`)。
+                u.used_support_attack = 0;
+                u.used_support_guard = 0;
                 // カウンター (先制反撃) 使用回数も毎フェイズ 0 リセット (SRC UsedCounterAttack)。
                 u.used_counter_attack = 0;
             }
