@@ -328,6 +328,15 @@ impl App {
             }
         }
 
+        // 援護攻撃役は本線攻撃の前に決める (原典 `LookForSupportAttack`)。合体技では
+        // 援護攻撃しない。踊らされているユニットの攻撃も援護しない。
+        let supporter_uid = (!is_reattack
+            && !weapon.class.contains('合')
+            && !self.database.unit_instances[atk_idx].has_condition("踊り"))
+        .then(|| self.look_for_support_attack(atk_idx, def_idx))
+        .flatten()
+        .map(|i| self.database.unit_instances[i].uid.clone());
+
         let setup = StrikeSetup {
             atk_pilot: &atk_pilot,
             atk_unit: &atk_unit,
@@ -590,22 +599,11 @@ impl App {
             }
         }
 
-        // 援護攻撃: 攻撃側に隣接する味方が防御側を 1 回攻撃する (`look_for_support_attack`)。
-        // 援護防御でガード機が除去された場合 atk_idx がずれ得るため uid で引き直す。
-        // 合体技では援護攻撃しない。踊らされているユニットの攻撃も援護しない。
-        let support_uid = match (defender_killed, self.database.idx_by_uid(&atk_uid)) {
-            (false, Some(ai))
-                if !weapon.class.contains('合')
-                    && !self.database.unit_instances[ai].has_condition("踊り") =>
-            {
-                self.try_support_attack(ai, def_inst.x, def_inst.y, def_mode)
-            }
-            _ => None,
-        };
         // 反撃: 防御側が生存しており、攻撃側まで射程内の武器を持っていれば 1 回反撃。
         // ただし回避/防御を選んだ場合は反撃しない (SRC 反撃モード)。反撃 or 自動("")のみ。
         // 先制反撃 (preempted) 済みなら主攻撃後の通常反撃は行わない (SRC: def_mode="先制攻撃")。
-        let allow_counter = !preempted && def_mode != "回避" && def_mode != "防御";
+        // 再攻撃は原典では `Unit.Attack` の中の繰り返しなので、反撃・援護攻撃は 1 回目だけ。
+        let allow_counter = !is_reattack && !preempted && def_mode != "回避" && def_mode != "防御";
         let still_alive_def = self
             .database
             .unit_instances
@@ -615,6 +613,24 @@ impl App {
             self.try_counterattack(def_inst.x, def_inst.y, (cx, cy))
         } else {
             None
+        };
+        // 援護攻撃は反撃のあと (原典 `Command.bas`)。攻撃側・防御側・援護役のどれかが
+        // 倒れていれば行わない。援護防御・反撃でユニットが除去され得るので uid で引き直す。
+        let support_uid = if defender_killed {
+            None
+        } else {
+            match supporter_uid.as_deref().map(|uid| {
+                (
+                    self.database.idx_by_uid(&atk_uid),
+                    self.database.idx_by_uid(uid),
+                    self.database.idx_by_uid(&def_inst.uid),
+                )
+            }) {
+                Some((Some(ai), Some(si), Some(di))) => {
+                    self.try_support_attack(ai, si, di, def_mode)
+                }
+                _ => None,
+            }
         };
         // 撃破時の自動発火ラベル `Destruction <unit>` / `<pilot>` / `破壊 <陣営>` を実行。
         if defender_killed {
@@ -1716,23 +1732,19 @@ impl App {
         );
     }
 
-    /// `atk_idx` のユニットが (def_x, def_y) を攻撃した直後、`look_for_support_attack` で
-    /// 選んだユニットが `support_attack_weapon` の武器で 1 回援護攻撃し、援護攻撃の使用回数を
-    /// 1 増やす。戻り値: 援護攻撃を実施したユニットの UID / サポートアタック不能なら `None`。
+    /// `atk_idx` の `def_idx` への攻撃を、`sup_idx` (`look_for_support_attack` で選んだ
+    /// ユニット) が `support_attack_weapon` の武器で 1 回援護攻撃し、援護攻撃の使用回数を
+    /// 1 増やす。援護攻撃で撃破したときの経験値・資金は攻撃側 `atk_idx` が得る (原典では
+    /// 戦闘後に攻撃側が得て、援護役には入らない)。
+    /// 戻り値: 援護攻撃を実施したユニットの UID / 使える武器が無いなら `None`。
     pub(super) fn try_support_attack(
         &mut self,
         atk_idx: usize,
-        def_x: u32,
-        def_y: u32,
+        sup_idx: usize,
+        def_idx: usize,
         def_mode: &str,
     ) -> Option<String> {
-        let def_idx = self
-            .database
-            .unit_instances
-            .iter()
-            .position(|u| u.x == def_x && u.y == def_y)?;
-        let sup_idx = self.look_for_support_attack(atk_idx, def_idx)?;
-
+        let atk_uid = self.database.unit_instances[atk_idx].uid.clone();
         // 援護攻撃を行うユニットの UID を退避 (戻り値用)
         let sup_uid = self.database.unit_instances[sup_idx].uid.clone();
 
@@ -1839,23 +1851,14 @@ impl App {
             ));
             let remaining = def_unit.hp - self.database.unit_instances[def_idx].damage;
             if remaining <= 0 && !self.revive_if_possible(def_idx) {
-                // 援護攻撃側 (sup) が撃破 → 報酬は援護側へ。除去前に位置を退避。
-                let (sx, sy) = (
-                    self.database.unit_instances[sup_idx].x,
-                    self.database.unit_instances[sup_idx].y,
-                );
-                let doubled = self.database.unit_instances[sup_idx].has_condition("努力");
+                // 援護攻撃で撃破しても報酬は攻撃側へ。
+                let doubled = self.database.unit_instances[atk_idx].has_condition("努力");
                 let exp = def_pilot.exp_value * if doubled { 2 } else { 1 };
                 let victim_value = def_unit.value;
                 let victim_party = self.database.unit_instances[def_idx].party;
                 self.database.remove_unit_at(def_idx);
                 self.fire_destruction_label(&def_pilot.name, &def_unit.name, victim_party);
-                if let Some(killer_idx) = self
-                    .database
-                    .unit_instances
-                    .iter()
-                    .position(|u| u.x == sx && u.y == sy)
-                {
+                if let Some(killer_idx) = self.database.idx_by_uid(&atk_uid) {
                     let money =
                         self.award_kill_rewards(killer_idx, exp, victim_value, victim_party);
                     if money > 0 {

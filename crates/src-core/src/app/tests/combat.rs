@@ -1746,6 +1746,16 @@ fn empty_weapon_is_not_auto_selected() {
     assert!(res.is_none(), "残弾 0 の武器は自動選択されず反撃しない");
 }
 
+/// `atk_idx` の (x, y) への攻撃を、`look_for_support_attack` で選ばれたユニットが援護攻撃する。
+fn support_attack_at(app: &mut App, atk_idx: usize, x: u32, y: u32) -> Option<String> {
+    let def_idx = app
+        .database()
+        .uid_at(x, y)
+        .and_then(|uid| app.database().idx_by_uid(uid))?;
+    let sup_idx = app.look_for_support_attack(atk_idx, def_idx)?;
+    app.try_support_attack(atk_idx, sup_idx, def_idx, "")
+}
+
 /// 援護攻撃武器の特殊効果攻撃属性が、援護の命中・生存時に防御側へ proc する。
 #[test]
 fn support_attack_procs_weapon_special_effect() {
@@ -1803,7 +1813,7 @@ fn support_attack_procs_weapon_special_effect() {
     ));
     let atk_idx = app.database().idx_by_uid(&hero).unwrap();
 
-    let res = app.try_support_attack(atk_idx, 3, 7, "");
+    let res = support_attack_at(&mut app, atk_idx, 3, 7);
     assert!(res.is_some(), "援護攻撃が成立する");
     assert!(
         app.database()
@@ -1883,7 +1893,7 @@ fn support_attack_damage_follows_original_rules() {
             7,
         ));
         let atk_idx = app.database().idx_by_uid(&hero).unwrap();
-        assert!(app.try_support_attack(atk_idx, 3, 7, "").is_some());
+        assert!(support_attack_at(&mut app, atk_idx, 3, 7).is_some());
         app.database().unit_by_uid(&enemy).map_or(0, |u| u.damage)
     };
     let base = run(None, false);
@@ -3055,6 +3065,100 @@ fn support_attacker_chosen_by_original_rules() {
     assert_eq!(pick(&app), None, "援護攻撃の回数を使い切ると援護しない");
 }
 
+/// Hero (5,6) が Foe (6,6) を攻撃し、Sup (5,7) が援護攻撃できる盤面。全員 必中。
+/// `foe_weapon` は Foe の反撃武器の攻撃力 (0 なら反撃しない)。戻り値は (app, hero, sup, foe)。
+fn setup_support_attack(
+    hero_hp: i64,
+    foe_hp: i64,
+    foe_weapon: i64,
+) -> (App, String, String, String) {
+    let mut app = App::new();
+    enter_mapview_with_demo_map(&mut app);
+    place_player_unit(&mut app, "Hero", 5, 6);
+    place_player_unit(&mut app, "Sup", 5, 7);
+    add_weapon(&mut app, "Hero", 100, 1);
+    add_weapon(&mut app, "Sup", 100, 2);
+    register_enemy_data(&mut app, "Foe");
+    if foe_weapon > 0 {
+        add_weapon(&mut app, "Foe", foe_weapon, 1);
+    }
+    for (name, hp) in [("Hero", hero_hp), ("Foe", foe_hp)] {
+        app.database_mut()
+            .catalog
+            .units
+            .iter_mut()
+            .find(|u| u.name == name)
+            .unwrap()
+            .hp = hp;
+    }
+    let foe = spawn_party(&mut app, "Foe", crate::Party::Enemy, 6, 6);
+    let hero = first_player_uid(&app);
+    let sup = app
+        .database()
+        .unit_instances
+        .iter()
+        .find(|u| u.unit_data_name == "Sup")
+        .unwrap()
+        .uid
+        .clone();
+    for uid in [&hero, &sup, &foe] {
+        app.database_mut()
+            .unit_by_uid_mut(uid)
+            .unwrap()
+            .add_condition(crate::Condition::new("必中", -1));
+    }
+    app.database_mut()
+        .unit_by_uid_mut(&sup)
+        .unwrap()
+        .add_condition(crate::Condition::new("援護攻撃", -1));
+    app.set_stage_state(crate::stage::StageState::Battle);
+    (app, hero, sup, foe)
+}
+
+/// 援護攻撃は反撃のあとに行う (原典 `Command.bas`)。攻撃側が反撃で倒れたら援護攻撃しない。
+#[test]
+fn support_attack_follows_counter_and_needs_attacker_alive() {
+    let run = |hero_hp: i64| -> Vec<String> {
+        let (mut app, ..) = setup_support_attack(hero_hp, 1_000_000, 3000);
+        app.map_cursor = Some((5, 6));
+        assert!(app.attack_resolve_and_run(Some((6, 6)), false, ""));
+        app.messages().to_vec()
+    };
+    let pos = |msgs: &[String], pat: &str| msgs.iter().position(|m| m.contains(pat));
+    let survived = run(1_000_000);
+    let counter = pos(&survived, "↩ 反撃").expect("反撃していない");
+    let support = pos(&survived, "サポートアタック").expect("援護攻撃していない");
+    assert!(counter < support, "援護攻撃が反撃より先: {survived:?}");
+    let killed = run(10);
+    assert!(
+        pos(&killed, "撃破").is_some(),
+        "反撃で攻撃側が倒れていない: {killed:?}"
+    );
+    assert!(
+        pos(&killed, "サポートアタック").is_none(),
+        "倒れた攻撃側を援護攻撃した: {killed:?}"
+    );
+}
+
+/// 援護攻撃で撃破しても、撃破の報酬 (気力) は攻撃したユニットが得て、援護役には入らない。
+#[test]
+fn support_attack_kill_rewards_main_attacker() {
+    let (mut app, hero, sup, foe) = setup_support_attack(1_000_000, 10, 0);
+    let hero_idx = app.database().idx_by_uid(&hero).unwrap();
+    let before = |app: &App, uid: &str| app.database().unit_by_uid(uid).unwrap().morale;
+    let (hero_morale, sup_morale) = (before(&app, &hero), before(&app, &sup));
+    assert!(support_attack_at(&mut app, hero_idx, 6, 6).is_some());
+    let db = app.database();
+    assert!(db.unit_by_uid(&foe).is_none(), "援護攻撃で撃破していない");
+    let gain = |uid: &str, was: i32| db.unit_by_uid(uid).unwrap().morale - was;
+    assert!(
+        gain(&hero, hero_morale) > gain(&sup, sup_morale),
+        "撃破の気力が攻撃側に入っていない (攻撃側 +{} / 援護役 +{})",
+        gain(&hero, hero_morale),
+        gain(&sup, sup_morale)
+    );
+}
+
 /// 援護攻撃 (原典 `Attack w2, target, "援護攻撃", def_mode`) も `Unit.Attack` を通るので、
 /// 援護防御を受ける。
 #[test]
@@ -3085,7 +3189,7 @@ fn support_guard_covers_support_attack() {
     let hero = first_player_uid(&app);
     let hero_idx = app.database().idx_by_uid(&hero).unwrap();
     assert_eq!(
-        app.try_support_attack(hero_idx, 6, 6, "").as_deref(),
+        support_attack_at(&mut app, hero_idx, 6, 6).as_deref(),
         Some(sup.as_str())
     );
     let db = app.database();
