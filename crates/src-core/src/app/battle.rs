@@ -14,6 +14,9 @@ struct StrikeSetup<'a> {
     def_inst: &'a crate::UnitInstance,
     def_hit_mod: i32,
     def_damage_mod: i32,
+    /// 命中してダメージを与えれば必ずクリティカル (原典 `attack_mode` が `統率` /
+    /// `同時援護攻撃`。特殊効果を持つ武器は除く)。
+    sure_critical: bool,
 }
 
 /// 攻撃の種類 (原典 `Unit.Attack` の `attack_mode`)。本線攻撃・反撃・援護攻撃はどれも
@@ -338,6 +341,11 @@ impl App {
         .then(|| self.look_for_support_attack(atk_idx, Some(def_idx)))
         .flatten()
         .map(|i| self.database.unit_instances[i].uid.clone());
+        // 統率: 攻撃側の主パイロットが 技能 `統率` を持ち回数が残っていれば、援護攻撃は
+        // 同時援護攻撃になる。本線攻撃と援護攻撃は必ずクリティカルで、援護攻撃は反撃より前。
+        let sync = supporter_uid.is_some()
+            && self.database.unit_instances[atk_idx].used_sync_attack
+                < self.main_pilot_skill_level(atk_idx, "統率");
 
         let setup = StrikeSetup {
             atk_pilot: &atk_pilot,
@@ -348,6 +356,7 @@ impl App {
             def_inst: &def_inst,
             def_hit_mod,
             def_damage_mod,
+            sure_critical: sync,
         };
         // 原典 `Unit.Attack` はガード役を切り払いの判定より前に選び、攻撃対象をガード役に
         // 差し替える。選ぶのは予測 (乱数を使わない) で、使うのは命中したときだけ。
@@ -601,6 +610,22 @@ impl App {
             }
         }
 
+        // 同時援護攻撃 (統率) は本線攻撃の直後、反撃より前 (原典 `Command.bas`)。
+        let mut support_uid = None;
+        if sync {
+            support_uid = self.run_support_attack(
+                &atk_uid,
+                supporter_uid.as_deref(),
+                &def_inst.uid,
+                def_mode,
+                true,
+            );
+            if support_uid.is_some() {
+                if let Some(ai) = self.database.idx_by_uid(&atk_uid) {
+                    self.database.unit_instances[ai].used_sync_attack += 1;
+                }
+            }
+        }
         // 反撃: 防御側が生存しており、攻撃側まで射程内の武器を持っていれば 1 回反撃。
         // ただし回避/防御を選んだ場合は反撃しない (SRC 反撃モード)。反撃 or 自動("")のみ。
         // 先制反撃 (preempted) 済みなら主攻撃後の通常反撃は行わない (SRC: def_mode="先制攻撃")。
@@ -616,24 +641,16 @@ impl App {
         } else {
             None
         };
-        // 援護攻撃は反撃のあと (原典 `Command.bas`)。攻撃側・防御側・援護役のどれかが
-        // 倒れていれば行わない。援護防御・反撃でユニットが除去され得るので uid で引き直す。
-        let support_uid = if defender_killed {
-            None
-        } else {
-            match supporter_uid.as_deref().map(|uid| {
-                (
-                    self.database.idx_by_uid(&atk_uid),
-                    self.database.idx_by_uid(uid),
-                    self.database.idx_by_uid(&def_inst.uid),
-                )
-            }) {
-                Some((Some(ai), Some(si), Some(di))) => {
-                    self.try_support_attack(ai, si, di, def_mode)
-                }
-                _ => None,
-            }
-        };
+        // 援護攻撃は反撃のあと (原典 `Command.bas`)。
+        if !sync {
+            support_uid = self.run_support_attack(
+                &atk_uid,
+                supporter_uid.as_deref(),
+                &def_inst.uid,
+                def_mode,
+                false,
+            );
+        }
         // 撃破時の自動発火ラベル `Destruction <unit>` / `<pilot>` / `破壊 <陣営>` を実行。
         if defender_killed {
             self.fire_destruction_label(&def_pilot.name, &def_unit.name, def_inst.party);
@@ -708,6 +725,7 @@ impl App {
             def_inst,
             def_hit_mod,
             def_damage_mod,
+            ..
         } = *setup;
         let atk_morale = self.database.unit_instances[atk_idx].morale;
         let def_morale = def_inst.morale;
@@ -824,6 +842,7 @@ impl App {
                 def_inst: &def_inst,
                 def_hit_mod: self.database.terrain_hit_mod(terrain_id),
                 def_damage_mod: self.database.terrain_damage_mod(terrain_id),
+                sure_critical: false,
             },
             kind,
         );
@@ -882,7 +901,8 @@ impl App {
         let has_special_effect = !crate::combat::weapon_special_effects(&weapon.class).is_empty()
             || crate::combat::weapon_morale_reduction(&weapon.class).is_some()
             || weapon.class.split_whitespace().any(|t| t == "即");
-        let critical = hit && crit_roll < crit_chance && !has_special_effect;
+        let sure = setup.sure_critical && preview.damage > 0;
+        let critical = hit && (crit_roll < crit_chance || sure) && !has_special_effect;
         // クリティカルはダメージ 1.5 倍 (SRC)。その後、防御選択でさらに半減する。
         let crit_damage = if critical {
             (preview.damage * 3 / 2).max(0)
@@ -1020,6 +1040,7 @@ impl App {
                 def_inst: &def_inst,
                 def_hit_mod,
                 def_damage_mod,
+                sure_critical: false,
             },
             def_mode,
             StrikeKind::Main,
@@ -1734,10 +1755,27 @@ impl App {
         );
     }
 
+    /// 援護攻撃役 `sup_uid` が `atk_uid` の `def_uid` への攻撃を援護攻撃する。攻撃側・
+    /// 防御側・援護役のどれかが倒れていれば行わない。援護防御・反撃でユニットが除去され
+    /// 得るので uid で引き直す。
+    fn run_support_attack(
+        &mut self,
+        atk_uid: &str,
+        sup_uid: Option<&str>,
+        def_uid: &str,
+        def_mode: &str,
+        sync: bool,
+    ) -> Option<String> {
+        let ai = self.database.idx_by_uid(atk_uid)?;
+        let si = self.database.idx_by_uid(sup_uid?)?;
+        let di = self.database.idx_by_uid(def_uid)?;
+        self.try_support_attack(ai, si, di, def_mode, sync)
+    }
+
     /// `atk_idx` の `def_idx` への攻撃を、`sup_idx` (`look_for_support_attack` で選んだ
     /// ユニット) が `support_attack_weapon` の武器で 1 回援護攻撃し、援護攻撃の使用回数を
     /// 1 増やす。援護攻撃で撃破したときの経験値・資金は攻撃側 `atk_idx` が得る (原典では
-    /// 戦闘後に攻撃側が得て、援護役には入らない)。
+    /// 戦闘後に攻撃側が得て、援護役には入らない)。`sync` なら同時援護攻撃 (必ずクリティカル)。
     /// 戻り値: 援護攻撃を実施したユニットの UID / 使える武器が無いなら `None`。
     pub(super) fn try_support_attack(
         &mut self,
@@ -1745,8 +1783,14 @@ impl App {
         sup_idx: usize,
         def_idx: usize,
         def_mode: &str,
+        sync: bool,
     ) -> Option<String> {
         let atk_uid = self.database.unit_instances[atk_idx].uid.clone();
+        let label = if sync {
+            "同時援護攻撃"
+        } else {
+            "サポートアタック"
+        };
         // 援護攻撃を行うユニットの UID を退避 (戻り値用)
         let sup_uid = self.database.unit_instances[sup_idx].uid.clone();
 
@@ -1780,6 +1824,7 @@ impl App {
             def_inst: &def_inst,
             def_hit_mod,
             def_damage_mod,
+            sure_critical: sync,
         };
         let guard_idx = self.pick_support_guard(sup_idx, def_idx, &setup, StrikeKind::Support);
         let strike = self.resolve_strike(
@@ -1805,7 +1850,7 @@ impl App {
                     strike.parried,
                 );
                 self.push_message(format!(
-                    "{} のサポートアタック [{}] → {}",
+                    "{} の{label} [{}] → {}",
                     sup_pilot.nickname,
                     weapon.name,
                     cover.support_guard_message(&def_pilot.nickname)
@@ -1840,7 +1885,7 @@ impl App {
             let def_old_dmg = self.database.unit_instances[def_idx].damage;
             self.database.unit_instances[def_idx].damage += dmg;
             self.push_message(format!(
-                "{} のサポートアタック [{}] → {}: {} ダメージ{}",
+                "{} の{label} [{}] → {}: {} ダメージ{}",
                 sup_pilot.nickname,
                 weapon.name,
                 def_pilot.nickname,
@@ -1888,7 +1933,7 @@ impl App {
         } else {
             // 失敗時/回避時 気力増加スキル。
             self.apply_combat_morale_skills(sup_idx, def_idx, false);
-            self.push_message(format!("{} のサポートアタックはミス", sup_pilot.nickname));
+            self.push_message(format!("{} の{label}はミス", sup_pilot.nickname));
         }
         Some(sup_uid)
     }
@@ -2354,6 +2399,7 @@ impl App {
                 def_inst: &atk_inst,
                 def_hit_mod: atk_hit_mod,
                 def_damage_mod: atk_damage_mod,
+                sure_critical: false,
             },
             "",
             StrikeKind::Counter,

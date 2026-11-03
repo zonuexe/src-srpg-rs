@@ -136,6 +136,10 @@ pub struct UnitInstance {
     /// 技能 `援護防御` / `援護` のレベル回まで援護防御できる。自陣営のフェイズ開始で 0。
     #[serde(default)]
     pub used_support_guard: i32,
+    /// 当ターン使用済み同時援護攻撃回数 (原典 `UsedSyncAttack`)。主パイロットの技能
+    /// `統率` のレベル回まで、援護攻撃が同時援護攻撃になる。自陣営のフェイズ開始で 0。
+    #[serde(default)]
+    pub used_sync_attack: i32,
     /// 当ターン使用済みカウンター (先制反撃) 回数。`カウンター` 技能 Lv 回まで先制反撃でき、
     /// 攻撃を受けるたびに加算する。`begin_phase` で 0 にリセット (SRC `UsedCounterAttack`)。
     #[serde(default)]
@@ -279,6 +283,7 @@ impl UnitInstance {
             sp_consumed: 0,
             used_support_attack: 0,
             used_support_guard: 0,
+            used_sync_attack: 0,
             used_counter_attack: 0,
             off_map: false,
             life_state: String::new(),

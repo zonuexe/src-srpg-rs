@@ -1753,7 +1753,7 @@ fn support_attack_at(app: &mut App, atk_idx: usize, x: u32, y: u32) -> Option<St
         .uid_at(x, y)
         .and_then(|uid| app.database().idx_by_uid(uid))?;
     let sup_idx = app.look_for_support_attack(atk_idx, Some(def_idx))?;
-    app.try_support_attack(atk_idx, sup_idx, def_idx, "")
+    app.try_support_attack(atk_idx, sup_idx, def_idx, "", false)
 }
 
 /// 援護攻撃武器の特殊効果攻撃属性が、援護の命中・生存時に防御側へ proc する。
@@ -3137,6 +3137,45 @@ fn support_attack_follows_counter_and_needs_attacker_alive() {
     assert!(
         pos(&killed, "サポートアタック").is_none(),
         "倒れた攻撃側を援護攻撃した: {killed:?}"
+    );
+}
+
+/// 統率: 攻撃側の主パイロットが技能 `統率` を持てば援護攻撃は同時援護攻撃になり (回数は
+/// 統率のレベルまで)、反撃より前に行われる。本線攻撃と同時援護攻撃は必ずクリティカル。
+#[test]
+fn leadership_turns_support_attack_into_sync_attack() {
+    let (mut app, hero, ..) = setup_support_attack(1_000_000, 1_000_000, 3000);
+    app.database_mut()
+        .unit_by_uid_mut(&hero)
+        .unwrap()
+        .add_condition(crate::Condition::new("統率", -1));
+    app.map_cursor = Some((5, 6));
+    assert!(app.attack_resolve_and_run(Some((6, 6)), false, ""));
+    let msgs = app.messages().to_vec();
+    let find = |pat: &str| {
+        msgs.iter()
+            .position(|m| m.contains(pat))
+            .unwrap_or_else(|| panic!("{pat} が無い: {msgs:?}"))
+    };
+    let (main, sync, counter) = (find("]: 命中"), find("同時援護攻撃"), find("↩ 反撃"));
+    assert!(
+        msgs[main].contains("クリティカル"),
+        "本線攻撃: {}",
+        msgs[main]
+    );
+    assert!(
+        msgs[sync].contains("クリティカル"),
+        "同時援護攻撃: {}",
+        msgs[sync]
+    );
+    assert!(main < sync && sync < counter, "順番が違う: {msgs:?}");
+    assert!(
+        !msgs.iter().any(|m| m.contains("サポートアタック")),
+        "同時援護攻撃のあとにも援護攻撃した: {msgs:?}"
+    );
+    assert_eq!(
+        app.database().unit_by_uid(&hero).unwrap().used_sync_attack,
+        1
     );
 }
 
