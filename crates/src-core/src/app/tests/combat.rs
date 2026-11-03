@@ -4798,3 +4798,51 @@ fn support_guard_declines_when_it_would_fall_or_map_weapon() {
     }
     assert_eq!(support_guard_for(&app, &foe), None, "マップ兵器をかばった");
 }
+
+/// 再攻撃は原典 `Unit.Attack` の中の繰り返しなので、本線攻撃の直後、反撃と援護攻撃より
+/// 前に行う。反撃・援護攻撃は 1 回だけ。
+#[test]
+fn reattack_comes_before_counter_and_support_attack() {
+    let (mut app, hero, _, _) = setup_support_attack(1_000_000, 1_000_000, 3000);
+    app.database_mut()
+        .unit_by_uid_mut(&hero)
+        .unwrap()
+        .add_condition(crate::Condition::new("再攻撃", -1));
+    app.map_cursor = Some((5, 6));
+    assert!(app.attack_resolve_and_run(Some((6, 6)), false, ""));
+    let msgs = app.messages().to_vec();
+    let pos = |pat: &str| msgs.iter().position(|m| m.contains(pat));
+    let reattack = pos("の再攻撃！").expect("再攻撃していない");
+    let counter = pos("↩ 反撃").expect("反撃していない");
+    let support = pos("サポートアタック").expect("援護攻撃していない");
+    assert!(reattack < counter && counter < support, "{msgs:?}");
+    let count = |pat: &str| msgs.iter().filter(|m| m.contains(pat)).count();
+    assert_eq!(count("↩ 反撃"), 1, "{msgs:?}");
+    assert_eq!(count("サポートアタック"), 1, "{msgs:?}");
+}
+
+/// 原典の反撃も `Unit.Attack` なので、反撃側も再攻撃する。
+#[test]
+fn counter_attack_can_reattack() {
+    let (mut app, _, _, foe) = setup_support_attack(1_000_000, 1_000_000, 3000);
+    app.database_mut()
+        .unit_by_uid_mut(&foe)
+        .unwrap()
+        .add_condition(crate::Condition::new("再攻撃", -1));
+    app.map_cursor = Some((5, 6));
+    assert!(app.attack_resolve_and_run(Some((6, 6)), false, ""));
+    let msgs = app.messages().to_vec();
+    let counters: Vec<usize> = msgs
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.contains("↩ 反撃"))
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(counters.len(), 2, "{msgs:?}");
+    assert!(
+        msgs[counters[0]..counters[1]]
+            .iter()
+            .any(|m| m.contains("の再攻撃！")),
+        "{msgs:?}"
+    );
+}
