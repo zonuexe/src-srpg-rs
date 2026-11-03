@@ -59,6 +59,24 @@ enum CoverOutcome {
     Destroyed,
 }
 
+impl CoverHit {
+    /// 援護防御で `def_nick` をかばったときのメッセージ。
+    fn support_guard_message(&self, def_nick: &str) -> String {
+        let (g, d) = (&self.nick, def_nick);
+        match self.outcome {
+            CoverOutcome::Parried => format!("援護防御: {g} が {d} をかばった"),
+            CoverOutcome::Survived { remaining } => format!(
+                "援護防御: {g} が {d} の代わりに {} ダメージ (残HP {remaining})",
+                self.damage
+            ),
+            CoverOutcome::Revived => {
+                format!("援護防御: {g} が {d} の代わりに受けた → 撃破… だが【復活】！")
+            }
+            CoverOutcome::Destroyed => format!("援護防御: {g} が {d} の代わりに受けた → 撃破！"),
+        }
+    }
+}
+
 impl App {
     /// 攻撃の本体。`desired_target` が `Some(tile)` ならそのタイルの敵を対象に、
     /// `None` なら射程内最寄り敵を対象に攻撃を実行する。`post_move` は移動後攻撃
@@ -320,33 +338,9 @@ impl App {
             def_hit_mod,
             def_damage_mod,
         };
-        // 援護防御チェック。`def_mode` で挙動を切替える (SRC 反撃モードの「援護防御
-        // ON/OFF」):
-        //  - "援護防御": プレイヤーが明示選択 → フェイズに依らず強制発動。
-        //  - "反撃"/"回避"/"防御": 個別反撃を選んだ → 援護防御は発動しない。
-        //  - ""(自動/ヘッドレス/行動不能の素通り): 従来どおり 敵/中立/ＮＰＣ フェイズの
-        //    攻撃時のみ自動発動 (味方が自分から攻撃した Player フェイズは無効)。
-        // 直撃 (精神コマンド): サポートガード (援護防御) を無効化する (§0.8 / SRC)。
         // 原典 `Unit.Attack` はガード役を切り払いの判定より前に選び、攻撃対象をガード役に
         // 差し替える。選ぶのは予測 (乱数を使わない) で、使うのは命中したときだけ。
-        let guard_idx = {
-            let (expected, statuses) =
-                self.strike_preview(atk_idx, def_idx, &setup, StrikeKind::Main);
-            if statuses.iter().any(|s| s.contains("直撃")) {
-                None
-            } else {
-                match def_mode {
-                    "援護防御" => {
-                        self.try_find_support_guard(atk_idx, def_idx, &weapon, &expected, true)
-                    }
-                    "反撃" | "回避" | "防御" => None,
-                    _ if self.turn.phase != crate::turn::Phase::Player => {
-                        self.try_find_support_guard(atk_idx, def_idx, &weapon, &expected, false)
-                    }
-                    _ => None,
-                }
-            }
-        };
+        let guard_idx = self.pick_support_guard(atk_idx, def_idx, &setup, StrikeKind::Main);
         let strike = self.resolve_strike(
             atk_idx,
             def_idx,
@@ -394,20 +388,7 @@ impl App {
                     critical,
                     parried,
                 );
-                let (g, d) = (cover.nick, &def_pilot.nickname);
-                match cover.outcome {
-                    CoverOutcome::Parried => format!("援護防御: {g} が {d} をかばった"),
-                    CoverOutcome::Survived { remaining } => format!(
-                        "援護防御: {g} が {d} の代わりに {} ダメージ (残HP {remaining})",
-                        cover.damage
-                    ),
-                    CoverOutcome::Revived => {
-                        format!("援護防御: {g} が {d} の代わりに受けた → 撃破… だが【復活】！")
-                    }
-                    CoverOutcome::Destroyed => {
-                        format!("援護防御: {g} が {d} の代わりに受けた → 撃破！")
-                    }
-                }
+                cover.support_guard_message(&def_pilot.nickname)
             } else {
                 // 通常ダメージ: defender が受ける (防御選択時は applied_damage で半減済)。
                 // 不死身: 撃破させないよう被ダメージをキャップ (サンプルの「不死身で
@@ -620,8 +601,7 @@ impl App {
         // 反撃: 防御側が生存しており、攻撃側まで射程内の武器を持っていれば 1 回反撃。
         // ただし回避/防御を選んだ場合は反撃しない (SRC 反撃モード)。反撃 or 自動("")のみ。
         // 先制反撃 (preempted) 済みなら主攻撃後の通常反撃は行わない (SRC: def_mode="先制攻撃")。
-        let allow_counter =
-            !preempted && def_mode != "回避" && def_mode != "防御" && def_mode != "援護防御";
+        let allow_counter = !preempted && def_mode != "回避" && def_mode != "防御";
         let still_alive_def = self
             .database
             .unit_instances
@@ -1802,25 +1782,50 @@ impl App {
         let def_damage_mod = self.database.terrain_damage_mod(terrain_id);
         // 命中・クリティカル・即死・切り払い・防御特性は本線攻撃と同じ判定 (原典は
         // `Attack w2, target, "援護攻撃", def_mode`)。防御側の反撃モードも本線攻撃と共通。
+        // 援護防御も本線攻撃と同じく `Unit.Attack` の中で選ばれる。
+        let setup = StrikeSetup {
+            atk_pilot: &sup_pilot,
+            atk_unit: &sup_unit,
+            weapon: &weapon,
+            def_pilot: &def_pilot,
+            def_unit: &def_unit,
+            def_inst: &def_inst,
+            def_hit_mod,
+            def_damage_mod,
+        };
+        let guard_idx = self.pick_support_guard(sup_idx, def_idx, &setup, StrikeKind::Support);
         let strike = self.resolve_strike(
             sup_idx,
             def_idx,
-            &StrikeSetup {
-                atk_pilot: &sup_pilot,
-                atk_unit: &sup_unit,
-                weapon: &weapon,
-                def_pilot: &def_pilot,
-                def_unit: &def_unit,
-                def_inst: &def_inst,
-                def_hit_mod,
-                def_damage_mod,
-            },
+            &setup,
             def_mode,
             StrikeKind::Support,
-            None,
+            guard_idx,
         );
         // SP コスト消費 (= サポートアタック回数を 1 減らす)
         self.database.unit_instances[sup_idx].support_attack_remaining -= 1;
+        if let Some(g_idx) = guard_idx.filter(|_| strike.hit) {
+            if self.migawari_sub_idx(def_idx).is_none() {
+                // 援護防御: ガード役が攻撃対象に差し替わり、防御側は何も受けない。
+                self.database.unit_instances[g_idx].support_guard_remaining -= 1;
+                let cover = self.strike_cover(
+                    g_idx,
+                    def_idx,
+                    sup_idx,
+                    &weapon,
+                    StrikeKind::Support,
+                    strike.critical,
+                    strike.parried,
+                );
+                self.push_message(format!(
+                    "{} のサポートアタック [{}] → {}",
+                    sup_pilot.nickname,
+                    weapon.name,
+                    cover.support_guard_message(&def_pilot.nickname)
+                ));
+                return Some(sup_uid);
+            }
+        }
         if strike.hit {
             let dmg = strike.damage;
             // みがわり (身代わり, 最優先・SRC Unit.cls:14855): 防御側が みがわり を持てば
@@ -1914,6 +1919,31 @@ impl App {
         let dx = (a.0 as i64 - b.0 as i64).abs();
         let dy = (a.1 as i64 - b.1 as i64).abs();
         dx + dy == 1
+    }
+
+    /// 攻撃を援護防御するガード役を選ぶ (原典 `Unit.Attack` の
+    /// `If t.IsDefense() Then If UseSupportGuard Then su = t.LookForSupportGuard(Me, w)`)。
+    /// 防御側が自分のフェイズでなく (`IsDefense`)、反撃メニューで「援護防御：使用しない」を
+    /// 選んでいなければ探す。反撃・防御・回避のどれを選んだかには依らない。攻撃側が 直撃
+    /// (精神コマンド) ならサポートガードは無効。味方が手動反撃 (自動反撃モードがオフ) で
+    /// 守られるときはダメージが小さくてもかばう。
+    fn pick_support_guard(
+        &self,
+        atk_idx: usize,
+        def_idx: usize,
+        setup: &StrikeSetup,
+        kind: StrikeKind,
+    ) -> Option<usize> {
+        let def_party = self.database.unit_instances[def_idx].party;
+        if self.support_guard_declined || def_party == self.turn.phase.party() {
+            return None;
+        }
+        let (expected, statuses) = self.strike_preview(atk_idx, def_idx, setup, kind);
+        if statuses.iter().any(|s| s.contains("直撃")) {
+            return None;
+        }
+        let always = def_party == crate::Party::Player && !self.auto_counter;
+        self.try_find_support_guard(atk_idx, def_idx, setup.weapon, &expected, always)
     }
 
     /// 援護防御ユニット検索 (原典 `Unit.LookForSupportGuard`): `atk_idx` の `weapon` による
@@ -2063,17 +2093,6 @@ impl App {
             .and_then(|p| p.features.iter().find(|(n, _)| n == "チーム"))
             .map(|(_, v)| v.split(',').next().unwrap_or("").trim().to_string())
             .unwrap_or_default()
-    }
-
-    /// 反撃メニューに「援護防御」選択肢を出すべきか (read-only)。`def_uid` を援護防御できる
-    /// ユニット (`support_guard_candidate`) がいれば真。ダメージ依存の生存判定は解決時
-    /// (`try_find_support_guard`) に委ねるため、ここでは省く (選んでも条件を満たさなければ
-    /// 不発になるだけ)。
-    pub(super) fn support_guard_available(&self, def_uid: &str) -> bool {
-        let Some(def_idx) = self.database.idx_by_uid(def_uid) else {
-            return false;
-        };
-        (0..self.database.unit_instances.len()).any(|i| self.support_guard_candidate(def_idx, i))
     }
 
     /// 撃破時に自動発火するラベルを試行。最初に見つかったものを 1 つだけ投函。

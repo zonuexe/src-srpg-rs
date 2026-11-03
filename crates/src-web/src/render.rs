@@ -1589,7 +1589,7 @@ fn draw_reaction_window(
         let _ = ctx.fill_text(&format!("{} {}", d.unit, d.name), wx + pad, wy + 74.0);
     }
 
-    // 選択肢 (反撃/回避/防御/援護防御) + 命中率。クリック判定と同一ジオメトリ。
+    // 選択肢 (反撃/回避/防御/援護防御の切り替え) + 命中率。クリック判定と同一ジオメトリ。
     let opt_top = wy + REACTION_OPT_TOP;
     ctx.set_text_baseline("middle");
     for (i, opt) in data.options.iter().take(6).enumerate() {
@@ -1609,7 +1609,9 @@ fn draw_reaction_window(
         let _ = ctx.fill_text(&opt.label, wx + pad + 38.0, mid);
         ctx.set_text_align("right");
         ctx.set_fill_style_str("#0a6a78");
-        let _ = ctx.fill_text(&format!("命中 {}%", opt.hit_pct), wx + ww - pad - 4.0, mid);
+        if let Some(hit) = opt.hit_pct {
+            let _ = ctx.fill_text(&format!("命中 {hit}%"), wx + ww - pad - 4.0, mid);
+        }
     }
 
     ctx.set_text_align("right");

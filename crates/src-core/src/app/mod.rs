@@ -84,8 +84,16 @@ pub(crate) struct PendingReaction {
     /// 防御側 (味方) の居るタイル。
     pub(crate) target_tile: (u32, u32),
     /// メニュー選択 index(1-based) → def_mode のマップ ("反撃"/"回避"/"防御")。
+    /// 援護防御の切り替え行は `REACTION_TOGGLE_SUPPORT_GUARD`。
     pub(crate) modes: Vec<String>,
+    /// メニューの表示ラベル (`modes` と同じ並び)。
+    pub(crate) labels: Vec<String>,
+    /// 援護防御を使うか (原典 `UseSupportGuard`、メニューの「援護防御：使用する」で切り替え)。
+    pub(crate) use_support_guard: bool,
 }
+
+/// 反撃メニューで援護防御の使用/不使用を切り替える行の mode。
+pub(crate) const REACTION_TOGGLE_SUPPORT_GUARD: &str = "援護防御切替";
 
 /// 武器選択を待つ間 `pending_weapon_select` に保持する。通常攻撃と、反撃手段
 /// 「反撃」選択後の反撃武器選択の両方に使う (`counter` で区別)。
@@ -115,6 +123,8 @@ struct CounterCtx {
     main_atk_uid: String,
     /// 主攻撃の防御側 (反撃する側) タイル。
     main_target: (u32, u32),
+    /// 反撃メニューで選んだ援護防御の使用/不使用。
+    use_support_guard: bool,
 }
 
 /// 精神コマンド (SP コマンド) のサブメニュー選択を待つ間 `pending_spirit` に保持。
@@ -390,6 +400,10 @@ pub struct App {
     /// `take()` して 1 回だけ使い、無効/未設定なら自動選定にフォールバック。transient。
     #[serde(skip)]
     forced_counter_weapon: Option<usize>,
+    /// 反撃メニューで「援護防御：使用しない」を選んだ (原典 `UseSupportGuard = False`)。
+    /// その攻撃の解決中だけ立てる。transient。
+    #[serde(skip)]
+    support_guard_declined: bool,
     /// 精神コマンドのサブメニュー選択待ち文脈 (Some のとき発動待ち)。transient。
     #[serde(skip)]
     pending_spirit: Option<PendingSpirit>,
@@ -760,6 +774,7 @@ impl App {
             weapon_window_enabled: true,
             pending_weapon_select: None,
             forced_counter_weapon: None,
+            support_guard_declined: false,
             pending_spirit: None,
             pending_transform: None,
             pending_ability: None,
