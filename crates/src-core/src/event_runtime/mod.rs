@@ -1546,7 +1546,16 @@ fn pseudo_random(app: &App) -> u32 {
 ///
 /// 先頭 2 トークンが両方整数なら (x, y, 残り)、そうでなく
 /// 最後 2 トークンが両方整数なら (x, y, 先頭) として扱う。
-fn parse_paintstring_args(xargs: &[String]) -> (f64, f64, String) {
+/// 座標が `-` の向きはマップウィンドウの中央寄せ。
+pub(crate) struct PaintStringArgs {
+    pub x: f64,
+    pub y: f64,
+    pub text: String,
+    pub center_x: bool,
+    pub center_y: bool,
+}
+
+fn parse_paintstring_args(xargs: &[String]) -> PaintStringArgs {
     // SRC PaintString は座標に `-` を許容（マップウィンドウ中央寄せの意）。
     // 元 SRC のマップウィンドウは 480×480 なので、その中央 (240, 240) を
     // デフォルト座標として用いる。本実装のキャンバスは 640×480。
@@ -1576,20 +1585,37 @@ fn parse_paintstring_args(xargs: &[String]) -> (f64, f64, String) {
                 }) && t.chars().any(|c| c.is_ascii_digit())
             }
     }
+    let args = |sx: &str, sy: &str, text: String| {
+        let (x, y) = (parse_coord(sx), parse_coord(sy));
+        PaintStringArgs {
+            x: x.unwrap_or(DEFAULT_X),
+            y: y.unwrap_or(DEFAULT_Y),
+            text,
+            center_x: x.is_none(),
+            center_y: y.is_none(),
+        }
+    };
     if xargs.len() >= 3 && is_coord_tok(&xargs[0]) && is_coord_tok(&xargs[1]) {
-        let x = parse_coord(&xargs[0]).unwrap_or(DEFAULT_X);
-        let y = parse_coord(&xargs[1]).unwrap_or(DEFAULT_Y);
-        return (x, y, xargs[2..].join(" "));
+        return args(&xargs[0], &xargs[1], xargs[2..].join(" "));
     }
     if xargs.len() >= 3 {
         let last = xargs.len();
         if is_coord_tok(&xargs[last - 2]) && is_coord_tok(&xargs[last - 1]) {
-            let x = parse_coord(&xargs[last - 2]).unwrap_or(DEFAULT_X);
-            let y = parse_coord(&xargs[last - 1]).unwrap_or(DEFAULT_Y);
-            return (x, y, xargs[..last - 2].join(" "));
+            return args(
+                &xargs[last - 2],
+                &xargs[last - 1],
+                xargs[..last - 2].join(" "),
+            );
         }
     }
-    (DEFAULT_X, DEFAULT_Y, xargs.join(" "))
+    // 座標の省略 (原典は直前の文字列の下に続ける) は従来どおり中央の点から描く。
+    PaintStringArgs {
+        x: DEFAULT_X,
+        y: DEFAULT_Y,
+        text: xargs.join(" "),
+        center_x: false,
+        center_y: false,
+    }
 }
 
 /// `Require <path>` の対象ファイルを script_library から basename で引き、

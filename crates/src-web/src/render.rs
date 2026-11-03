@@ -493,10 +493,17 @@ fn draw_script_overlay(
             D::SetColor { color } => {
                 stroke_color = color.clone();
             }
-            D::PaintString { x, y, text } => {
+            D::PaintString {
+                x,
+                y,
+                text,
+                center_x,
+                center_y,
+            } => {
                 ctx.set_font(&font_str);
-                ctx.set_text_align("left");
-                ctx.set_text_baseline("top");
+                // 座標 `-` は文字列の中心をマップウィンドウの中央に合わせる。
+                ctx.set_text_align(if *center_x { "center" } else { "left" });
+                ctx.set_text_baseline(if *center_y { "middle" } else { "top" });
                 ctx.set_fill_style_str(&text_color);
                 let _ = ctx.fill_text(text, *x, *y);
             }

@@ -21,8 +21,18 @@ pub enum DrawCmd {
     },
     /// 現在の描画色（Line/PSet 等の線色）。
     SetColor { color: String },
-    /// テキスト描画。`x`/`y` は Canvas 論理座標。
-    PaintString { x: f64, y: f64, text: String },
+    /// テキスト描画。`x`/`y` は Canvas 論理座標 (文字列の左上)。座標に `-` を指定した
+    /// 向きは `center_x` / `center_y` が立ち、`x` / `y` はマップウィンドウの中央 (240) で、
+    /// 文字列の中心をそこに合わせる (原典 `DrawString` の `HCentering` / `VCentering`)。
+    PaintString {
+        x: f64,
+        y: f64,
+        text: String,
+        #[serde(default)]
+        center_x: bool,
+        #[serde(default)]
+        center_y: bool,
+    },
     /// 線描画。
     Line { x1: f64, y1: f64, x2: f64, y2: f64 },
     /// 1 点描画（PSet）。

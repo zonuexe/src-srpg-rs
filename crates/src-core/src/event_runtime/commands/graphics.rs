@@ -167,30 +167,50 @@ fn exec_refresh(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
 
 fn exec_hotpointstring(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     let Cmd { xargs, pc, .. } = *c;
-    // `HotpointString x y text...` — 文字列を描画しつつ、その矩形領域を
-    // クリック領域として登録する。x が "-" の場合は水平方向中央寄せ
-    // (簡易実装)。クリック名はテキストそのもの。
-    let (x, y, text) = parse_paintstring_args(xargs);
-    if !text.is_empty() {
-        app.script_overlay_mut()
-            .push(crate::script_overlay::DrawCmd::PaintString {
-                x,
-                y,
-                text: text.clone(),
-            });
-        // Hotpoint 領域の幅は文字数 × ピクセル係数 (概算)。
-        // フォントサイズが取れないので 14pt 相当 (高さ ~20px) を仮定。
-        let char_count = text.chars().count() as i32;
-        let w = (char_count * 14).max(40);
-        let h = 22;
+    // `HotpointString x y text...` — 文字列を描画しつつ、描いた文字列の矩形を
+    // クリック領域として登録する。クリック名はテキストそのもの。原典 SRC には無く、
+    // スパロボ戦記 `lib/String.eve` のサブルーチン `HotPointString` と同じ動き
+    // (`-` は `240 - TextWidth / 2`、矩形は `TextWidth` × `TextHeight`)。文字列の大きさは
+    // 現在のフォントサイズから見積もる (半角は全角の半分の幅)。
+    let a = parse_paintstring_args(xargs);
+    if !a.text.is_empty() {
+        let size = app
+            .script_overlay()
+            .current_font
+            .as_ref()
+            .map_or(14, |f| f.1) as i32;
+        let w = a
+            .text
+            .chars()
+            .map(|ch| if ch.is_ascii() { size / 2 } else { size })
+            .sum::<i32>();
+        let h = size + size / 4;
+        let x = if a.center_x {
+            a.x as i32 - w / 2
+        } else {
+            a.x as i32
+        };
+        let y = if a.center_y {
+            a.y as i32 - h / 2
+        } else {
+            a.y as i32
+        };
         app.push_hotpoint(crate::event_runtime::HotpointEntry {
-            name: text,
-            x: x as i32,
-            y: y as i32 - h,
+            name: a.text.clone(),
+            x,
+            y,
             w,
             h,
             invisible: false,
         });
+        app.script_overlay_mut()
+            .push(crate::script_overlay::DrawCmd::PaintString {
+                x: a.x,
+                y: a.y,
+                text: a.text,
+                center_x: a.center_x,
+                center_y: a.center_y,
+            });
     }
     Ok(pc + 1)
 }
@@ -350,9 +370,15 @@ fn exec_paintstring(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
     // `PaintString x y text...` または `PaintString text x y` の二形式に
     // 対応するため、整数が見つかる位置で分岐。
     // 簡略実装: 引数の最初の 2 整数を x,y、残りを連結して text。
-    let (x, y, text) = parse_paintstring_args(xargs);
+    let a = parse_paintstring_args(xargs);
     app.script_overlay_mut()
-        .push(crate::script_overlay::DrawCmd::PaintString { x, y, text });
+        .push(crate::script_overlay::DrawCmd::PaintString {
+            x: a.x,
+            y: a.y,
+            text: a.text,
+            center_x: a.center_x,
+            center_y: a.center_y,
+        });
     Ok(pc + 1)
 }
 
