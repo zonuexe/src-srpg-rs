@@ -277,13 +277,19 @@ impl App {
             "対象ユニット使用スペシャルパワー".to_string(),
             String::new(),
         );
-        self.set_script_var("サポートアタックユニットＩＤ".to_string(), String::new());
-        self.set_script_var("サポートガードユニットＩＤ".to_string(), String::new());
+        // 再攻撃は同じ 1 回の攻撃なので、1 回目に記録した援護役の ID を消さない。
+        if !is_reattack {
+            self.set_script_var("サポートアタックユニットＩＤ".to_string(), String::new());
+            self.set_script_var("サポートガードユニットＩＤ".to_string(), String::new());
+        }
 
         // SRC `攻撃 <atk> <def>:` (`攻撃イベント.md`) ─ ダメージ適用前に発火。
         // 発火中に Talk 等で UI が中断するとダメージは保留されるが、本実装は
         // Destruction 同様 sync 完結する Set/Message/Goto/ChangeMode を想定。
-        crate::event_runtime::fire_attack_event_labels(self, atk_idx, def_idx);
+        // 再攻撃 (`begin` は攻撃イベントより後ろ) では再発火しない。
+        if !is_reattack {
+            crate::event_runtime::fire_attack_event_labels(self, atk_idx, def_idx);
+        }
 
         // 攻撃後ラベル発火用に attacker/defender 識別子を退避。
         // damage 適用で defender が unit_instances から消えたあとに名前が必要。
@@ -610,6 +616,38 @@ impl App {
             }
         }
 
+        // 再攻撃 (原典 `Unit.Attack` の `EndAttack`): 1 回の攻撃の中の繰り返しなので、
+        // 本線攻撃の直後、同時援護攻撃・反撃・援護攻撃より前に行う。双方が生存し、合体技
+        // でなく、同じ武器がまだ使えて射程内なら、再攻撃 技能 / 再属性 / SP効果「再攻撃」の
+        // 判定で 1 回だけもう一度攻撃する。再帰呼び出しは `reattack_in_progress` で
+        // 使用・攻撃・攻撃後イベントの再発火と 3 回目の再攻撃を抑止する。
+        if !is_reattack && !defender_killed && !weapon.class.contains('合') {
+            let def_here = self
+                .database
+                .idx_by_uid(&def_inst.uid)
+                .is_some_and(|i| !self.database.unit_instances[i].off_map);
+            if let (Some(ai), true) = (self.database.idx_by_uid(&atk_uid), def_here) {
+                if self.rolls_reattack(ai, &atk_pilot, &def_pilot, &weapon) {
+                    self.push_message(format!("{} の再攻撃！", atk_pilot.nickname));
+                    self.map_cursor = Some((
+                        self.database.unit_instances[ai].x,
+                        self.database.unit_instances[ai].y,
+                    ));
+                    // 原典の再攻撃は同じ武器 `w` を使う。
+                    let prev_weapon =
+                        std::mem::replace(&mut self.selected_weapon_idx, atk_weapon_num);
+                    self.reattack_in_progress = true;
+                    self.attack_resolve_and_run(
+                        Some((def_inst.x, def_inst.y)),
+                        post_move,
+                        def_mode,
+                    );
+                    self.reattack_in_progress = false;
+                    self.selected_weapon_idx = prev_weapon;
+                }
+            }
+        }
+
         // 同時援護攻撃 (統率) は本線攻撃の直後、反撃より前 (原典 `Command.bas`)。
         let mut support_uid = None;
         if sync {
@@ -633,9 +671,8 @@ impl App {
         let allow_counter = !is_reattack && !preempted && def_mode != "回避" && def_mode != "防御";
         let still_alive_def = self
             .database
-            .unit_instances
-            .iter()
-            .any(|u| u.x == def_inst.x && u.y == def_inst.y);
+            .idx_by_uid(&def_inst.uid)
+            .is_some_and(|i| !self.database.unit_instances[i].off_map);
         let counter_weapon = if allow_counter && !defender_killed && still_alive_def {
             self.try_counterattack(def_inst.x, def_inst.y, (cx, cy))
         } else {
@@ -668,39 +705,18 @@ impl App {
 
         // SRC `使用後 <unit> <device>:` (`使用後イベント.md`) ─ `攻撃後` の前、
         // attacker 生存時のみ発火。
-        crate::event_runtime::fire_after_use_event_labels(self, &after_atk, &weapon.name);
+        // 再攻撃の呼び出しでは発火しない (1 回目の呼び出しが最後に 1 度だけ発火する)。
+        if !is_reattack {
+            crate::event_runtime::fire_after_use_event_labels(self, &after_atk, &weapon.name);
 
-        // SRC `攻撃後 <atk> <def>:` (`攻撃後イベント.md`) ─ 損傷率/破壊
-        // ラベル発火後、双方が生存している場合に限り発火。
-        crate::event_runtime::fire_after_attack_event_labels(self, &after_atk, &after_def);
-
-        // 再攻撃 (VB5 `Unit.cls:10239-10270`): 主攻撃側が 再攻撃 技能 / 再属性 を持ち、
-        // 防御側が生存していれば確率で同じ攻撃をもう一度実行する (1回限り)。武器の EN/弾が
-        // 尽きていれば 2回目の武器選択で自然に不発になる。`reattack_in_progress` で使用
-        // イベント再発火と 3回目の再攻撃を抑止する。
-        if !is_reattack && !defender_killed {
-            let def_here = self.database.unit_instances.iter().any(|u| {
-                !u.off_map && u.x == def_inst.x && u.y == def_inst.y && u.party == def_inst.party
-            });
-            if let (Some(ai), true) = (self.database.idx_by_uid(&atk_uid), def_here) {
-                if self.rolls_reattack(ai, &atk_pilot, &def_pilot, &weapon) {
-                    self.push_message(format!("{} の再攻撃！", atk_pilot.nickname));
-                    self.map_cursor = Some((
-                        self.database.unit_instances[ai].x,
-                        self.database.unit_instances[ai].y,
-                    ));
-                    self.reattack_in_progress = true;
-                    self.attack_resolve_and_run(
-                        Some((def_inst.x, def_inst.y)),
-                        post_move,
-                        def_mode,
-                    );
-                    self.reattack_in_progress = false;
-                }
-            }
+            // SRC `攻撃後 <atk> <def>:` (`攻撃後イベント.md`) ─ 損傷率/破壊
+            // ラベル発火後、双方が生存している場合に限り発火。
+            crate::event_runtime::fire_after_attack_event_labels(self, &after_atk, &after_def);
         }
 
-        self.check_victory();
+        if !is_reattack {
+            self.check_victory();
+        }
         true
     }
 
@@ -2325,6 +2341,17 @@ impl App {
         dy: u32,
         target: (u32, u32),
     ) -> Option<(String, usize)> {
+        self.counter_strike(dx, dy, target, false)
+    }
+
+    /// 反撃 1 回分。`second` は再攻撃 (原典 `Unit.Attack` の `second_attack`) の 2 回目。
+    fn counter_strike(
+        &mut self,
+        dx: u32,
+        dy: u32,
+        target: (u32, u32),
+        second: bool,
+    ) -> Option<(String, usize)> {
         let def_idx = self
             .database
             .unit_instances
@@ -2505,6 +2532,26 @@ impl App {
             )
         };
         self.push_message(msg);
+        // 再攻撃: 原典の反撃 (先制攻撃・カウンターを含む) も `Unit.Attack` なので、双方が
+        // 生存し、合体技でなく、同じ武器がまだ使えて射程内なら再攻撃の判定をする。
+        if !second && !weapon.class.contains('合') {
+            let at = |app: &Self, (x, y): (u32, u32)| {
+                app.database
+                    .unit_instances
+                    .iter()
+                    .position(|u| !u.off_map && u.x == x && u.y == y)
+            };
+            if let (Some(ci), Some(_)) = (at(self, (dx, dy)), at(self, target)) {
+                if self.weapon_usable_vs(ci, &weapon, dist, false)
+                    && self.weapon_firable(ci, &weapon)
+                    && self.rolls_reattack(ci, &def_pilot, &atk_pilot, &weapon)
+                {
+                    self.push_message(format!("{} の再攻撃！", def_pilot.nickname));
+                    self.forced_counter_weapon = Some(weapon_num - 1);
+                    self.counter_strike(dx, dy, target, true);
+                }
+            }
+        }
         Some((weapon_name, weapon_num))
     }
 
