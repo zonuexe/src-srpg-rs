@@ -4172,6 +4172,56 @@ fn support_guard_recomputes_damage_against_guard() {
     );
 }
 
+/// 原典 `Unit.Attack` はガード役を防御側の位置へ動かしてから `Damage(w, su)` を求めるので、
+/// 地形補正はガード役自身のマスではなく防御側のマスのものが効く。
+#[test]
+fn support_guard_damage_uses_defender_tile() {
+    let (mut app, foe, guard) = setup_support_guard(0, false, None);
+    let weapon = app
+        .database()
+        .unit_by_name("Hero")
+        .unwrap()
+        .weapons
+        .last()
+        .cloned()
+        .unwrap();
+    let set_terrain = |app: &mut App, x: u32, y: u32, id: u32| {
+        let m = app.database_mut().map.as_mut().unwrap();
+        let mut c = m.cell(x, y);
+        c.terrain_id = id;
+        m.set_cell(x, y, c);
+    };
+    let hero = first_player_uid(&app);
+    let hero_idx = app.database().idx_by_uid(&hero).unwrap();
+    let guard_idx = app.database().idx_by_uid(&guard).unwrap();
+    let vs_guard_plain = app
+        .forecast_strike(hero_idx, guard_idx, &weapon)
+        .unwrap()
+        .damage;
+    // 都市 (damage_mod=15) に居るガード役への予測を基準にする。
+    set_terrain(&mut app, 6, 5, 5);
+    let vs_guard_city = app
+        .forecast_strike(hero_idx, guard_idx, &weapon)
+        .unwrap()
+        .damage;
+    assert!(
+        vs_guard_city < vs_guard_plain,
+        "前提: 都市の地形補正でダメージが減る ({vs_guard_city} < {vs_guard_plain})"
+    );
+    // ガード役は平地、防御側は都市。
+    set_terrain(&mut app, 6, 5, 0);
+    set_terrain(&mut app, 6, 6, 5);
+
+    assert!(app.attack_resolve_and_run(Some((6, 6)), false, "援護防御"));
+    let db = app.database();
+    let taken = db.unit_by_uid(&guard).unwrap().damage;
+    assert_eq!(db.unit_by_uid(&foe).unwrap().damage, 0, "防御側が被弾した");
+    assert!(
+        taken == vs_guard_city / 2 || taken == vs_guard_city * 3 / 2 / 2,
+        "ガード役の被ダメージ {taken} が防御側のマス (都市) 基準 ({vs_guard_city} の半分) になっていない"
+    );
+}
+
 /// 原典はガード役を選んでから `CheckParryFeature` を呼ぶので、切り払うのはガード役。
 #[test]
 fn support_guard_parries_as_the_guard() {
