@@ -32,14 +32,31 @@ enum StrikeKind {
 /// `resolve_strike` の結果。`damage` は防御選択・クリティカル・即死・切り払い・
 /// 防御特性を反映した最終ダメージ (吸収なら負)。命中しなかった場合は適用しない。
 struct StrikeOutcome {
-    preview: combat::CombatPreview,
-    atk_statuses: Vec<String>,
     effective_hit: i32,
     roll: i32,
     hit: bool,
     critical: bool,
     parried: bool,
     damage: i64,
+}
+
+/// `strike_cover` の結果。`damage` は身代わり / ガード役が受けた最終ダメージ。
+struct CoverHit {
+    nick: String,
+    damage: i64,
+    outcome: CoverOutcome,
+}
+
+enum CoverOutcome {
+    /// 身代わり / ガード役が切り払った (被ダメージ無し)。
+    Parried,
+    Survived {
+        remaining: i64,
+    },
+    /// HP0 になったが 復活 で立ち上がった。
+    Revived,
+    /// 撃破され盤面から除かれた。
+    Destroyed,
 }
 
 impl App {
@@ -293,25 +310,50 @@ impl App {
             }
         }
 
+        let setup = StrikeSetup {
+            atk_pilot: &atk_pilot,
+            atk_unit: &atk_unit,
+            weapon: &weapon,
+            def_pilot: &def_pilot,
+            def_unit: &def_unit,
+            def_inst: &def_inst,
+            def_hit_mod,
+            def_damage_mod,
+        };
+        // 援護防御チェック。`def_mode` で挙動を切替える (SRC 反撃モードの「援護防御
+        // ON/OFF」):
+        //  - "援護防御": プレイヤーが明示選択 → フェイズに依らず強制発動。
+        //  - "反撃"/"回避"/"防御": 個別反撃を選んだ → 援護防御は発動しない。
+        //  - ""(自動/ヘッドレス/行動不能の素通り): 従来どおり 敵/中立/ＮＰＣ フェイズの
+        //    攻撃時のみ自動発動 (味方が自分から攻撃した Player フェイズは無効)。
+        // 直撃 (精神コマンド): サポートガード (援護防御) を無効化する (§0.8 / SRC)。
+        // 原典 `Unit.Attack` はガード役を切り払いの判定より前に選び、攻撃対象をガード役に
+        // 差し替える。選ぶのは予測 (乱数を使わない) で、使うのは命中したときだけ。
+        let guard_idx = {
+            let (expected, statuses) =
+                self.strike_preview(atk_idx, def_idx, &setup, StrikeKind::Main);
+            if statuses.iter().any(|s| s.contains("直撃")) {
+                None
+            } else {
+                match def_mode {
+                    "援護防御" => self.try_find_support_guard(def_idx, expected.damage),
+                    "反撃" | "回避" | "防御" => None,
+                    _ if self.turn.phase != crate::turn::Phase::Player => {
+                        self.try_find_support_guard(def_idx, expected.damage)
+                    }
+                    _ => None,
+                }
+            }
+        };
         let strike = self.resolve_strike(
             atk_idx,
             def_idx,
-            &StrikeSetup {
-                atk_pilot: &atk_pilot,
-                atk_unit: &atk_unit,
-                weapon: &weapon,
-                def_pilot: &def_pilot,
-                def_unit: &def_unit,
-                def_inst: &def_inst,
-                def_hit_mod,
-                def_damage_mod,
-            },
+            &setup,
             def_mode,
             StrikeKind::Main,
+            guard_idx,
         );
         let StrikeOutcome {
-            preview,
-            atk_statuses,
             effective_hit,
             roll,
             hit,
@@ -320,27 +362,7 @@ impl App {
             damage: applied_damage,
         } = strike;
         let mut defender_killed = false;
-
-        // 援護防御チェック。`def_mode` で挙動を切替える (SRC 反撃モードの「援護防御
-        // ON/OFF」):
-        //  - "援護防御": プレイヤーが明示選択 → フェイズに依らず強制発動。
-        //  - "反撃"/"回避"/"防御": 個別反撃を選んだ → 援護防御は発動しない。
-        //  - ""(自動/ヘッドレス/行動不能の素通り): 従来どおり 敵/中立/ＮＰＣ フェイズの
-        //    攻撃時のみ自動発動 (味方が自分から攻撃した Player フェイズは無効)。
-        // 直撃 (精神コマンド): サポートガード (援護防御) を無効化する (§0.8 / SRC)。
-        let atk_chokugeki = atk_statuses.iter().any(|s| s.contains("直撃"));
-        let guard_idx = if !hit || atk_chokugeki {
-            None
-        } else {
-            match def_mode {
-                "援護防御" => self.try_find_support_guard(def_idx, preview.damage),
-                "反撃" | "回避" | "防御" => None,
-                _ if self.turn.phase != crate::turn::Phase::Player => {
-                    self.try_find_support_guard(def_idx, preview.damage)
-                }
-                _ => None,
-            }
-        };
+        let guard_idx = guard_idx.filter(|_| hit);
 
         let msg = if hit {
             if let Some(sub) = self.apply_migawari(
@@ -358,65 +380,24 @@ impl App {
                     sub, def_pilot.nickname, weapon.name
                 )
             } else if let Some(g_idx) = guard_idx {
-                // 援護防御: guard unit が 50% ダメージを受ける (防御扱い)
-                let guard_dmg = (preview.damage as f64 * 0.5) as i64;
-                let guard_unit_name = self.database.unit_instances[g_idx].unit_data_name.clone();
-                let guard_pilot_name = self.database.unit_instances[g_idx].pilot_name.clone();
-                let guard_unit = self.database.unit_by_name(&guard_unit_name).cloned();
-                let guard_pilot = self.database.pilot_by_name(&guard_pilot_name).cloned();
+                // 援護防御: ガード役を攻撃対象としてダメージを計算し直し、防御扱いで受ける
+                // (切り払いは `resolve_strike` がガード役に対して判定済み)。
                 self.database.unit_instances[g_idx].support_guard_remaining -= 1;
-                let g_max_hp = self
-                    .database
-                    .effective_max_hp(&self.database.unit_instances[g_idx]);
-                // バリア吸収 (B): guard 役が バリアLv* を持てば 1000×Lv を吸収。
-                let guard_dmg = self.apply_barrier_absorb(g_idx, atk_idx, &weapon.class, guard_dmg);
-                // アクティブフィールド (B): 確率発動の 500×Lv 吸収。
-                let guard_dmg =
-                    self.apply_active_field_absorb(g_idx, atk_idx, &weapon.class, guard_dmg);
-                // シールド防御 (B): guard 役が Ｓ防御+シールドを持てば被ダメージ半減。
-                let guard_dmg = self.apply_shield_defense(g_idx, &weapon.class, guard_dmg);
-                // 不死身: 援護防御で身代わりになった guard も撃破させない。
-                let guard_dmg = self.cap_damage_for_immortal(g_idx, g_max_hp, guard_dmg);
-                let guard_old_dmg = self.database.unit_instances[g_idx].damage;
-                self.database.unit_instances[g_idx].damage += guard_dmg;
-                let remaining = g_max_hp - self.database.unit_instances[g_idx].damage;
-                if remaining <= 0 && self.revive_if_possible(g_idx) {
-                    format!(
-                        "援護防御: {} が {} の代わりに受けた → 撃破… だが【復活】！",
-                        guard_pilot
-                            .as_ref()
-                            .map(|p| p.nickname.as_str())
-                            .unwrap_or("?"),
-                        def_pilot.nickname
-                    )
-                } else if remaining <= 0 {
-                    let m = format!(
-                        "援護防御: {} が {} の代わりに受けた → 撃破！",
-                        guard_pilot
-                            .as_ref()
-                            .map(|p| p.nickname.as_str())
-                            .unwrap_or("?"),
-                        def_pilot.nickname
-                    );
-                    let guard_party = self.database.unit_instances[g_idx].party;
-                    self.database.remove_unit_at(g_idx);
-                    if let (Some(gp), Some(gu)) = (guard_pilot, guard_unit) {
-                        self.fire_destruction_label(&gp.name, &gu.name, guard_party);
+                let cover =
+                    self.strike_cover(g_idx, atk_idx, &weapon, StrikeKind::Main, critical, parried);
+                let (g, d) = (cover.nick, &def_pilot.nickname);
+                match cover.outcome {
+                    CoverOutcome::Parried => format!("援護防御: {g} が {d} をかばった"),
+                    CoverOutcome::Survived { remaining } => format!(
+                        "援護防御: {g} が {d} の代わりに {} ダメージ (残HP {remaining})",
+                        cover.damage
+                    ),
+                    CoverOutcome::Revived => {
+                        format!("援護防御: {g} が {d} の代わりに受けた → 撃破… だが【復活】！")
                     }
-                    m
-                } else {
-                    // 損傷率イベント (援護防御で guard が閾値を割った場合)。
-                    self.fire_damage_threshold_for_unit(g_idx, g_max_hp, guard_old_dmg);
-                    format!(
-                        "援護防御: {} が {} の代わりに {} ダメージ (残HP {})",
-                        guard_pilot
-                            .as_ref()
-                            .map(|p| p.nickname.as_str())
-                            .unwrap_or("?"),
-                        def_pilot.nickname,
-                        guard_dmg,
-                        remaining
-                    )
+                    CoverOutcome::Destroyed => {
+                        format!("援護防御: {g} が {d} の代わりに受けた → 撃破！")
+                    }
                 }
             } else {
                 // 通常ダメージ: defender が受ける (防御選択時は applied_damage で半減済)。
@@ -844,6 +825,7 @@ impl App {
         setup: &StrikeSetup,
         def_mode: &str,
         kind: StrikeKind,
+        guard: Option<usize>,
     ) -> StrikeOutcome {
         let StrikeSetup {
             atk_pilot,
@@ -906,9 +888,10 @@ impl App {
             };
         // 切り払い: 格闘系の攻撃を受け手が確率で無効化する (攻撃側 直撃 で無効化されない)。
         // 原典 `Unit.Attack` は回避判定の後で みがわり の身代わりを攻撃対象に差し替えてから
-        // `CheckParryFeature` を呼ぶので、身代わりが居れば切り払うのは身代わりのほう。
+        // `CheckParryFeature` を呼ぶので、身代わり (無ければ援護防御のガード役 `guard`) が
+        // 居れば切り払うのはそちら。
         let atk_has_chokugeki = atk_statuses.iter().any(|s| s.contains("直撃"));
-        let parrier = self.migawari_sub_idx(def_idx).unwrap_or(def_idx);
+        let parrier = self.migawari_sub_idx(def_idx).or(guard).unwrap_or(def_idx);
         let parried = hit && !atk_has_chokugeki && self.roll_parry(atk_idx, parrier, &weapon.class);
         if parried {
             let parrier_nick = if parrier == def_idx {
@@ -933,8 +916,6 @@ impl App {
             }
         }
         StrikeOutcome {
-            preview,
-            atk_statuses,
             effective_hit,
             roll,
             hit,
@@ -1024,6 +1005,7 @@ impl App {
             },
             def_mode,
             StrikeKind::Main,
+            None,
         );
         if !strike.hit {
             self.push_message(format!(
@@ -1244,12 +1226,7 @@ impl App {
     /// (data=身代わりユニット uid) を持つとき、攻撃を身代わりユニットへ **1 回だけ**
     /// 肩代わりさせる。肩代わりが成立したら身代わりユニットの愛称を返し condition を
     /// 消費する。身代わりが盤上に居ない / 防御側自身 なら `None` (通常処理)。
-    ///
-    /// 原典どおり身代わりを新しい攻撃対象としてダメージを計算し直し (`Damage(w, su)`、
-    /// クリティカルなら 1.5 倍)、常に防御扱いで半減する。そのうえで身代わり自身の
-    /// 防御特性・バリア・フィールド・シールド・不死身を適用し、HP0 なら (復活が無ければ)
-    /// 撃破・破壊イベント発火・勝敗判定まで処理する。身代わりが切り払った (`parried`、
-    /// 判定は `resolve_strike` が身代わりに対して行う) ならダメージは無い。
+    /// 身代わりが受ける処理は `strike_cover`。
     fn apply_migawari(
         &mut self,
         def_idx: usize,
@@ -1264,8 +1241,35 @@ impl App {
         self.database.unit_instances[def_idx]
             .conditions
             .retain(|c| c.name != "みがわり");
+        Some(
+            self.strike_cover(sub_idx, atk_idx, weapon, kind, critical, parried)
+                .nick,
+        )
+    }
+
+    /// 原典 `Unit.Attack` で攻撃対象を差し替えた `su` (みがわり の身代わり・援護防御の
+    /// ガード役) `sub_idx` が攻撃を受ける。`su` を新しい攻撃対象としてダメージを計算し直し
+    /// (`Damage(w, su)`、クリティカルなら 1.5 倍)、常に防御扱いで半減する。そのうえで
+    /// `su` 自身の防御特性・バリア・フィールド・シールド・不死身を適用し、HP0 なら
+    /// (復活が無ければ) 撃破・破壊イベント発火・勝敗判定まで、生き残れば損傷率イベントまで
+    /// 処理する。`su` が切り払った (`parried`、判定は `resolve_strike` が `su` に対して
+    /// 行う) ならダメージは無い。
+    fn strike_cover(
+        &mut self,
+        sub_idx: usize,
+        atk_idx: usize,
+        weapon: &crate::data::unit::WeaponData,
+        kind: StrikeKind,
+        critical: bool,
+        parried: bool,
+    ) -> CoverHit {
+        let nick = self.unit_nickname(sub_idx);
         if parried {
-            return Some(self.unit_nickname(sub_idx));
+            return CoverHit {
+                nick,
+                damage: 0,
+                outcome: CoverOutcome::Parried,
+            };
         }
         // 身代わりを対象にダメージを計算し直す。
         let dmg = self
@@ -1286,21 +1290,29 @@ impl App {
         let dmg = self.apply_active_field_absorb(sub_idx, atk_idx, &weapon.class, dmg);
         let dmg = self.apply_shield_defense(sub_idx, &weapon.class, dmg);
         let dmg = self.cap_damage_for_immortal(sub_idx, sub_max_hp, dmg);
-        let sub_name = self.database.unit_instances[sub_idx].unit_data_name.clone();
-        let sub_nick = self.unit_nickname(sub_idx);
         // 吸収 (負のダメージ) は回復として扱い、損傷は 0 未満にしない。
-        let sub_dmg = &mut self.database.unit_instances[sub_idx].damage;
-        *sub_dmg = (*sub_dmg + dmg).max(0);
-        if sub_max_hp - self.database.unit_instances[sub_idx].damage <= 0
-            && !self.revive_if_possible(sub_idx)
-        {
-            let p = self.database.unit_instances[sub_idx].pilot_name.clone();
-            let party = self.database.unit_instances[sub_idx].party;
+        let old_dmg = self.database.unit_instances[sub_idx].damage;
+        let new_dmg = (old_dmg + dmg).max(0);
+        self.database.unit_instances[sub_idx].damage = new_dmg;
+        let remaining = sub_max_hp - new_dmg;
+        let outcome = if remaining > 0 {
+            self.fire_damage_threshold_for_unit(sub_idx, sub_max_hp, old_dmg);
+            CoverOutcome::Survived { remaining }
+        } else if self.revive_if_possible(sub_idx) {
+            CoverOutcome::Revived
+        } else {
+            let u = &self.database.unit_instances[sub_idx];
+            let (p, name, party) = (u.pilot_name.clone(), u.unit_data_name.clone(), u.party);
             self.database.remove_unit_at(sub_idx);
-            crate::event_runtime::fire_destruction_labels(self, &p, &sub_name, party);
+            crate::event_runtime::fire_destruction_labels(self, &p, &name, party);
             self.check_victory();
+            CoverOutcome::Destroyed
+        };
+        CoverHit {
+            nick,
+            damage: dmg,
+            outcome,
         }
-        Some(sub_nick)
     }
 
     /// シールド防御 (防御能力 (B) 段階・SRC.NET `Unit.cs::CheckShieldFeature` 準拠):
@@ -1787,6 +1799,7 @@ impl App {
             },
             def_mode,
             StrikeKind::Support,
+            None,
         );
         // SP コスト消費 (= サポートアタック回数を 1 減らす)
         self.database.unit_instances[sup_idx].support_attack_remaining -= 1;
@@ -2171,6 +2184,7 @@ impl App {
             },
             "",
             StrikeKind::Counter,
+            None,
         );
         let msg = if strike.hit {
             let counter_dmg = strike.damage;

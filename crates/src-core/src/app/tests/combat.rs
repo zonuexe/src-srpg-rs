@@ -4022,3 +4022,163 @@ fn migawari_applies_to_attack_command() {
         "保護対象が被弾した"
     );
 }
+
+/// 援護防御の組み立て: Hero (必中) が Foe を攻撃し、隣の Guard (別の UnitData `Wall`)
+/// が援護防御する。`guard_armor` は援護役の装甲、`melee` なら格闘武器 (武)。
+/// `parrier` に渡したユニット ("Foe" / "Guard") だけが 切り払い + 見切り を持つ。
+fn setup_support_guard(
+    guard_armor: i64,
+    melee: bool,
+    parrier: Option<&str>,
+) -> (App, String, String) {
+    let mut app = App::new();
+    enter_mapview_with_demo_map(&mut app);
+    place_player_unit(&mut app, "Hero", 5, 6);
+    add_weapon(&mut app, "Hero", 1500, 1);
+    if melee {
+        if let Some(w) = app
+            .database_mut()
+            .catalog
+            .units
+            .iter_mut()
+            .find(|u| u.name == "Hero")
+            .and_then(|u| u.weapons.last_mut())
+        {
+            w.class = "武".into();
+        }
+    }
+    let hero = first_player_uid(&app);
+    app.database_mut()
+        .unit_by_uid_mut(&hero)
+        .unwrap()
+        .add_condition(crate::Condition::new("必中", -1));
+    register_enemy_data(&mut app, "Foe");
+    register_enemy_data(&mut app, "Wall");
+    // 防御側は装甲が厚く HP が低い (援護防御の閾値 MaxHP/20 を超える予測ダメージにする)。
+    for (name, armor, hp) in [("Foe", 1200, 1000), ("Wall", guard_armor, 100_000)] {
+        let u = app
+            .database_mut()
+            .catalog
+            .units
+            .iter_mut()
+            .find(|u| u.name == name)
+            .unwrap();
+        u.armor = armor;
+        u.hp = hp;
+    }
+    {
+        let mut p = app.database().pilot_by_name("PILOT").unwrap().clone();
+        p.name = "Parrier".into();
+        p.nickname = "Parrier".into();
+        p.features = vec![("切り払いLv1".into(), String::new())];
+        app.database_mut().catalog.pilots.push(p);
+    }
+    let pilot = |who: &str| {
+        if parrier == Some(who) {
+            "Parrier"
+        } else {
+            "PILOT"
+        }
+    };
+    let foe = app.database_mut().register_unit(crate::UnitInstance::new(
+        "Foe",
+        pilot("Foe"),
+        crate::Party::Enemy,
+        6,
+        6,
+    ));
+    let guard = app.database_mut().register_unit(crate::UnitInstance::new(
+        "Wall",
+        pilot("Guard"),
+        crate::Party::Enemy,
+        6,
+        5,
+    ));
+    {
+        let g = app.database_mut().unit_by_uid_mut(&guard).unwrap();
+        g.add_condition(crate::Condition::new("サポートガード", 9));
+        g.support_guard_remaining = 1;
+    }
+    if let Some(who) = parrier {
+        let uid = if who == "Foe" { &foe } else { &guard };
+        app.database_mut()
+            .unit_by_uid_mut(uid)
+            .unwrap()
+            .add_condition(crate::Condition::new("見切り", -1));
+    }
+    app.set_stage_state(crate::stage::StageState::Battle);
+    app.set_map_cursor(5, 6);
+    (app, foe, guard)
+}
+
+/// 原典 `Unit.Attack` は援護防御のガード役を攻撃対象として `Damage(w, su)` を計算し直し、
+/// 防御扱いで半減する (旧実装は防御側への予測ダメージの 50% を固定で受けていた)。
+#[test]
+fn support_guard_recomputes_damage_against_guard() {
+    let (mut app, foe, guard) = setup_support_guard(0, false, None);
+    let weapon = app
+        .database()
+        .unit_by_name("Hero")
+        .unwrap()
+        .weapons
+        .last()
+        .cloned()
+        .unwrap();
+    let idx = |app: &App, uid: &str| app.database().idx_by_uid(uid).unwrap();
+    let hero = first_player_uid(&app);
+    let hero_idx = idx(&app, &hero);
+    let vs_foe = app
+        .forecast_strike(hero_idx, idx(&app, &foe), &weapon)
+        .unwrap()
+        .damage;
+    let vs_guard = app
+        .forecast_strike(hero_idx, idx(&app, &guard), &weapon)
+        .unwrap()
+        .damage;
+    assert!(
+        vs_foe >= 50,
+        "前提: 防御側への予測 {vs_foe} が援護防御の閾値以上"
+    );
+    assert!(
+        vs_guard > vs_foe * 3,
+        "前提: ガード役への予測 {vs_guard} が防御側 {vs_foe} より十分大きい"
+    );
+
+    assert!(app.attack_resolve_and_run(Some((6, 6)), false, "援護防御"));
+    let db = app.database();
+    let taken = db.unit_by_uid(&guard).unwrap().damage;
+    assert_eq!(db.unit_by_uid(&foe).unwrap().damage, 0, "防御側が被弾した");
+    assert!(
+        taken == vs_guard / 2 || taken == vs_guard * 3 / 2 / 2,
+        "ガード役の被ダメージ {taken} がガード役基準の再計算 ({vs_guard} の半分) になっていない"
+    );
+}
+
+/// 原典はガード役を選んでから `CheckParryFeature` を呼ぶので、切り払うのはガード役。
+#[test]
+fn support_guard_parries_as_the_guard() {
+    let (mut app, foe, guard) = setup_support_guard(0, true, Some("Guard"));
+    assert!(app.attack_resolve_and_run(Some((6, 6)), false, "援護防御"));
+    let db = app.database();
+    assert_eq!(
+        db.unit_by_uid(&guard).unwrap().damage,
+        0,
+        "ガード役が切り払えていない"
+    );
+    assert_eq!(db.unit_by_uid(&foe).unwrap().damage, 0, "防御側が被弾した");
+    assert_eq!(
+        db.unit_by_uid(&guard).unwrap().support_guard_remaining,
+        0,
+        "切り払っても援護防御の回数は使う"
+    );
+
+    // かばわれた防御側の切り払いは判定されず、ガード役が被弾する。
+    let (mut app, foe, guard) = setup_support_guard(0, true, Some("Foe"));
+    assert!(app.attack_resolve_and_run(Some((6, 6)), false, "援護防御"));
+    let db = app.database();
+    assert!(
+        db.unit_by_uid(&guard).unwrap().damage > 0,
+        "ガード役が被弾していない"
+    );
+    assert_eq!(db.unit_by_uid(&foe).unwrap().damage, 0, "防御側が被弾した");
+}
