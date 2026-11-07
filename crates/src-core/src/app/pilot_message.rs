@@ -4,7 +4,7 @@
 //!
 //! 話し手と相手はユニットの複製で受け取る (撃破されたユニットも「破壊」の台詞を言うため)。
 //! ダイアログデータ (`pilot_dialog.txt`) があればそちらを先に使う。`SelectMessage` コマンド・
-//! 複数乗りの話し手選び・合体技のパートナーはまだ扱わない。
+//! 複数乗りの話し手選びはまだ扱わない。
 
 use super::App;
 use crate::data::dialog::Dialog;
@@ -237,15 +237,33 @@ impl App {
 
     /// ダイアログの話し手が全員しゃべれるか (原典 `Dialog.IsAvailable`)。主パイロットと
     /// 非戦闘員は常にいる。ほかのパイロットは、作成されていて、睡眠・麻痺・石化・恐怖・
-    /// 沈黙・混乱 でないこと。合体技のパートナー (`@名前`) はまだ扱わないので使わない。
+    /// 沈黙・混乱 でないこと。`@名前` は合体技のパートナーの主パイロットでなければならない。
     fn dialog_available(&self, u: &UnitInstance, d: &Dialog) -> bool {
         let db = &self.database;
         let mtype = self.message_type(u);
         let main_nickname = db.pilot_by_name(&u.pilot_name).map(|p| p.nickname.as_str());
+        let silenced = |x: &UnitInstance| {
+            ["睡眠", "麻痺", "石化", "恐怖", "沈黙", "混乱"]
+                .iter()
+                .any(|c| x.has_condition(c))
+        };
         d.lines.iter().all(|line| {
             let mut name = line.speaker.as_str();
-            if name.starts_with('@') {
-                return false;
+            if let Some(partner) = name.strip_prefix('@') {
+                // 名前・愛称のどちらでもよく、表情パターン「名前(表情)」も同じ人。
+                let is = |n: &str| partner == n || partner.starts_with(&format!("{n}("));
+                return self
+                    .selected_partners
+                    .iter()
+                    .filter_map(|uid| db.unit_by_uid(uid))
+                    .find(|x| {
+                        !x.pilot_name.is_empty()
+                            && (is(&x.pilot_name)
+                                || db
+                                    .pilot_by_name(&x.pilot_name)
+                                    .is_some_and(|p| is(&p.nickname)))
+                    })
+                    .is_some_and(|x| !silenced(x));
             }
             // 表情パターン「名前(表情)」は名前で判定する。
             if let Some(p) = name.rfind('(') {
@@ -270,12 +288,7 @@ impl App {
                     .pilot_instances
                     .iter()
                     .any(|pi| pi.pilot_data_name == p.name);
-            created
-                && !unit.is_some_and(|x| {
-                    ["睡眠", "麻痺", "石化", "恐怖", "沈黙", "混乱"]
-                        .iter()
-                        .any(|c| x.has_condition(c))
-                })
+            created && !unit.is_some_and(silenced)
         })
     }
 

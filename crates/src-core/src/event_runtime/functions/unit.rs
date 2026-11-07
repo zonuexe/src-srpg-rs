@@ -299,30 +299,22 @@ fn fn_rank(app: &App, c: &FnCall) -> Option<String> {
 
 fn fn_partner(app: &App, c: &FnCall) -> Option<String> {
     let FnCall { args, .. } = *c;
-    // `Partner(num)` — 合体技の num 番目のパートナー Unit ID。
-    // num=0 は使用ユニット自身、num>=1 は合体技パートナー。
-    // 本実装は合体技を完全にはモデル化していないため、合体技履歴を
-    // `直前合体技パートナー[N]` script_var に格納する規約とする。
-    // 未設定なら空文字 (SRC.NET 仕様)。
-    let n: i32 = args.first()?.to_string().parse().unwrap_or(0);
+    // `Partner(num)` (原典 `Expression.bas`): 0 はイベントの対象ユニット、1 以上は攻撃中の
+    // 合体技の num 番目のパートナーの ID。いなければ空文字。
+    let n: i64 = args.first()?.to_string().parse().unwrap_or(0);
     if n == 0 {
-        return Some(app.script_var("直前合体技ユニット").to_string());
+        return Some(app.selected_unit_for_event().to_string());
     }
-    let key = format!("直前合体技パートナー[{n}]");
-    Some(app.script_var(&key).to_string())
+    let partner = usize::try_from(n - 1)
+        .ok()
+        .and_then(|i| app.selected_partners().get(i));
+    Some(partner.cloned().unwrap_or_default())
 }
 
 fn fn_count_partner(app: &App, c: &FnCall) -> Option<String> {
     let _ = c;
-    // `CountPartner()` — 直前戦闘の合体技パートナー数。`直前合体技パートナー[*]`
-    // の要素数を返す。未使用 (引数があってもなくても) で 0。
-    let prefix = "直前合体技パートナー[";
-    let n = app
-        .script_vars()
-        .keys()
-        .filter(|k| k.starts_with(prefix) && k.ends_with(']'))
-        .count();
-    Some(n.to_string())
+    // `CountPartner()`: 攻撃中の合体技のパートナーの数。
+    Some(app.selected_partners().len().to_string())
 }
 
 fn fn_is_equiped(app: &App, c: &FnCall) -> Option<String> {

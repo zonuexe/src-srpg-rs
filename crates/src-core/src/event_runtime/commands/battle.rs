@@ -287,16 +287,6 @@ fn exec_useability(app: &mut App, c: &Cmd) -> Result<usize, ScriptError> {
                 u.add_condition(crate::condition::Condition::new("ステルス".to_string(), -1));
             }
         }
-        "合体技" | "援護攻撃" => {
-            // 合体技/援護攻撃発動: Partner 履歴に対象 unit を追加して
-            // Partner / CountPartner 関数で参照可能にする。
-            let count_key = "直前合体技パートナー数".to_string();
-            let n: i32 = app.script_var(&count_key).parse().unwrap_or(0);
-            let n = n + 1;
-            app.set_script_var(format!("直前合体技パートナー[{n}]"), target_key.clone());
-            app.set_script_var(count_key, n.to_string());
-            app.set_script_var("直前合体技ユニット".to_string(), unit_key.clone());
-        }
         "憑依" => {
             // 憑依: 発動 unit のメインパイロットを target unit に転送。
             // 発動 unit は pilot_name="" になり、target unit が

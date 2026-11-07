@@ -933,8 +933,14 @@ impl App {
                 atk_charged,
                 false,
                 false,
-                |w| self.weapon_firable(atk_idx, w),
-                |w| self.weapon_skill_ok(atk_idx, w),
+                |w| {
+                    self.weapon_firable(atk_idx, w)
+                        && self.combination_ok_vs(atk_idx, w, (def.x, def.y))
+                },
+                |w| {
+                    self.weapon_skill_ok(atk_idx, w)
+                        && self.combination_ok_vs(atk_idx, w, (def.x, def.y))
+                },
             )
             .is_some()
             {

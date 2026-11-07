@@ -137,8 +137,14 @@ impl crate::App {
                 a.charged,
                 false,
                 a.has_condition("突撃"),
-                |w| self.weapon_firable(atk_idx, w),
-                |w| self.weapon_skill_ok(atk_idx, w),
+                |w| {
+                    self.weapon_firable(atk_idx, w)
+                        && self.combination_ok_vs(atk_idx, w, (d.x, d.y))
+                },
+                |w| {
+                    self.weapon_skill_ok(atk_idx, w)
+                        && self.combination_ok_vs(atk_idx, w, (d.x, d.y))
+                },
             ) else {
                 continue;
             };

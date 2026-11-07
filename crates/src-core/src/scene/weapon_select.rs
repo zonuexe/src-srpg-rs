@@ -101,7 +101,7 @@ impl crate::App {
             let a = &self.database().unit_instances[atk_idx];
             (a.x, a.y)
         };
-        let rows = self.build_weapon_rows(atk_idx, def_idx, pws.post_move);
+        let rows = self.build_weapon_rows(atk_idx, def_idx, pws.post_move, pws.is_counter());
         Some(WeaponSelectWindowData {
             attacker,
             defender: pws.target,
