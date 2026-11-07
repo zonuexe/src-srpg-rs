@@ -4920,3 +4920,41 @@ fn silenced_pilot_says_nothing_but_dots() {
     assert_eq!(run("沈黙")[0], "P「…………」");
     assert!(!run("麻痺").iter().any(|m| m == "P「撃つぞ！」"));
 }
+
+/// ダイアログデータ (`pilot_dialog.txt`) はメッセージデータより先に使い、複数の話者が
+/// 順に話す。非戦闘員は常に話せるが、作成されていないパイロットが話すダイアログは
+/// 使わない (原典 `Dialog.IsAvailable`)。
+#[test]
+fn pilot_dialog_comes_before_messages() {
+    let run = |dialog: &str| {
+        let (mut app, _, sup, _) =
+            setup_pilot_messages("PILOT\n攻撃, 撃つぞ！\n\nFOE\n回避, 遅い！\n");
+        app.database_mut()
+            .unit_by_uid_mut(&sup)
+            .unwrap()
+            .conditions
+            .retain(|c| c.name != "援護攻撃");
+        push_pilot_with_features(&mut app, "ロイ", Vec::new());
+        for (name, text) in [
+            ("Data/non_pilot.txt", "相棒\n相棒くん,aibo.bmp\n"),
+            ("Data/pilot_dialog.txt", dialog),
+        ] {
+            crate::scenario::ingest_data_file(&mut app, name, text).expect("データファイル");
+        }
+        app.map_cursor = Some((5, 6));
+        app.attack_resolve_and_run(Some((6, 6)), false, "");
+        app.messages().to_vec()
+    };
+    let msgs =
+        run("PILOT\n攻撃\nPILOT, いくぞ、相棒！\n相棒, 了解！\nシステム, -\nPILOT, 出ない台詞\n");
+    let pos = |pat: &str| msgs.iter().position(|m| m == pat);
+    let (a, b) = (pos("P「いくぞ、相棒！」"), pos("相棒くん「了解！」"));
+    assert!(a.is_some() && a < b, "{msgs:?}");
+    assert!(pos("P「撃つぞ！」").is_none(), "{msgs:?}");
+    // メッセージ `-` の行でダイアログを打ち切る。
+    assert!(!msgs.iter().any(|m| m.contains("出ない台詞")), "{msgs:?}");
+    // 作成されていないパイロット (ロイ) が話すダイアログは使わず、メッセージデータへ。
+    let msgs = run("PILOT\n攻撃\nロイ, 援護する！\n");
+    assert!(msgs.iter().any(|m| m == "P「撃つぞ！」"), "{msgs:?}");
+    assert!(!msgs.iter().any(|m| m.contains("援護する")), "{msgs:?}");
+}
