@@ -139,7 +139,7 @@ impl App {
             .unit_by_name(&atk_unit_name)
             .and_then(|d| d.weapons.iter().position(|w| w.name == weapon_name))
         {
-            self.consume_weapon_resources(atk_idx, wi);
+            self.use_weapon(atk_idx, wi);
         }
 
         // is_event=false の後段イベント (損傷率/使用後/攻撃後) 用に攻撃側 ID を退避。
@@ -229,6 +229,8 @@ impl App {
                 ));
             }
         }
+        // 自爆攻撃 (自)・ＨＰ消費攻撃 (失) で攻撃側が壊れる (原典 `Unit.MapAttack` の「自爆の処理」)。
+        self.self_destruct_after_attack(atk_uid, &weapon);
         // 勝敗判定 (マップ兵器でラスト1機撃破時の勝利確定)。
         self.check_victory();
 

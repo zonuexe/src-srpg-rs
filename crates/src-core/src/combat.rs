@@ -438,8 +438,9 @@ pub fn predict_with_status_terrain(
     if has(atk_statuses, "盲目") || has(atk_statuses, "撹乱") {
         hit_chance /= 2;
     }
-    // 盲目 / 狂戦士 (防御側): これらのユニットへの攻撃の命中率は 1.5 倍 (95 上限)。
-    if has(def_statuses, "盲目") || has(def_statuses, "狂戦士") {
+    // 盲目 / 消耗 / 狂戦士 (防御側): これらのユニットへの攻撃の命中率は 1.5 倍 (95 上限)。
+    if has(def_statuses, "盲目") || has(def_statuses, "消耗") || has(def_statuses, "狂戦士")
+    {
         hit_chance = (hit_chance * 3 / 2).min(95);
     }
     // ＥＣＭ エリア補正 (防御能力 (B)): 周囲の味方/敵 ＥＣＭ Lv 差による命中低下を掛ける
@@ -726,67 +727,83 @@ pub fn critical_probability(
 /// フェイズに効かせるには N+1 が必要 (L0 = 戦闘中のみ → 最小 lifetime 1)。
 pub fn weapon_special_effects(class: &str) -> Vec<(String, i32)> {
     let mut out = Vec::new();
-    for tok in class.split_whitespace() {
-        let (attr, level) = split_attr_level(tok);
-        // 弱<属性> / 効<属性>: 対象に指定属性への弱点 (proc/crit 率増) を 3 ターン付加。
-        // 剋<属性>: 対象の指定属性を持つ武器・アビリティを 3 ターン使用不能にする。
-        if let Some(el) = attr
-            .strip_prefix('弱')
-            .or_else(|| attr.strip_prefix('効'))
-            .filter(|e| !e.is_empty())
-        {
-            out.push((format!("弱点:{el}"), level.unwrap_or(3) + 1));
-            continue;
+    // 弱<属性> / 効<属性>: 対象に指定属性への弱点 (proc/crit 率増) を 3 ターン付加。
+    for prefix in ['弱', '効'] {
+        for el in class_targets(class, prefix) {
+            let turns = class_level(class, &format!("{prefix}{el}")).map_or(3, |l| l as i32);
+            out.push((format!("弱点:{el}"), turns + 1));
         }
-        if let Some(el) = attr.strip_prefix('剋').filter(|e| !e.is_empty()) {
-            out.push((format!("剋:{el}"), level.unwrap_or(3) + 1));
-            continue;
-        }
-        let mapped: Option<(&str, i32)> = match attr.as_str() {
-            "Ｓ" | "S" => Some(("行動不能", 1)),
-            "縛" => Some(("捕縛", 2)),
-            "痺" => Some(("麻痺", 3)),
-            "眠" => Some(("睡眠", 3)),
-            "乱" => Some(("混乱", 3)),
-            "凍" => Some(("凍結", 3)),
-            "石" => Some(("石化", 3)),
-            "毒" => Some(("毒", 3)),
-            "不" => Some(("行動不能", 1)),
-            "止" => Some(("足止め", 1)),
-            "劣" | "低防" => Some(("装甲低下", 3)),
-            // 能力 DOWN 系 (3 ターン)。攻撃力 DOWN=与ダメ ×0.75 / 運動性 DOWN=命中回避 -15 /
-            // 移動力 DOWN=移動力半減。
-            "低攻" => Some(("攻撃力ＤＯＷＮ", 3)),
-            "低運" => Some(("運動性ＤＯＷＮ", 3)),
-            "低移" => Some(("移動力ＤＯＷＮ", 3)),
-            // 命中率低下系。盲=盲目 (3T、攻撃側命中 ×0.5/被攻撃命中 ×1.5)、撹=撹乱 (2T、攻撃側命中 ×0.5)。
-            "盲" => Some(("盲目", 3)),
-            "撹" => Some(("撹乱", 2)),
-            // 回復阻害系。害=回復不能 (特殊能力/地形による HP/EN 自然回復を阻害)、
-            // ゾ=ゾンビ (アビリティ/精神による HP/EN 回復を阻害)。既定 3 ターン。
-            "害" => Some(("回復不能", 3)),
-            "ゾ" => Some(("ゾンビ", 3)),
-            // 黙=沈黙 (3T): 術 / 音 属性の武器・アビリティを使用不能にする。
-            "黙" => Some(("沈黙", 3)),
-            // 狂=狂戦士 (3T): 与ダメージ ×1.25 / 被命中 ×1.5。AI 制御喪失部分 (味方の
-            // 操作不能・暴走ターゲティング) は未モデルだが、戦闘修正と援護除外は反映。
-            "狂" => Some(("狂戦士", 3)),
-            // 中=バリア中和 (1T): 相手のバリア / フィールドを 1 ターン無効化する。
-            "中" => Some(("バリア中和", 1)),
-            // 踊=踊り (3T): 行動不能 (常時回避ニュアンスは未モデル)。
-            "踊" => Some(("踊り", 3)),
-            // 恐=恐怖 (3T): AI が敵から逃げ続ける (ai_act_unit の逃走分岐)。
-            "恐" => Some(("恐怖", 3)),
-            // 告=死の宣告: 期限切れ (次の自軍フェイズ) で HP が 1 になる。default_turns=0
-            // → lifetime 1 (次の自軍フェイズで発動)。告L<n> で n フェイズ後。
-            "告" => Some(("死の宣告", 0)),
-            _ => None,
+    }
+    // 剋<属性>: 対象の指定属性を持つ武器・アビリティを 3 ターン使用不能にする
+    // (原典 `Unit.CauseEffect` の「属性使用禁止攻撃」。状態名は `<技能>使用不能` /
+    // `<属性>属性使用不能`)。
+    for el in class_targets(class, '剋') {
+        let turns = class_level(class, &format!("剋{el}")).map_or(3, |l| l as i32);
+        let sealed: &[&str] = match el.as_str() {
+            "オ" => &["オーラ"],
+            "超" => &["超能力"],
+            "シ" => &["同調率"],
+            "サ" => &["超感覚", "知覚強化"],
+            "霊" => &["霊力"],
+            "術" => &["術"],
+            "技" => &["技"],
+            _ => &[],
         };
-        if let Some((name, default_turns)) = mapped {
-            let turns = level.unwrap_or(default_turns);
-            let lifetime = if turns <= 0 { 1 } else { turns + 1 };
-            out.push((name.to_string(), lifetime));
+        if sealed.is_empty() {
+            out.push((format!("{el}属性使用不能"), turns + 1));
         }
+        for s in sealed {
+            out.push((format!("{s}使用不能"), turns + 1));
+        }
+    }
+    const EFFECTS: [(&str, &str, i32); 26] = [
+        ("Ｓ", "行動不能", 1),
+        ("S", "行動不能", 1),
+        ("縛", "捕縛", 2),
+        ("痺", "麻痺", 3),
+        ("眠", "睡眠", 3),
+        ("乱", "混乱", 3),
+        ("凍", "凍結", 3),
+        ("石", "石化", 3),
+        ("毒", "毒", 3),
+        ("不", "行動不能", 1),
+        ("止", "足止め", 1),
+        ("劣", "装甲低下", 3),
+        ("低防", "装甲低下", 3),
+        // 能力 DOWN 系 (3 ターン)。攻撃力 DOWN=与ダメ ×0.75 / 運動性 DOWN=命中回避 -15 /
+        // 移動力 DOWN=移動力半減。
+        ("低攻", "攻撃力ＤＯＷＮ", 3),
+        ("低運", "運動性ＤＯＷＮ", 3),
+        ("低移", "移動力ＤＯＷＮ", 3),
+        // 命中率低下系。盲=盲目 (3T、攻撃側命中 ×0.5/被攻撃命中 ×1.5)、撹=撹乱 (2T、攻撃側命中 ×0.5)。
+        ("盲", "盲目", 3),
+        ("撹", "撹乱", 2),
+        // 回復阻害系。害=回復不能 (特殊能力/地形による HP/EN 自然回復を阻害)、
+        // ゾ=ゾンビ (アビリティ/精神による HP/EN 回復を阻害)。既定 3 ターン。
+        ("害", "回復不能", 3),
+        ("ゾ", "ゾンビ", 3),
+        // 黙=沈黙 (3T): 術 / 音 属性の武器・アビリティを使用不能にする。
+        ("黙", "沈黙", 3),
+        // 狂=狂戦士 (3T): 与ダメージ ×1.25 / 被命中 ×1.5。AI 制御喪失部分 (味方の
+        // 操作不能・暴走ターゲティング) は未モデルだが、戦闘修正と援護除外は反映。
+        ("狂", "狂戦士", 3),
+        // 中=バリア中和 (1T): 相手のバリア / フィールドを 1 ターン無効化する。
+        ("中", "バリア中和", 1),
+        // 踊=踊り (3T): 行動不能 (常時回避ニュアンスは未モデル)。
+        ("踊", "踊り", 3),
+        // 恐=恐怖 (3T): AI が敵から逃げ続ける (ai_act_unit の逃走分岐)。
+        ("恐", "恐怖", 3),
+        // 告=死の宣告: 期限切れ (次の自軍フェイズ) で HP が 1 になる。default_turns=0
+        // → lifetime 1 (次の自軍フェイズで発動)。告L<n> で n フェイズ後。
+        ("告", "死の宣告", 0),
+    ];
+    for (attr, name, default_turns) in EFFECTS {
+        if !class_has(class, attr) {
+            continue;
+        }
+        let turns = class_level(class, attr).map_or(default_turns, |l| l as i32);
+        let lifetime = if turns <= 0 { 1 } else { turns + 1 };
+        out.push((name.to_string(), lifetime));
     }
     out
 }
@@ -795,18 +812,10 @@ pub fn weapon_special_effects(class: &str) -> Vec<(String, i32)> {
 /// `(衰レベル, 滅レベル)` を返す (`特殊効果攻撃属性.md`)。属性が無ければ `None`。
 /// レベルは 1..=3 にクランプ (Lv1=現在値の3/4、Lv2=1/2、Lv3=1/4)。
 pub fn weapon_crit_decay_levels(class: &str) -> (Option<i32>, Option<i32>) {
-    let mut hp = None;
-    let mut en = None;
-    for tok in class.split_whitespace() {
-        let (attr, level) = split_attr_level(tok);
-        let lv = level.unwrap_or(1).clamp(1, 3);
-        match attr.as_str() {
-            "衰" => hp = Some(lv),
-            "滅" => en = Some(lv),
-            _ => {}
-        }
-    }
-    (hp, en)
+    let lv = |attr: &str| {
+        class_has(class, attr).then(|| class_level(class, attr).map_or(1, |l| l as i32).clamp(1, 3))
+    };
+    (lv("衰"), lv("滅"))
 }
 
 /// 減衰レベル (1..=3) に対応する「現在値に残す分子」(分母 4)。Lv1→3、Lv2→2、Lv3→1。
@@ -820,84 +829,111 @@ pub fn crit_decay_keep_numer(level: i32) -> i64 {
 /// Ｋ 属性 (攻撃側サイズが標的より 2 段階以上小さいと不発のサイズ制限あり)。
 /// 該当属性が無ければ `None`。レベル省略時は 1 マス。
 pub fn weapon_knockback(class: &str) -> Option<(i32, bool)> {
-    for tok in class.split_whitespace() {
-        let (attr, level) = split_attr_level(tok);
-        match attr.as_str() {
-            "吹" => return Some((level.unwrap_or(1).max(1), false)),
-            "Ｋ" | "K" => return Some((level.unwrap_or(1).max(1), true)),
-            _ => {}
-        }
-    }
-    None
+    [("吹", false), ("Ｋ", true), ("K", true)]
+        .into_iter()
+        .find(|(attr, _)| class_has(class, attr))
+        .map(|(attr, k)| (class_level(class, attr).map_or(1, |l| l as i32).max(1), k))
 }
 
 /// 気力減少属性 `脱` / `Ｄ`(気力吸収) を武器 class から抽出し、低下量を返す
 /// (`特殊効果攻撃属性.md`)。低下量は `5×レベル` (レベル省略時 10)。該当が無ければ `None`。
 /// `Ｄ` の「吸収 (低下分の半分を攻撃側へ)」は [`weapon_morale_absorbs`] で判定する。
 pub fn weapon_morale_reduction(class: &str) -> Option<i32> {
-    for tok in class.split_whitespace() {
-        let (attr, level) = split_attr_level(tok);
-        match attr.as_str() {
-            "脱" | "Ｄ" | "D" => return Some(level.map(|l| 5 * l.max(1)).unwrap_or(10)),
-            _ => {}
-        }
-    }
-    None
+    ["脱", "Ｄ", "D"]
+        .into_iter()
+        .find(|attr| class_has(class, attr))
+        .map(|attr| class_level(class, attr).map_or(10, |l| 5 * (l as i32).max(1)))
 }
 
 /// 武器が気力*吸収*属性 (`Ｄ`/`D`) を持つか。`脱` は低下のみ、`Ｄ` は低下分の半分を
 /// 攻撃側の気力へ移す (`特殊効果攻撃属性.md`)。
 pub fn weapon_morale_absorbs(class: &str) -> bool {
-    class.split_whitespace().any(|tok| {
-        let (attr, _) = split_attr_level(tok);
-        attr == "Ｄ" || attr == "D"
-    })
+    class_has(class, "Ｄ") || class_has(class, "D")
 }
 
 /// 支配系属性 `憑`(憑依) / `魅`(魅了) を武器 class から抽出する (`特殊効果攻撃属性.md`
 /// 69-75 魅 / 113-117 憑)。`憑`→`"憑依"`(相手を乗っ取り恒久支配)、`魅`→`"魅了"`(3 ターン、
 /// 魅了主を護衛する味方ユニットとして行動)。いずれの属性も持たなければ `None`。
 /// どちらも `BossRank` 適用ユニットには無効だが、その判定は勢力切替を伴うため
-/// 呼び出し側 (`App::apply_weapon_special_effects`) で行う。class トークンの先頭一致を採る。
+/// 呼び出し側 (`App::apply_weapon_special_effects`) で行う。
 pub fn weapon_possession(class: &str) -> Option<&'static str> {
-    for tok in class.split_whitespace() {
-        let (attr, _) = split_attr_level(tok);
-        match attr.as_str() {
-            "憑" => return Some("憑依"),
-            "魅" => return Some("魅了"),
-            _ => {}
-        }
+    if class_has(class, "憑") {
+        Some("憑依")
+    } else if class_has(class, "魅") {
+        Some("魅了")
+    } else {
+        None
     }
-    None
 }
 
 /// クリティカル時の位置移動属性を武器 class から抽出する (`特殊効果攻撃属性.md`)。
 /// 返り値 `(引き寄せ有無, 強制転移距離)`。`引`=攻撃側に隣接させる、`転L<n>`=ランダムに
 /// `n` 距離テレポート (レベル省略は 1)。いずれも無ければ `(false, None)`。
 pub fn weapon_crit_reposition(class: &str) -> (bool, Option<i32>) {
-    let mut pull = false;
-    let mut teleport = None;
-    for tok in class.split_whitespace() {
-        let (attr, level) = split_attr_level(tok);
-        match attr.as_str() {
-            "引" => pull = true,
-            "転" => teleport = Some(level.unwrap_or(1).max(1)),
-            _ => {}
-        }
-    }
-    (pull, teleport)
+    let teleport =
+        class_has(class, "転").then(|| class_level(class, "転").map_or(1, |l| l as i32).max(1));
+    (class_has(class, "引"), teleport)
 }
 
-/// `"痺L3"` → `("痺", Some(3))`、`"縛"` → `("縛", None)`。`L`/`Ｌ` で区切る。
-fn split_attr_level(tok: &str) -> (String, Option<i32>) {
-    let chars: Vec<char> = tok.chars().collect();
-    if let Some(pos) = chars.iter().position(|&c| c == 'L' || c == 'Ｌ') {
-        let attr: String = chars[..pos].iter().collect();
-        let level: String = chars[pos + 1..].iter().collect();
-        (attr, level.parse::<i32>().ok())
-    } else {
-        (tok.to_string(), None)
+/// 原典 `InStrNotNest`: 属性文字列 `class` の中で `attr` が現れる位置 (文字単位、0 始まり)
+/// を `from` 文字目から探す。直前の文字が 弱・効・剋 のもの (`剋火` の `火` 等) は
+/// その属性の一部なので飛ばす。属性は `武ＳL1気L2` のように区切りなしで並ぶ。
+pub fn class_find(class: &str, attr: &str, from: usize) -> Option<usize> {
+    let chars: Vec<char> = class.chars().collect();
+    let pat: Vec<char> = attr.chars().collect();
+    if pat.is_empty() || pat.len() > chars.len() {
+        return None;
     }
+    (from..=chars.len() - pat.len()).find(|&i| {
+        chars[i..i + pat.len()] == pat[..]
+            && (i == 0 || !matches!(chars[i - 1], '弱' | '効' | '剋'))
+    })
+}
+
+/// 属性 `attr` を持つか (原典 `IsWeaponClassifiedAs` の単純な場合)。
+pub fn class_has(class: &str, attr: &str) -> bool {
+    class_find(class, attr, 0).is_some()
+}
+
+/// 属性 `attr` のレベル (原典 `WeaponLevel`)。`attrL<数値>` と指定されていなければ `None`
+/// (原典は 0)。
+pub fn class_level(class: &str, attr: &str) -> Option<f64> {
+    let start = class_find(class, &format!("{attr}L"), 0)? + attr.chars().count() + 1;
+    let num: String = class
+        .chars()
+        .skip(start)
+        .take_while(|c| matches!(c, '-' | '.' | '0'..='9'))
+        .collect();
+    num.parse().ok()
+}
+
+/// 弱・効・剋 (`prefix`) が付いた属性の一覧 (原典 `GetClassBundle`)。`剋火弱オ剋弱低攻` の
+/// `剋` なら `["火", "弱低攻"]`。
+pub fn class_targets(class: &str, prefix: char) -> Vec<String> {
+    let chars: Vec<char> = class.chars().collect();
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(i) = class_find(class, &prefix.to_string(), from) {
+        // 弱・効・剋 は入れ子にできるので、続く限り読み進める。
+        let mut j = i;
+        while j < chars.len() && matches!(chars[j], '弱' | '効' | '剋') {
+            j += 1;
+        }
+        if j >= chars.len() {
+            break;
+        }
+        // 低 は次の 1 文字 (攻・防・運・移) と組で 1 つの属性。
+        if chars[j] == '低' {
+            if !matches!(chars.get(j + 1), Some('攻' | '防' | '運' | '移')) {
+                from = j + 1;
+                continue;
+            }
+            j += 1;
+        }
+        out.push(chars[i + 1..=j].iter().collect());
+        from = j + 1;
+    }
+    out
 }
 
 /// `attacker_unit` の武器のうち射程内のもののうち、最もダメージ期待値が高い
@@ -1216,8 +1252,31 @@ mod tests {
         );
         assert_eq!(
             weapon_special_effects("剋火"),
-            vec![("剋:火".to_string(), 4)]
+            vec![("火属性使用不能".to_string(), 4)]
         );
+        assert_eq!(
+            weapon_special_effects("剋術L1"),
+            vec![("術使用不能".to_string(), 2)]
+        );
+    }
+
+    /// 属性は区切りなしで並ぶ (原典 `InStrNotNest` / `WeaponLevel` / `GetClassBundle`)。
+    #[test]
+    fn concatenated_class_attributes() {
+        assert!(class_has("先反武ＳL0ＡL1", "Ｓ"));
+        assert_eq!(class_level("先反武ＳL0ＡL1", "Ａ"), Some(1.0));
+        assert_eq!(class_level("先反武ＳL0ＡL1", "Ｓ"), Some(0.0));
+        assert_eq!(class_level("武気", "気"), None);
+        // 弱・効・剋 の後ろの文字は別の属性。
+        assert!(!class_has("武剋毒", "毒"));
+        assert!(class_has("武剋毒毒", "毒"));
+        assert_eq!(class_targets("剋火弱オ剋弱低攻", '剋'), ["火", "弱低攻"]);
+        assert_eq!(
+            weapon_special_effects("武痺L2"),
+            vec![("麻痺".to_string(), 3)]
+        );
+        assert_eq!(weapon_morale_reduction("射脱L3"), Some(15));
+        assert_eq!(weapon_knockback("格吹L2"), Some((2, false)));
     }
 
     /// バリア中和 (中) の防御側はバリアによるダメージ半減が無効化される。
