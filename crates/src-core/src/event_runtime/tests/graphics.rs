@@ -395,10 +395,18 @@ fn paintstring_dash_x_uses_center() {
     let cmds = &app.script_overlay().cmds;
     assert_eq!(cmds.len(), 1);
     match &cmds[0] {
-        crate::script_overlay::DrawCmd::PaintString { x, y, text } => {
+        crate::script_overlay::DrawCmd::PaintString {
+            x,
+            y,
+            text,
+            center_x,
+            center_y,
+        } => {
+            // 中央 (240) に文字列の中心を合わせる (原典 `HCentering`)。
             assert_eq!(*x, 240.0);
             assert_eq!(*y, 100.0);
             assert_eq!(text, "hello");
+            assert!(*center_x && !*center_y);
         }
         _ => panic!("not PaintString"),
     }
@@ -435,9 +443,23 @@ fn hotpointstring_renders_and_registers_hotpoint() {
     let hp = app.hotpoints();
     assert_eq!(hp.len(), 1);
     assert_eq!(hp[0].name, "START");
-    assert_eq!(hp[0].x, 100);
-    // y は文字列上端を指すので、Hotpoint 矩形は y - line_height = 200 - 22 = 178
-    assert_eq!(hp[0].y, 178);
+    // 矩形は描いた文字列そのもの (左上 = 指定座標、既定 14pt で半角 7px × 5 文字)。
+    assert_eq!((hp[0].x, hp[0].y, hp[0].w), (100, 200, 35));
+}
+
+/// 回帰: スパロボ戦記のタイトル `HotpointString - 420 【START】` は、中央に描いた文字列の
+/// 上をクリックすると選べる (以前は矩形が文字列の右上にずれていて押せなかった)。
+#[test]
+fn centered_hotpointstring_is_clickable_on_its_text() {
+    let src = "Font 14pt Bold\nHotpointString - 420 【START】\n";
+    let stmts = event::parse(src).unwrap();
+    let mut app = App::new();
+    execute(&mut app, &stmts).unwrap();
+    let hp = &app.hotpoints()[0];
+    // 全角 2 文字 + 半角 5 文字 = 14*2 + 7*5 = 63px を 240 を中心に置く。
+    assert_eq!((hp.x, hp.y, hp.w), (240 - 31, 420, 63));
+    let inside = |x: i32, y: i32| x >= hp.x && x < hp.x + hp.w && y >= hp.y && y < hp.y + hp.h;
+    assert!(inside(240, 428) && inside(215, 422) && !inside(240, 410));
 }
 
 #[test]
@@ -477,7 +499,7 @@ PaintString 100 200 こんにちは
         _ => panic!("expected SetFont"),
     }
     match &cmds[1] {
-        crate::DrawCmd::PaintString { x, y, text } => {
+        crate::DrawCmd::PaintString { x, y, text, .. } => {
             assert_eq!(*x, 100.0);
             assert_eq!(*y, 200.0);
             assert_eq!(text, "こんにちは");
@@ -503,7 +525,7 @@ PaintString (k * 10 + 5) (k * 20) ヴァイブ
         .cmds
         .iter()
         .find_map(|c| match c {
-            crate::DrawCmd::PaintString { x, y, text } => Some((*x, *y, text.clone())),
+            crate::DrawCmd::PaintString { x, y, text, .. } => Some((*x, *y, text.clone())),
             _ => None,
         })
         .expect("PaintString が無い");
@@ -633,4 +655,32 @@ ChangeMode ガロ 2 (1 + 2)
     assert_eq!(units[0].ai_mode, "4 3");
     // 陣営指定 (`敵 固定`) の後、ユニット指定の座標モードで上書きする。
     assert_eq!(units[1].ai_mode, "2 3");
+}
+
+/// 回帰: `Font` は指定した属性だけを変え、ほかは今のフォントのまま (原典 `ExecFontCmd`)。
+/// スパロボ戦記の SubTitle は `Font 37pt 色` のあと `Font 色` で白い文字を描くが、以前は
+/// 色だけの `Font` でサイズが 14pt に戻り、ステージ名が小さく描かれていた。
+#[test]
+fn font_keeps_unspecified_attributes() {
+    let src = "Font Ｐ明朝 Bold\nFont Regular\nFont 37pt #505050\nFont #FFFFFF\n";
+    let stmts = event::parse(src).unwrap();
+    let mut app = App::new();
+    execute(&mut app, &stmts).unwrap();
+    let fonts: Vec<(String, u32, String)> = app
+        .script_overlay()
+        .cmds
+        .iter()
+        .filter_map(|c| match c {
+            crate::DrawCmd::SetFont {
+                family,
+                size_pt,
+                color,
+            } => Some((family.clone(), *size_pt, color.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fonts[0].0, "bold Ｐ明朝");
+    // Regular は太字を外すだけで、書体名にはならない。
+    assert_eq!(fonts[1].0, "Ｐ明朝");
+    assert_eq!(fonts[3], ("Ｐ明朝".into(), 37, "#FFFFFF".into()));
 }

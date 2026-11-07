@@ -21,8 +21,18 @@ pub enum DrawCmd {
     },
     /// 現在の描画色（Line/PSet 等の線色）。
     SetColor { color: String },
-    /// テキスト描画。`x`/`y` は Canvas 論理座標。
-    PaintString { x: f64, y: f64, text: String },
+    /// テキスト描画。`x`/`y` は Canvas 論理座標 (文字列の左上)。座標に `-` を指定した
+    /// 向きは `center_x` / `center_y` が立ち、`x` / `y` はマップウィンドウの中央 (240) で、
+    /// 文字列の中心をそこに合わせる (原典 `DrawString` の `HCentering` / `VCentering`)。
+    PaintString {
+        x: f64,
+        y: f64,
+        text: String,
+        #[serde(default)]
+        center_x: bool,
+        #[serde(default)]
+        center_y: bool,
+    },
     /// 線描画。
     Line { x1: f64, y1: f64, x2: f64, y2: f64 },
     /// 1 点描画（PSet）。
@@ -241,6 +251,18 @@ impl ScriptOverlay {
             _ => {}
         }
         self.cmds.push(c);
+    }
+
+    /// 現在のフォントで `text` を描いたときの幅と高さ (原典 `TextWidth` / `TextHeight`)。
+    /// 文字幅は測れないので、フォントサイズ (描画側は pt をそのまま px として使う) を
+    /// 全角 1 文字の幅、その半分を半角 1 文字の幅とし、高さはサイズの 4/3 とする。
+    pub fn text_size(&self, text: &str) -> (i32, i32) {
+        let size = self.current_font.as_ref().map_or(14, |f| f.1) as i32;
+        let w = text
+            .chars()
+            .map(|ch| if ch.is_ascii() { size / 2 } else { size })
+            .sum();
+        (w, size * 4 / 3)
     }
 
     /// `BaseX = N` / `BaseY = N` 代入 (script 側からの明示的カーソル設定)。

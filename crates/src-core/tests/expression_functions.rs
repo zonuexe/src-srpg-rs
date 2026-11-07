@@ -2038,10 +2038,10 @@ fn changeterrain_modifies_tile_terrain_id() {
 // ============================================================
 
 #[test]
-fn textwidth_returns_char_count_times_14() {
-    // "hello" = 5 文字 → 5 × 14 = 70 ピクセル
+fn textwidth_halves_ascii_width() {
+    // 既定 14pt: 半角は 7 ピクセル → "hello" = 35
     let app = run(r#"Set v TextWidth("hello")"#);
-    assert_eq!(app.script_var("v"), "70");
+    assert_eq!(app.script_var("v"), "35");
 }
 
 #[test]
@@ -2057,10 +2057,14 @@ fn textwidth_empty_returns_zero() {
     assert_eq!(app.script_var("v"), "0");
 }
 
+/// 回帰: TextWidth / TextHeight は現在のフォントサイズで測る (以前は常に 14pt 相当で、
+/// スパロボ戦記の SubTitle が画面外へ送ったつもりの 37pt の文字列が画面に残っていた)。
 #[test]
-fn textheight_always_returns_20() {
-    let app = run(r#"Set v TextHeight("anything")"#);
-    assert_eq!(app.script_var("v"), "20");
+fn text_size_follows_current_font() {
+    let app = run("Set h TextHeight(\"x\")\nFont 37pt\nSet w TextWidth(ＤＣ前線基地)\nSet h2 TextHeight(ＤＣ)");
+    assert_eq!(app.script_var("h"), "18");
+    assert_eq!(app.script_var("w"), (37 * 6).to_string());
+    assert_eq!(app.script_var("h2"), (37 * 4 / 3).to_string());
 }
 
 #[test]

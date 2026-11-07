@@ -190,20 +190,23 @@ fn fn_term(app: &App, c: &FnCall) -> Option<String> {
     }
 }
 
-fn fn_text_width(_app: &App, c: &FnCall) -> Option<String> {
+fn fn_text_width(app: &App, c: &FnCall) -> Option<String> {
     let FnCall { args, .. } = *c;
-    // `TextWidth(text)` — 描画幅 (ピクセル) の近似値。フォントサイズが
-    // ランタイムに保持されていないため、char_count × 14 (14pt 等幅相当) で
-    // 概算する。
+    // `TextWidth(text)` — 現在のフォントで描いたときの幅 (ピクセル) の見積もり。
     let s = args.first()?.to_string();
-    let s = s.trim_matches('"');
-    Some((s.chars().count() as i32 * 14).to_string())
+    Some(
+        app.script_overlay()
+            .text_size(s.trim_matches('"'))
+            .0
+            .to_string(),
+    )
 }
 
-fn fn_text_height(_app: &App, c: &FnCall) -> Option<String> {
-    let _ = c;
-    // `TextHeight(text)` — 1 行高さ。フォントサイズ 14pt 想定で 20 を返す。
-    Some("20".to_string())
+fn fn_text_height(app: &App, c: &FnCall) -> Option<String> {
+    let FnCall { args, .. } = *c;
+    // `TextHeight(text)` — 現在のフォントの 1 行の高さの見積もり。
+    let s = args.first().map(ToString::to_string).unwrap_or_default();
+    Some(app.script_overlay().text_size(&s).1.to_string())
 }
 
 fn fn_key_state(app: &App, c: &FnCall) -> Option<String> {
