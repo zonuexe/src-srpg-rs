@@ -4958,3 +4958,32 @@ fn pilot_dialog_comes_before_messages() {
     assert!(msgs.iter().any(|m| m == "P「撃つぞ！」"), "{msgs:?}");
     assert!(!msgs.iter().any(|m| m.contains("援護する")), "{msgs:?}");
 }
+
+/// かばう (原典 `LookForGuardHelp`): 防御側の隣の味方が、信頼度が `Dice(10)` 以上で、
+/// 「かばう(防御側)」の台詞を持ち、受けても倒されなければ代わりに攻撃を受ける。
+#[test]
+fn ally_with_relation_and_line_protects_defender() {
+    let run = |relation: &str| {
+        let (mut app, _, sup, foe) =
+            setup_pilot_messages("PILOT\nかばう(FOE), 危ない！\n\nFOE\n回避, 遅い！\n");
+        app.database_mut()
+            .unit_by_uid_mut(&sup)
+            .unwrap()
+            .conditions
+            .retain(|c| c.name != "援護攻撃");
+        let buddy = spawn_party(&mut app, "Foe", crate::Party::Enemy, 7, 6);
+        app.set_script_var("__rel_PILOT_FOE".to_string(), relation.to_string());
+        app.map_cursor = Some((5, 6));
+        app.attack_resolve_and_run(Some((6, 6)), false, "");
+        let dmg = |uid: &str| app.database().unit_by_uid(uid).unwrap().damage;
+        (dmg(&foe), dmg(&buddy), app.messages().to_vec())
+    };
+    let (foe, buddy, msgs) = run("10");
+    assert_eq!(foe, 0, "{msgs:?}");
+    assert!(buddy > 0, "{msgs:?}");
+    assert!(msgs.iter().any(|m| m == "P「危ない！」"), "{msgs:?}");
+    assert!(msgs.iter().any(|m| m.starts_with("かばう: ")), "{msgs:?}");
+    // 信頼度が 0 なら Dice(10) を超えられず、かばわない。
+    let (foe, buddy, msgs) = run("0");
+    assert!(foe > 0 && buddy == 0, "{msgs:?}");
+}

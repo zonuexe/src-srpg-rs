@@ -64,19 +64,37 @@ enum CoverOutcome {
 }
 
 impl CoverHit {
-    /// 援護防御で `def_nick` をかばったときのメッセージ。
-    fn support_guard_message(&self, def_nick: &str) -> String {
+    /// 援護防御 / かばう (`label`) で `def_nick` をかばったときのメッセージ。
+    fn cover_message(&self, label: &str, def_nick: &str) -> String {
         let (g, d) = (&self.nick, def_nick);
         match self.outcome {
-            CoverOutcome::Parried => format!("援護防御: {g} が {d} をかばった"),
+            CoverOutcome::Parried => format!("{label}: {g} が {d} をかばった"),
             CoverOutcome::Survived { remaining } => format!(
-                "援護防御: {g} が {d} の代わりに {} ダメージ (残HP {remaining})",
+                "{label}: {g} が {d} の代わりに {} ダメージ (残HP {remaining})",
                 self.damage
             ),
             CoverOutcome::Revived => {
-                format!("援護防御: {g} が {d} の代わりに受けた → 撃破… だが【復活】！")
+                format!("{label}: {g} が {d} の代わりに受けた → 撃破… だが【復活】！")
             }
-            CoverOutcome::Destroyed => format!("援護防御: {g} が {d} の代わりに受けた → 撃破！"),
+            CoverOutcome::Destroyed => format!("{label}: {g} が {d} の代わりに受けた → 撃破！"),
+        }
+    }
+}
+
+/// 防御側の代わりに攻撃を受けるユニット (原典 `Unit.Attack` の `su`)。
+#[derive(Clone, Copy)]
+pub(super) struct GuardPick {
+    pub(super) idx: usize,
+    /// 援護防御 (`false` ならかばう)。
+    pub(super) support_guard: bool,
+}
+
+impl GuardPick {
+    fn label(self) -> &'static str {
+        if self.support_guard {
+            "援護防御"
+        } else {
+            "かばう"
         }
     }
 }
@@ -380,7 +398,8 @@ impl App {
             Opening::Normal
         };
         self.attack_opening_messages(&atk_snap, opening, &atk_ctx);
-        let guard_idx = self.pick_support_guard(atk_idx, def_idx, &setup, StrikeKind::Main);
+        let guard = self.pick_support_guard(atk_idx, def_idx, &setup, StrikeKind::Main);
+        let guard_idx = guard.map(|g| g.idx);
         let strike = self.resolve_strike(
             atk_idx,
             def_idx,
@@ -418,13 +437,15 @@ impl App {
                     "みがわり: {} が {} の身代わりになった！ [{}]",
                     sub, def_pilot.nickname, weapon.name
                 )
-            } else if let Some(g_idx) = guard_idx {
-                // 援護防御: ガード役を攻撃対象としてダメージを計算し直し、防御扱いで受ける
-                // (切り払いは `resolve_strike` がガード役に対して判定済み)。
-                self.database.unit_instances[g_idx].used_support_guard += 1;
+            } else if let Some(pick) = guard.filter(|_| hit) {
+                // 援護防御 / かばう: ガード役を攻撃対象としてダメージを計算し直し、防御扱いで
+                // 受ける (切り払いは `resolve_strike` がガード役に対して判定済み)。
+                let g_idx = pick.idx;
+                if pick.support_guard {
+                    self.database.unit_instances[g_idx].used_support_guard += 1;
+                }
                 covered = true;
-                let guard = self.database.unit_instances[g_idx].clone();
-                self.support_guard_messages(&guard, &def_inst);
+                self.guard_messages(pick, &def_inst);
                 let cover = self.strike_cover(
                     g_idx,
                     def_idx,
@@ -434,7 +455,7 @@ impl App {
                     critical,
                     parried,
                 );
-                cover.support_guard_message(&def_pilot.nickname)
+                cover.cover_message(pick.label(), &def_pilot.nickname)
             } else {
                 // 通常ダメージ: defender が受ける (防御選択時は applied_damage で半減済)。
                 // 不死身: 撃破させないよう被ダメージをキャップ (サンプルの「不死身で
@@ -1894,7 +1915,8 @@ impl App {
             target: Some(&leader),
             ..Default::default()
         };
-        let guard_idx = self.pick_support_guard(sup_idx, def_idx, &setup, StrikeKind::Support);
+        let guard = self.pick_support_guard(sup_idx, def_idx, &setup, StrikeKind::Support);
+        let guard_idx = guard.map(|g| g.idx);
         let strike = self.resolve_strike(
             sup_idx,
             def_idx,
@@ -1904,12 +1926,14 @@ impl App {
             guard_idx,
         );
         self.database.unit_instances[sup_idx].used_support_attack += 1;
-        if let Some(g_idx) = guard_idx.filter(|_| strike.hit) {
+        if let Some(pick) = guard.filter(|_| strike.hit) {
             if self.migawari_sub_idx(def_idx).is_none() {
-                // 援護防御: ガード役が攻撃対象に差し替わり、防御側は何も受けない。
-                self.database.unit_instances[g_idx].used_support_guard += 1;
-                let guard = self.database.unit_instances[g_idx].clone();
-                self.support_guard_messages(&guard, &def_inst);
+                // 援護防御 / かばう: ガード役が攻撃対象に差し替わり、防御側は何も受けない。
+                let g_idx = pick.idx;
+                if pick.support_guard {
+                    self.database.unit_instances[g_idx].used_support_guard += 1;
+                }
+                self.guard_messages(pick, &def_inst);
                 let cover = self.strike_cover(
                     g_idx,
                     def_idx,
@@ -1923,7 +1947,7 @@ impl App {
                     "{} の{label} [{}] → {}",
                     sup_pilot.nickname,
                     weapon.name,
-                    cover.support_guard_message(&def_pilot.nickname)
+                    cover.cover_message(pick.label(), &def_pilot.nickname)
                 ));
                 let report = StrikeReport {
                     hit: true,
@@ -2158,22 +2182,115 @@ impl App {
     /// (精神コマンド) ならサポートガードは無効。味方が手動反撃 (自動反撃モードがオフ) で
     /// 守られるときはダメージが小さくてもかばう。
     fn pick_support_guard(
-        &self,
+        &mut self,
         atk_idx: usize,
         def_idx: usize,
         setup: &StrikeSetup,
         kind: StrikeKind,
-    ) -> Option<usize> {
+    ) -> Option<GuardPick> {
         let def_party = self.database.unit_instances[def_idx].party;
-        if self.support_guard_declined || def_party == self.turn.phase.party() {
+        let support_guard = (|| {
+            if self.support_guard_declined || def_party == self.turn.phase.party() {
+                return None;
+            }
+            let (expected, statuses) = self.strike_preview(atk_idx, def_idx, setup, kind);
+            if statuses.iter().any(|s| s.contains("直撃")) {
+                return None;
+            }
+            let always = def_party == crate::Party::Player && !self.auto_counter;
+            self.try_find_support_guard(atk_idx, def_idx, setup.weapon, &expected, always)
+        })();
+        // 援護防御が無ければ、かばってくれるユニットを探す (原典 `LookForGuardHelp`)。
+        match support_guard {
+            Some(idx) => Some(GuardPick {
+                idx,
+                support_guard: true,
+            }),
+            None => self
+                .look_for_guard_help(atk_idx, def_idx, setup.weapon)
+                .map(|idx| GuardPick {
+                    idx,
+                    support_guard: false,
+                }),
+        }
+    }
+
+    /// 防御側 `def_idx` をかばってくれるユニットを探す (原典 `Unit.LookForGuardHelp`)。
+    /// 防御側の左右上下の順に、次をすべて満たす最初のユニット:
+    /// 敵でない / 信頼度 (`Relation(かばう側, 防御側)`) が `Dice(10)` 以上 / 行動でき、
+    /// 混乱・暴走・魅了・憑依・恐怖・狂戦士 でない / 「かばう(防御側の名前か愛称)」の台詞が
+    /// ある / 防御側の領域に入れる / 防御扱いで受けても倒されない。
+    /// 原典は命中が決まってから探すが、移植版は援護防御と同じく命中判定の前に選ぶ。
+    /// 信頼度のダイスは、ほかの条件を満たしたユニットについてだけ振る。
+    fn look_for_guard_help(
+        &mut self,
+        atk_idx: usize,
+        def_idx: usize,
+        weapon: &crate::data::unit::WeaponData,
+    ) -> Option<usize> {
+        if combat::is_map_weapon(weapon) {
             return None;
         }
-        let (expected, statuses) = self.strike_preview(atk_idx, def_idx, setup, kind);
-        if statuses.iter().any(|s| s.contains("直撃")) {
-            return None;
+        let def = self.database.unit_instances[def_idx].clone();
+        let def_nick = self
+            .database
+            .pilot_by_name(&def.pilot_name)
+            .map(|p| p.nickname.clone());
+        let names: Vec<String> = [Some(def.pilot_name.clone()), def_nick]
+            .into_iter()
+            .flatten()
+            .collect();
+        for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            let (Some(x), Some(y)) = (def.x.checked_add_signed(dx), def.y.checked_add_signed(dy))
+            else {
+                continue;
+            };
+            let Some(i) = self
+                .database
+                .uid_at(x, y)
+                .and_then(|uid| self.database.idx_by_uid(uid))
+            else {
+                continue;
+            };
+            let u = self.database.unit_instances[i].clone();
+            if i == atk_idx
+                || def.party.is_hostile_to(u.party)
+                || u.attack_disabled()
+                || ["混乱", "暴走", "魅了", "憑依", "恐怖", "狂戦士"]
+                    .iter()
+                    .any(|c| u.has_condition(c))
+                || !self.can_enter_area_of(i, def_idx)
+            {
+                continue;
+            }
+            // 台詞が無ければかばわない (原典は状態異常を問わずに確かめる)。
+            if !names
+                .iter()
+                .any(|n| self.has_guard_line(&u, &format!("かばう({n})")))
+            {
+                continue;
+            }
+            // 防御扱い (半分。防御不可 / 殺 属性なら等倍) で受けて倒されるならかばわない。
+            let full = crate::feature::has_feature(&u.active_features, "防御不可")
+                || weapon.class.contains('殺');
+            let raw = self
+                .forecast_strike_as(atk_idx, i, weapon, StrikeKind::Main, Some(def_idx))
+                .map_or(0, |p| p.damage);
+            let dmg = if full { raw } else { raw / 2 };
+            if dmg >= self.database.effective_max_hp(&u) - u.damage {
+                continue;
+            }
+            let relation = self
+                .script_var(&format!("__rel_{}_{}", u.pilot_name, def.pilot_name))
+                .parse::<i64>()
+                .unwrap_or(0);
+            let dice = i64::from(self.next_u32() % 10) + 1;
+            if dice > relation {
+                continue;
+            }
+            return Some(i);
         }
-        let always = def_party == crate::Party::Player && !self.auto_counter;
-        self.try_find_support_guard(atk_idx, def_idx, setup.weapon, &expected, always)
+        None
     }
 
     /// 援護防御ユニット検索 (原典 `Unit.LookForSupportGuard`): `atk_idx` の `weapon` による
@@ -2280,9 +2397,9 @@ impl App {
         {
             return false;
         }
-        let Some(ud) = self.database.unit_by_name(&u.unit_data_name) else {
+        if self.database.unit_by_name(&u.unit_data_name).is_none() {
             return false;
-        };
+        }
         // オプション `対ＮＰＣサポートガード無効`: 味方は ＮＰＣ をかばわない
         // (ＮＰＣ が味方をかばうのは変わらない)。
         if u.party == crate::Party::Player
@@ -2295,24 +2412,34 @@ impl App {
         if !guard_team.is_empty() && guard_team != self.main_pilot_team(def_idx) {
             return false;
         }
-        let def_area = self.database.unit_area(def);
-        if def_area != self.database.unit_area(u) {
-            let adaption = ud.adaption.0;
-            let ok = match def_area.as_str() {
-                "空中" => {
-                    ud.transportation.contains('空')
-                        || u.active_features.iter().any(|f| f.name == "空中移動")
-                }
-                "地上" => adaption[1] != b'-',
-                "水中" | "水上" => adaption[2] != b'-',
-                "宇宙" => adaption[3] != b'-',
-                _ => true,
-            };
-            if !ok {
-                return false;
-            }
+        if !self.can_enter_area_of(i, def_idx) {
+            return false;
         }
         !self.main_pilot_is_mecha(def_idx) || self.main_pilot_is_mecha(i)
+    }
+
+    /// `i` のユニットが `def_idx` のいる領域 (空中/地上/水中/宇宙) に入れるか。
+    fn can_enter_area_of(&self, i: usize, def_idx: usize) -> bool {
+        let def = &self.database.unit_instances[def_idx];
+        let u = &self.database.unit_instances[i];
+        let Some(ud) = self.database.unit_by_name(&u.unit_data_name) else {
+            return false;
+        };
+        let def_area = self.database.unit_area(def);
+        if def_area == self.database.unit_area(u) {
+            return true;
+        }
+        let adaption = ud.adaption.0;
+        match def_area.as_str() {
+            "空中" => {
+                ud.transportation.contains('空')
+                    || u.active_features.iter().any(|f| f.name == "空中移動")
+            }
+            "地上" => adaption[1] != b'-',
+            "水中" | "水上" => adaption[2] != b'-',
+            "宇宙" => adaption[3] != b'-',
+            _ => true,
+        }
     }
 
     /// 主パイロットのチーム (パイロット用特殊能力 `チーム=名前`、無ければ空文字)。

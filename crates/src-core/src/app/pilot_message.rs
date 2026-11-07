@@ -666,22 +666,39 @@ impl App {
             .map_or_else(|| u.clone(), |i| self.database.unit_instances[i].clone())
     }
 
-    /// 援護防御に入ったユニットの台詞 (原典 `Unit.Attack` の「かばう際のメッセージ」)。
-    pub(super) fn support_guard_messages(&mut self, guard: &UnitInstance, guarded: &UnitInstance) {
+    /// かばう台詞 `situation` があるか (原典 `IsMessageDefined(…, True)`: 状態異常を問わない)。
+    pub(super) fn has_guard_line(&mut self, u: &UnitInstance, situation: &str) -> bool {
+        self.has_pilot_line(u, situation, &MsgCtx::default())
+    }
+
+    /// 援護防御・かばうに入ったユニットの台詞 (原典 `Unit.Attack` の「かばう際の
+    /// メッセージ」)。援護防御は「サポートガード(名前 / 愛称)」→「サポートガード」、
+    /// かばうは「かばう(名前 / 愛称)」。
+    pub(super) fn guard_messages(
+        &mut self,
+        pick: super::battle::GuardPick,
+        guarded: &UnitInstance,
+    ) {
+        let guard = self.database.unit_instances[pick.idx].clone();
         let ctx = MsgCtx::default();
         let nickname = self
             .database
             .pilot_by_name(&guarded.pilot_name)
             .map(|p| p.nickname.clone());
+        let head = if pick.support_guard {
+            "サポートガード"
+        } else {
+            "かばう"
+        };
         let candidates: Vec<String> = [Some(guarded.pilot_name.clone()), nickname]
             .into_iter()
             .flatten()
-            .map(|n| format!("サポートガード({n})"))
-            .chain(["サポートガード".to_string()])
+            .map(|n| format!("{head}({n})"))
+            .chain(pick.support_guard.then(|| head.to_string()))
             .collect();
         for s in candidates {
-            if self.is_message_defined(guard, &s, &ctx) {
-                self.pilot_message(guard, &s, MsgMode::Plain, &ctx);
+            if self.is_message_defined(&guard, &s, &ctx) {
+                self.pilot_message(&guard, &s, MsgMode::Plain, &ctx);
                 return;
             }
         }
