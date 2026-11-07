@@ -80,6 +80,13 @@ pub struct Catalog {
     /// メッセージデータ (`pilot_message.txt`)。戦闘中のパイロットの台詞。SRC `MDList`。
     #[serde(default)]
     pub messages: crate::data::message::MessageData,
+    /// ダイアログデータ (`pilot_dialog.txt`)。複数の話者による台詞。SRC `DDList`。
+    #[serde(default)]
+    pub dialogs: crate::data::dialog::DialogData,
+    /// 非戦闘員データ (`non_pilot.txt`) の名前。非戦闘員は `pilots` にも登録するので、
+    /// 戦闘員と区別するために持つ (SRC `NPDList.IsDefined`)。
+    #[serde(default)]
+    pub non_pilots: std::collections::BTreeSet<String>,
 }
 
 /// ゲーム全体のデータ: 静的データ ([`Catalog`]) と、実行時の盤面 (マップ・ユニット実体・
@@ -143,6 +150,10 @@ impl GameDatabase {
                 messages: crate::data::message::MessageData {
                     entries: BTreeMap::new(),
                 },
+                dialogs: crate::data::dialog::DialogData {
+                    entries: BTreeMap::new(),
+                },
+                non_pilots: std::collections::BTreeSet::new(),
             },
             map: None,
             unit_instances: UnitList(Vec::new()),

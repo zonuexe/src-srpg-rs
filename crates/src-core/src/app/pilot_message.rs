@@ -3,11 +3,12 @@
 //! 台詞を選び、メッセージ欄に `愛称「台詞」` の形で出す。
 //!
 //! 話し手と相手はユニットの複製で受け取る (撃破されたユニットも「破壊」の台詞を言うため)。
-//! ダイアログデータ (`pilot_dialog.txt`)・`SelectMessage` コマンド・複数乗りの話し手選び
-//! はまだ扱わない。
+//! ダイアログデータ (`pilot_dialog.txt`) があればそちらを先に使う。`SelectMessage` コマンド・
+//! 複数乗りの話し手選び・合体技のパートナーはまだ扱わない。
 
 use super::App;
-use crate::data::message::{select_message, SelectContext};
+use crate::data::dialog::Dialog;
+use crate::data::message::{select_by_situation, select_message, SelectContext};
 use crate::data::unit::WeaponData;
 use crate::unit_instance::UnitInstance;
 
@@ -56,18 +57,47 @@ fn short_weapon_name(name: &str) -> &str {
 }
 
 impl App {
-    /// ユニットの主パイロットのメッセージタイプ (パイロット用特殊能力「メッセージ」が
-    /// あればその値、無ければパイロット名)。
+    /// ユニットの主パイロットのメッセージタイプ。
     fn message_type(&self, u: &UnitInstance) -> String {
+        self.message_type_of(&u.pilot_name)
+    }
+
+    /// パイロットのメッセージタイプ (パイロット用特殊能力「メッセージ」があればその値、
+    /// 無ければパイロット名)。
+    fn message_type_of(&self, pilot_name: &str) -> String {
         self.database
-            .pilot_by_name(&u.pilot_name)
+            .pilot_by_name(pilot_name)
             .and_then(|p| {
                 p.features
                     .iter()
                     .find(|(n, v)| n == "メッセージ" && !v.is_empty())
                     .map(|(_, v)| v.clone())
             })
-            .unwrap_or_else(|| u.pilot_name.clone())
+            .unwrap_or_else(|| pilot_name.to_string())
+    }
+
+    /// ダイアログデータを引くパイロットリストの候補 (原典 `PilotMessage` の `pnames`)。
+    /// 乗員全員 → 主パイロットの順。移植版はサポートパイロットを区別しないので、
+    /// 「パイロット全員とサポート全員」と「パイロット全員」は同じになる。
+    fn dialog_keys(&self, u: &UnitInstance) -> Vec<String> {
+        let crew: Vec<String> = u
+            .pilot_ids
+            .iter()
+            .filter_map(|id| {
+                self.database
+                    .pilot_instances
+                    .iter()
+                    .find(|p| &p.id == id)
+                    .map(|p| self.message_type_of(&p.pilot_data_name))
+            })
+            .collect();
+        let main = self.message_type(u);
+        let mut keys = Vec::new();
+        if crew.len() > 1 {
+            keys.push(crew.join(" "));
+        }
+        keys.push(main);
+        keys
     }
 
     fn message_dice(&mut self, n: usize) -> usize {
@@ -178,6 +208,85 @@ impl App {
         select_message(&entries, situation, &sctx, &mut |n| self.message_dice(n))
     }
 
+    /// パイロットリスト `key` のダイアログから `situation` のものを選ぶ (原典
+    /// `DialogData.SelectDialog`)。話し手のだれかがしゃべれないダイアログは選ばない。
+    fn select_pilot_dialog(
+        &mut self,
+        u: &UnitInstance,
+        key: &str,
+        situation: &str,
+        ctx: &MsgCtx,
+    ) -> Option<Dialog> {
+        let dialogs = self.database.catalog.dialogs.get(key)?.to_vec();
+        let available: Vec<bool> = dialogs
+            .iter()
+            .map(|d| self.dialog_available(u, d))
+            .collect();
+        let sctx = self.select_context(u, situation, ctx);
+        let indexed: Vec<(usize, &Dialog)> = dialogs.iter().enumerate().collect();
+        select_by_situation(
+            &indexed,
+            |(_, d)| d.situation.as_str(),
+            |(i, _)| available[*i],
+            situation,
+            &sctx,
+            &mut |n| self.message_dice(n),
+        )
+        .map(|(_, d)| (*d).clone())
+    }
+
+    /// ダイアログの話し手が全員しゃべれるか (原典 `Dialog.IsAvailable`)。主パイロットと
+    /// 非戦闘員は常にいる。ほかのパイロットは、作成されていて、睡眠・麻痺・石化・恐怖・
+    /// 沈黙・混乱 でないこと。合体技のパートナー (`@名前`) はまだ扱わないので使わない。
+    fn dialog_available(&self, u: &UnitInstance, d: &Dialog) -> bool {
+        let db = &self.database;
+        let mtype = self.message_type(u);
+        let main_nickname = db.pilot_by_name(&u.pilot_name).map(|p| p.nickname.as_str());
+        d.lines.iter().all(|line| {
+            let mut name = line.speaker.as_str();
+            if name.starts_with('@') {
+                return false;
+            }
+            // 表情パターン「名前(表情)」は名前で判定する。
+            if let Some(p) = name.rfind('(') {
+                let base = &name[..p];
+                if db.catalog.non_pilots.contains(name) && db.pilot_by_name(base).is_some() {
+                    name = base;
+                }
+            }
+            if name == u.pilot_name || Some(name) == main_nickname || name == mtype {
+                return true;
+            }
+            if db.catalog.non_pilots.contains(name) {
+                return true;
+            }
+            let Some(p) = db.pilot_by_name(name) else {
+                // パイロットでない話者 (`システム` 等)。
+                return true;
+            };
+            let unit = db.unit_instances.iter().find(|x| x.pilot_name == p.name);
+            let created = unit.is_some()
+                || db
+                    .pilot_instances
+                    .iter()
+                    .any(|pi| pi.pilot_data_name == p.name);
+            created
+                && !unit.is_some_and(|x| {
+                    ["睡眠", "麻痺", "石化", "恐怖", "沈黙", "混乱"]
+                        .iter()
+                        .any(|c| x.has_condition(c))
+                })
+        })
+    }
+
+    /// `situation` の台詞がダイアログデータかメッセージデータにあるか。
+    fn has_pilot_line(&mut self, u: &UnitInstance, situation: &str, ctx: &MsgCtx) -> bool {
+        self.dialog_keys(u)
+            .iter()
+            .any(|key| self.select_pilot_dialog(u, key, situation, ctx).is_some())
+            || self.select_pilot_message(u, situation, ctx).is_some()
+    }
+
     /// しゃべれない状態か (原典 `IsMessageDefined` の判定)。
     fn cannot_speak(u: &UnitInstance, situation: &str) -> bool {
         ["沈黙", "憑依", "石化", "凍結", "麻痺", "睡眠"]
@@ -194,7 +303,7 @@ impl App {
         situation: &str,
         ctx: &MsgCtx,
     ) -> bool {
-        !Self::cannot_speak(u, situation) && self.select_pilot_message(u, situation, ctx).is_some()
+        !Self::cannot_speak(u, situation) && self.has_pilot_line(u, situation, ctx)
     }
 
     /// 原典 `Unit.PilotMessage`。`situation` の台詞を、見つからなければ代わりの
@@ -275,18 +384,18 @@ impl App {
         }
         if u.has_condition("沈黙") || u.has_condition("憑依") {
             if !situation.contains('(') && situation != "かけ声" {
-                self.display_battle_message(u, "…………");
+                self.display_battle_message(Some(&self.speaker_name(&u.pilot_name)), "…………");
             }
             return;
         }
         if u.has_condition("睡眠") {
             if !situation.contains('(') {
-                self.display_battle_message(u, "ＺＺＺ……");
+                self.display_battle_message(Some(&self.speaker_name(&u.pilot_name)), "ＺＺＺ……");
             }
             return;
         }
         if u.has_condition("恐怖") {
-            if self.select_pilot_message(u, "恐怖", ctx).is_some() {
+            if self.has_pilot_line(u, "恐怖", ctx) {
                 situations = vec!["恐怖".into()];
             } else {
                 if !situation.contains('(') {
@@ -308,16 +417,25 @@ impl App {
                     };
                     if !lines.is_empty() {
                         let msg = lines[self.message_dice(4) - 1];
-                        self.display_battle_message(u, msg);
+                        self.display_battle_message(Some(&self.speaker_name(&u.pilot_name)), msg);
                     }
                 }
                 return;
             }
         }
-        if u.has_condition("混乱") && self.select_pilot_message(u, "混乱", ctx).is_some() {
+        if u.has_condition("混乱") && self.has_pilot_line(u, "混乱", ctx) {
             situations = vec!["混乱".into()];
         }
 
+        // ダイアログデータ (パイロットリストの優先順)、メッセージデータの順に探す。
+        for key in self.dialog_keys(u) {
+            for s in &situations {
+                if let Some(d) = self.select_pilot_dialog(u, &key, s, ctx) {
+                    self.play_dialog(u, &d, &wname, ctx);
+                    return;
+                }
+            }
+        }
         for s in &situations {
             if let Some(msg) = self.select_pilot_message(u, s, ctx) {
                 self.play_message(u, &msg, &wname, ctx);
@@ -326,11 +444,39 @@ impl App {
         }
     }
 
+    /// 原典 `Unit.PlayDialog`。話し手ごとに `$(ユニット)` 等を置き換えて表示する。
+    /// メッセージが `-` の行で打ち切る。
+    fn play_dialog(&mut self, u: &UnitInstance, d: &Dialog, wname: &str, ctx: &MsgCtx) {
+        for line in &d.lines {
+            if line.message == "-" {
+                return;
+            }
+            let msg = self.expand_message(u, &line.message, wname, ctx);
+            let speaker = if line.speaker == u.pilot_name {
+                Some(self.speaker_name(&u.pilot_name))
+            } else if line.speaker == "システム" {
+                None
+            } else {
+                let name = line.speaker.trim_start_matches('@');
+                Some(self.speaker_name(name))
+            };
+            self.display_battle_message(speaker.as_deref(), &msg);
+        }
+    }
+
     /// 原典 `Unit.PlayMessage`。`$(ユニット)` 等を置き換えて表示する。`-` は表示しない。
     fn play_message(&mut self, u: &UnitInstance, msg: &str, wname: &str, ctx: &MsgCtx) {
         if msg == "-" {
             return;
         }
+        let msg = self.expand_message(u, msg, wname, ctx);
+        let speaker = self.speaker_name(&u.pilot_name);
+        self.display_battle_message(Some(&speaker), &msg);
+    }
+
+    /// 台詞の `$(ユニット)` / `$(パイロット)` / `$(武器)` / `$(相手…)` / `$(損傷率)` を
+    /// 置き換える (原典 `PlayMessage` / `PlayDialog`)。
+    fn expand_message(&self, u: &UnitInstance, msg: &str, wname: &str, ctx: &MsgCtx) -> String {
         let db = &self.database;
         let nickname = |x: &UnitInstance| {
             short_unit_name(
@@ -363,17 +509,20 @@ impl App {
                 .replace("$(相手武器)", tw)
                 .replace("$(相手損傷率)", &damage_rate(t));
         }
-        self.display_battle_message(u, &msg);
+        msg
     }
 
-    /// 原典 `DisplayBattleMessage` の代わりに、メッセージ欄へ `愛称「台詞」` を出す。
-    /// `;` はページ送り、`:` はクリック待ちなので、`;` ごとに 1 行にして `:` は消す。
-    /// 効果音の指定 (`.wav` 等) は出さない。
-    fn display_battle_message(&mut self, u: &UnitInstance, msg: &str) {
-        let speaker = self
-            .database
-            .pilot_by_name(&u.pilot_name)
-            .map_or_else(|| u.pilot_name.clone(), |p| p.nickname.clone());
+    /// 話し手の表示名 (パイロット・非戦闘員の愛称。見つからなければ名前のまま)。
+    fn speaker_name(&self, name: &str) -> String {
+        self.database
+            .pilot_by_name(name)
+            .map_or_else(|| name.to_string(), |p| p.nickname.clone())
+    }
+
+    /// 原典 `DisplayBattleMessage` の代わりに、メッセージ欄へ `愛称「台詞」` を出す
+    /// (話し手が無い `システム` は台詞だけ)。`;` はページ送り、`:` はクリック待ちなので、
+    /// `;` ごとに 1 行にして `:` は消す。効果音の指定 (`.wav` 等) は出さない。
+    fn display_battle_message(&mut self, speaker: Option<&str>, msg: &str) {
         for page in msg.split(';') {
             let text = page.replace(':', "");
             let text = text.trim();
@@ -385,7 +534,10 @@ impl App {
             {
                 continue;
             }
-            self.push_message(format!("{speaker}「{text}」"));
+            self.push_message(match speaker {
+                Some(name) => format!("{name}「{text}」"),
+                None => text.to_string(),
+            });
         }
     }
 }
@@ -514,22 +666,39 @@ impl App {
             .map_or_else(|| u.clone(), |i| self.database.unit_instances[i].clone())
     }
 
-    /// 援護防御に入ったユニットの台詞 (原典 `Unit.Attack` の「かばう際のメッセージ」)。
-    pub(super) fn support_guard_messages(&mut self, guard: &UnitInstance, guarded: &UnitInstance) {
+    /// かばう台詞 `situation` があるか (原典 `IsMessageDefined(…, True)`: 状態異常を問わない)。
+    pub(super) fn has_guard_line(&mut self, u: &UnitInstance, situation: &str) -> bool {
+        self.has_pilot_line(u, situation, &MsgCtx::default())
+    }
+
+    /// 援護防御・かばうに入ったユニットの台詞 (原典 `Unit.Attack` の「かばう際の
+    /// メッセージ」)。援護防御は「サポートガード(名前 / 愛称)」→「サポートガード」、
+    /// かばうは「かばう(名前 / 愛称)」。
+    pub(super) fn guard_messages(
+        &mut self,
+        pick: super::battle::GuardPick,
+        guarded: &UnitInstance,
+    ) {
+        let guard = self.database.unit_instances[pick.idx].clone();
         let ctx = MsgCtx::default();
         let nickname = self
             .database
             .pilot_by_name(&guarded.pilot_name)
             .map(|p| p.nickname.clone());
+        let head = if pick.support_guard {
+            "サポートガード"
+        } else {
+            "かばう"
+        };
         let candidates: Vec<String> = [Some(guarded.pilot_name.clone()), nickname]
             .into_iter()
             .flatten()
-            .map(|n| format!("サポートガード({n})"))
-            .chain(["サポートガード".to_string()])
+            .map(|n| format!("{head}({n})"))
+            .chain(pick.support_guard.then(|| head.to_string()))
             .collect();
         for s in candidates {
-            if self.is_message_defined(guard, &s, &ctx) {
-                self.pilot_message(guard, &s, MsgMode::Plain, &ctx);
+            if self.is_message_defined(&guard, &s, &ctx) {
+                self.pilot_message(&guard, &s, MsgMode::Plain, &ctx);
                 return;
             }
         }

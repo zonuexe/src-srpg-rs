@@ -23,6 +23,7 @@ pub enum DataKind {
     Terrain,
     Animation,
     Message,
+    Dialog,
     Map,
 }
 
@@ -38,6 +39,7 @@ impl DataKind {
             "terrain.txt" => Self::Terrain,
             "animation.txt" | "ext_animation.txt" => Self::Animation,
             "pilot_message.txt" => Self::Message,
+            "pilot_dialog.txt" => Self::Dialog,
             n if n.ends_with(".map") => Self::Map,
             _ => return None,
         })
@@ -54,6 +56,7 @@ impl DataKind {
             Self::Terrain => "terrain",
             Self::Animation => "戦闘アニメデータ",
             Self::Message => "メッセージデータ",
+            Self::Dialog => "ダイアログデータ",
             Self::Map => "map",
         }
     }
@@ -63,7 +66,7 @@ impl DataKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataIngest {
     pub kind: DataKind,
-    /// 取り込んだレコード数 (戦闘アニメ・メッセージは取り込み後の対象数、マップは 1)。
+    /// 取り込んだレコード数 (戦闘アニメ・メッセージ・ダイアログは取り込み後の対象数、マップは 1)。
     pub count: usize,
     /// 読み飛ばしたレコードのエラー (レコード単位で寛容に解析する)。
     pub errors: Vec<String>,
@@ -107,6 +110,9 @@ pub fn ingest_data_file(app: &mut App, name: &str, text: &str) -> Option<DataIng
             // 戦闘ステータス 0 のパイロットとして登録する)。
             let v = crate::data::non_pilot::parse(text);
             let n = v.len();
+            db.catalog
+                .non_pilots
+                .extend(v.iter().map(|p| p.name.clone()));
             db.extend_pilots(v);
             (n, Vec::new())
         }
@@ -141,6 +147,10 @@ pub fn ingest_data_file(app: &mut App, name: &str, text: &str) -> Option<DataIng
         DataKind::Message => {
             db.catalog.messages.merge_from_str(text);
             (db.catalog.messages.entries.len(), Vec::new())
+        }
+        DataKind::Dialog => {
+            db.catalog.dialogs.merge_from_str(text);
+            (db.catalog.dialogs.entries.len(), Vec::new())
         }
         DataKind::Map => match mapdata::parse(text) {
             // `ChangeMap` で参照されるので basename で保存する。

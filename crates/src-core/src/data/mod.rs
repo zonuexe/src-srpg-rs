@@ -12,6 +12,7 @@
 //! `Data\` for each scenario. We start with the pilot data parser.
 
 pub mod animation;
+pub mod dialog;
 pub mod event;
 pub mod item;
 pub mod loader;
