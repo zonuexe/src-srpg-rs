@@ -1576,18 +1576,6 @@ fn useability_concentration_adds_condition() {
 }
 
 #[test]
-fn useability_combo_attack_updates_partner_state() {
-    let app = run_with_unit(
-        r#"
-UseAbility リオ 合体技 キャノス
-"#,
-    );
-    assert_eq!(app.script_var("直前合体技ユニット"), "リオ");
-    assert_eq!(app.script_var("直前合体技パートナー数"), "1");
-    assert_eq!(app.script_var("直前合体技パートナー[1]"), "キャノス");
-}
-
-#[test]
 fn fire_victory_condition_event_via_app_helper() {
     let mut app = run_with_unit(
         r#"
@@ -1972,23 +1960,14 @@ fn bossrank_stores_rank_in_script_var() {
 }
 
 #[test]
-fn partner_returns_self_for_zero() {
+fn partner_is_empty_outside_combination_attack() {
+    // 合体技で攻撃している間だけパートナーがいる (`app/tests/combat.rs` で確かめる)。
     let app = run(r#"
-Set 直前合体技ユニット U1
-Set p Partner(0)
-"#);
-    assert_eq!(app.script_var("p"), "U1");
-}
-
-#[test]
-fn countpartner_counts_indexed_partners() {
-    let app = run(r#"
-Set 直前合体技パートナー[1] U2
-Set 直前合体技パートナー[2] U3
-Set 直前合体技パートナー[3] U4
+Set p Partner(1)
 Set c CountPartner()
 "#);
-    assert_eq!(app.script_var("c"), "3");
+    assert_eq!(app.script_var("p"), "");
+    assert_eq!(app.script_var("c"), "0");
 }
 
 #[test]

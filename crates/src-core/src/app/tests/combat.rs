@@ -4987,3 +4987,129 @@ fn ally_with_relation_and_line_protects_defender() {
     let (foe, buddy, msgs) = run("0");
     assert!(foe > 0 && buddy == 0, "{msgs:?}");
 }
+
+/// 合体技の試験用: Hero が射程 1 の合体技 `Combo` (消費 EN 10) を持ち、パートナーは Sup
+/// (パイロット BUDDY)。Sup は目標 Foe (6,6) の斜め (5,7) にいる。
+fn setup_combination(
+    feature: &str,
+) -> (App, String, String, String, crate::data::unit::WeaponData) {
+    let (mut app, hero, sup, foe) = setup_support_attack(1_000_000, 1_000_000, 0);
+    let combo = crate::data::unit::WeaponData {
+        name: "Combo".to_string(),
+        power: 500,
+        min_range: 1,
+        max_range: 1,
+        precision: 100,
+        bullet: -1,
+        en_consumption: 10,
+        necessary_morale: 0,
+        adaption: String::new(),
+        critical: 0,
+        class: "合".to_string(),
+        extras: Vec::new(),
+    };
+    app.database_mut()
+        .catalog
+        .units
+        .iter_mut()
+        .find(|u| u.name == "Hero")
+        .unwrap()
+        .weapons
+        .push(combo.clone());
+    app.database_mut()
+        .unit_by_uid_mut(&hero)
+        .unwrap()
+        .active_features
+        .push(crate::feature::ActiveFeature::new(feature, "Combo Sup"));
+    push_pilot_with_features(&mut app, "BUDDY", Vec::new());
+    app.database_mut().unit_by_uid_mut(&sup).unwrap().pilot_name = "BUDDY".into();
+    (app, hero, sup, foe, combo)
+}
+
+/// 合体技 (原典 `CombinationPartner`): 射程 1 の合体技は目標の隣にパートナーがいるときだけ
+/// 使える。使うとパートナーも EN を払って行動済みになり、攻撃の間は `Partner` 関数から
+/// 見える。
+#[test]
+fn combination_attack_needs_partner_next_to_target() {
+    let (mut app, hero, sup, foe, combo) = setup_combination("合体技");
+    let hero_idx = app.database().idx_by_uid(&hero).unwrap();
+    // 斜めは隣ではない。
+    assert!(!app.weapon_firable(hero_idx, &combo));
+    assert!(!app.combination_ok_vs(hero_idx, &combo, (6, 6)));
+    assert!(app.database_mut().move_unit(&sup, 6, 7));
+    assert!(app.weapon_firable(hero_idx, &combo));
+    assert!(app.combination_ok_vs(hero_idx, &combo, (6, 6)));
+
+    let stmts = crate::data::event::parse(
+        "使用 PILOT Combo:\nSet n CountPartner()\nSet p Partner(1)\nExit\n",
+    )
+    .unwrap();
+    app.script_library_mut()
+        .append_with_name(&stmts, "test_combo.eve");
+    app.selected_weapon_idx = 2;
+    app.map_cursor = Some((5, 6));
+    assert!(app.attack_resolve_and_run(Some((6, 6)), false, ""));
+    let msgs = app.messages().to_vec();
+    assert!(
+        msgs.iter()
+            .any(|m| m.ends_with("[Sup]と共に[Combo]で攻撃をかけた。")),
+        "{msgs:?}"
+    );
+    assert_eq!(app.script_var("n"), "1");
+    assert_eq!(app.script_var("p"), sup);
+    let s = app.database().unit_by_uid(&sup).unwrap();
+    assert!(s.has_acted);
+    assert_eq!(s.en_consumed, 10, "同名の武器が無ければ技の消費 EN を払う");
+    assert!(app.database().unit_by_uid(&foe).unwrap().damage > 0);
+    assert!(app.selected_partners().is_empty());
+}
+
+/// `合体技Lv2` はパイロット間の信頼度が双方 2 以上のときだけ使える。
+#[test]
+fn leveled_combination_needs_mutual_relation() {
+    let (mut app, hero, sup, _, combo) = setup_combination("合体技Lv2");
+    assert!(app.database_mut().move_unit(&sup, 6, 7));
+    let hero_idx = app.database().idx_by_uid(&hero).unwrap();
+    assert!(!app.weapon_firable(hero_idx, &combo));
+    app.set_script_var("__rel_PILOT_BUDDY".to_string(), "2".to_string());
+    assert!(
+        !app.weapon_firable(hero_idx, &combo),
+        "片方向だけでは足りない"
+    );
+    app.set_script_var("__rel_BUDDY_PILOT".to_string(), "2".to_string());
+    assert!(app.weapon_firable(hero_idx, &combo));
+}
+
+/// 合体技は反撃に使えない。
+#[test]
+fn combination_attack_is_not_a_counter() {
+    let (mut app, hero, sup, _, combo) = setup_combination("合体技");
+    assert!(app.database_mut().move_unit(&sup, 6, 7));
+    let hero_idx = app.database().idx_by_uid(&hero).unwrap();
+    assert!(app.weapon_usable_vs(hero_idx, &combo, (6, 6), false, false));
+    assert!(!app.weapon_usable_vs(hero_idx, &combo, (6, 6), false, true));
+}
+
+/// ダイアログの `@名前` の行は、その人が合体技のパートナーの主パイロットのときだけ使う。
+#[test]
+fn combination_dialog_follows_partner() {
+    let (mut app, _, sup, _, _) = setup_combination("合体技");
+    assert!(app.database_mut().move_unit(&sup, 6, 7));
+    crate::scenario::ingest_data_file(
+        &mut app,
+        "Data/pilot_dialog.txt",
+        "PILOT\nCombo\n@OTHER, 違う！\nPILOT, 違う！\nCombo\n@BUDDY, 任せろ！\nPILOT, 行くぞ！\n",
+    )
+    .expect("pilot_dialog.txt はデータファイル");
+    app.selected_weapon_idx = 2;
+    app.map_cursor = Some((5, 6));
+    assert!(app.attack_resolve_and_run(Some((6, 6)), false, ""));
+    let msgs = app.messages().to_vec();
+    let pos = |pat: &str| msgs.iter().position(|m| m == pat);
+    let (Some(buddy), Some(hero)) = (pos("BUDDY「任せろ！」"), pos("P「行くぞ！」"))
+    else {
+        panic!("{msgs:?}");
+    };
+    assert!(buddy < hero, "{msgs:?}");
+    assert!(!msgs.iter().any(|m| m.contains("違う")), "{msgs:?}");
+}

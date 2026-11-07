@@ -177,8 +177,8 @@ impl App {
                 atk_charged,
                 post_move,
                 atk_totsugeki,
-                |w| self.weapon_firable(atk_idx, w),
-                |w| self.weapon_skill_ok(atk_idx, w),
+                |w| self.weapon_firable(atk_idx, w) && self.combination_ok_vs(atk_idx, w, tt),
+                |w| self.weapon_skill_ok(atk_idx, w) && self.combination_ok_vs(atk_idx, w, tt),
             ) else {
                 self.push_message(format!(
                     "{}: 射程内に使用可能な武器がありません.",
@@ -202,8 +202,14 @@ impl App {
                     atk_charged,
                     post_move,
                     atk_totsugeki,
-                    |w| self.weapon_firable(atk_idx, w),
-                    |w| self.weapon_skill_ok(atk_idx, w),
+                    |w| {
+                        self.weapon_firable(atk_idx, w)
+                            && self.combination_ok_vs(atk_idx, w, (def.x, def.y))
+                    },
+                    |w| {
+                        self.weapon_skill_ok(atk_idx, w)
+                            && self.combination_ok_vs(atk_idx, w, (def.x, def.y))
+                    },
                 )
                 .is_some()
                 {
@@ -224,6 +230,10 @@ impl App {
                 }
                 return false;
             };
+            let def_pos = {
+                let d = &self.database.unit_instances[def_idx];
+                (d.x, d.y)
+            };
             let Some(weapon) = Self::pick_attack_weapon(
                 &atk_unit,
                 dist,
@@ -231,8 +241,8 @@ impl App {
                 atk_charged,
                 post_move,
                 atk_totsugeki,
-                |w| self.weapon_firable(atk_idx, w),
-                |w| self.weapon_skill_ok(atk_idx, w),
+                |w| self.weapon_firable(atk_idx, w) && self.combination_ok_vs(atk_idx, w, def_pos),
+                |w| self.weapon_skill_ok(atk_idx, w) && self.combination_ok_vs(atk_idx, w, def_pos),
             ) else {
                 return false;
             };
@@ -258,6 +268,8 @@ impl App {
         // SRC `使用 <unit> <device>:` (`使用イベント.md`) ─ `攻撃イベント` の前に発火。
         // 再攻撃 (VB5 `begin` ラベルは使用イベントより後ろ) では再発火しない。
         if !is_reattack {
+            // 合体技のパートナー (使用イベントの `Partner` 関数から見える)。
+            self.select_partners(atk_idx, &weapon, (def_inst.x, def_inst.y));
             crate::event_runtime::fire_use_event_labels(self, atk_idx, &weapon.name);
         }
 
@@ -334,6 +346,7 @@ impl App {
                 .iter()
                 .any(|u| !u.off_map && u.x == cx && u.y == cy);
             if !atk_alive {
+                self.finish_partners(None);
                 self.check_victory();
                 return true;
             }
@@ -397,6 +410,10 @@ impl App {
         } else {
             Opening::Normal
         };
+        if !is_reattack && !self.selected_partners.is_empty() {
+            let subject = self.combination_subject(atk_idx);
+            self.push_message(format!("{subject}[{}]で攻撃をかけた。", weapon.name));
+        }
         self.attack_opening_messages(&atk_snap, opening, &atk_ctx);
         let guard = self.pick_support_guard(atk_idx, def_idx, &setup, StrikeKind::Main);
         let guard_idx = guard.map(|g| g.idx);
@@ -417,6 +434,8 @@ impl App {
             damage: applied_damage,
         } = strike;
         let mut defender_killed = false;
+        // 目標を倒したときの経験値 (合体技のパートナーにも渡す)。
+        let mut kill_exp = None;
         // みがわり・援護防御で目標が攻撃を受けなかった。
         let mut covered = false;
         let guard_idx = guard_idx.filter(|_| hit);
@@ -495,6 +514,8 @@ impl App {
                             .map(|u| u.has_condition("努力"))
                             .unwrap_or(false);
                         let exp = def_pilot.exp_value * if doubled { 2 } else { 1 };
+                        // パートナーは 努力 の効果を受けない (原典 `GetExp` の "パートナー")。
+                        kill_exp = Some(def_pilot.exp_value);
                         let victim_value = def_unit.value;
                         let mut m = format!(
                             "{} ({}) → {} ({}) [{}]: {}撃破！ EXP +{}{}",
@@ -677,6 +698,11 @@ impl App {
             }
         }
 
+        // 合体技のパートナーも EN・弾数を使う (原典 `Unit.Attack` の本線攻撃の後)。
+        if !is_reattack {
+            self.consume_partner_resources(&weapon);
+        }
+
         // 再攻撃 (原典 `Unit.Attack` の `EndAttack`): 1 回の攻撃の中の繰り返しなので、
         // 本線攻撃の直後、同時援護攻撃・反撃・援護攻撃より前に行う。双方が生存し、合体技
         // でなく、同じ武器がまだ使えて射程内なら、再攻撃 技能 / 再属性 / SP効果「再攻撃」の
@@ -776,6 +802,8 @@ impl App {
         }
 
         if !is_reattack {
+            // 合体技のパートナーは行動済みになる (原典 `Command.bas` の `EndAttack`)。
+            self.finish_partners(kill_exp);
             self.check_victory();
         }
         true
@@ -2280,10 +2308,7 @@ impl App {
             if dmg >= self.database.effective_max_hp(&u) - u.damage {
                 continue;
             }
-            let relation = self
-                .script_var(&format!("__rel_{}_{}", u.pilot_name, def.pilot_name))
-                .parse::<i64>()
-                .unwrap_or(0);
+            let relation = self.relation(&u.pilot_name, &def.pilot_name);
             let dice = i64::from(self.next_u32() % 10) + 1;
             if dice > relation {
                 continue;
@@ -2592,7 +2617,7 @@ impl App {
             def_unit
                 .weapons
                 .get(idx)
-                .filter(|w| self.weapon_usable_vs(def_idx, w, dist, false))
+                .filter(|w| self.weapon_usable_vs(def_idx, w, target, false, true))
                 .cloned()
         });
         let weapon = match forced {
@@ -2795,7 +2820,7 @@ impl App {
                     .position(|u| !u.off_map && u.x == x && u.y == y)
             };
             if let (Some(ci), Some(_)) = (at(self, (dx, dy)), at(self, target)) {
-                if self.weapon_usable_vs(ci, &weapon, dist, false)
+                if self.weapon_usable_vs(ci, &weapon, target, false, true)
                     && self.weapon_firable(ci, &weapon)
                     && self.rolls_reattack(ci, &def_pilot, &atk_pilot, &weapon)
                 {

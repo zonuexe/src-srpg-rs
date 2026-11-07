@@ -879,6 +879,17 @@ impl App {
         unit_idx: usize,
         wd: &crate::data::unit::WeaponData,
     ) -> bool {
+        // 合体技はパートナーの揃う地点が要る (原典 `IsWeaponAvailable` の「合体技の処理」)。
+        self.weapon_firable_base(unit_idx, wd)
+            && (!wd.class.contains('合') || self.combination_attack_available(unit_idx, wd))
+    }
+
+    /// `weapon_firable` から合体技のパートナー判定を除いたもの (パートナー側の判定用)。
+    pub(crate) fn weapon_firable_base(
+        &self,
+        unit_idx: usize,
+        wd: &crate::data::unit::WeaponData,
+    ) -> bool {
         // イベントコマンド `Disable` で封印されている。
         if self.is_disabled(&self.database.unit_instances[unit_idx], &wd.name) {
             return false;
@@ -932,7 +943,8 @@ impl App {
         unit.weapons
             .iter()
             .filter(|w| !combat::is_map_weapon(w) && combat::weapon_in_range(w, dist))
-            .filter(|w| !combat::is_charge_weapon(w))
+            // 合体技は自分から攻撃するときだけ使う (反撃では使えない)。
+            .filter(|w| !combat::is_charge_weapon(w) && !w.class.contains('合'))
             .filter(|w| self.weapon_firable(unit_idx, w))
             .max_by_key(|w| w.power)
             .cloned()
