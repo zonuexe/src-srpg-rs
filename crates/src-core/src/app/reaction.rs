@@ -151,8 +151,8 @@ impl App {
             a.charged,
             false,
             a.has_condition("突撃"),
-            |w| self.weapon_firable(atk_idx, w),
-            |w| self.weapon_skill_ok(atk_idx, w),
+            |w| self.weapon_firable(atk_idx, w) && self.combination_ok_vs(atk_idx, w, (d.x, d.y)),
+            |w| self.weapon_skill_ok(atk_idx, w) && self.combination_ok_vs(atk_idx, w, (d.x, d.y)),
         )?;
         let expected = self.forecast_strike(atk_idx, def_idx, &weapon)?;
         self.try_find_support_guard(atk_idx, def_idx, &weapon, &expected, true)
@@ -200,7 +200,7 @@ impl App {
                     .position(|u| !u.off_map && (u.x, u.y) == pr.target_tile),
             ) {
                 let usable_cnt = self
-                    .build_weapon_rows(def_idx, atk_idx, false)
+                    .build_weapon_rows(def_idx, atk_idx, false, true)
                     .iter()
                     .filter(|r| r.usable)
                     .count();
@@ -249,8 +249,8 @@ impl App {
             a.charged,
             false,
             a.has_condition("突撃"),
-            |w| self.weapon_firable(atk_idx, w),
-            |w| self.weapon_skill_ok(atk_idx, w),
+            |w| self.weapon_firable(atk_idx, w) && self.combination_ok_vs(atk_idx, w, (d.x, d.y)),
+            |w| self.weapon_skill_ok(atk_idx, w) && self.combination_ok_vs(atk_idx, w, (d.x, d.y)),
         )?;
         let preview = self.forecast_strike(atk_idx, def_idx, &weapon)?;
         Some((
@@ -260,18 +260,23 @@ impl App {
         ))
     }
 
-    /// `weapon` を `dist` の目標へ `post_move` 状況で使用可能か (射程 / チャージ /
-    /// 移動後 / 突撃 / 資源 / 必要技能)。武器選択窓の行表示・選択可否に使う。
+    /// `weapon` をタイル `target` の目標へ `post_move` 状況で使用可能か (射程 / チャージ /
+    /// 移動後 / 突撃 / 資源 / 必要技能 / 合体技のパートナー)。`counter` は反撃 (合体技は
+    /// 使えない)。武器選択窓の行表示・選択可否に使う。
     pub(super) fn weapon_usable_vs(
         &self,
         atk_idx: usize,
         weapon: &crate::data::unit::WeaponData,
-        dist: u32,
+        target: (u32, u32),
         post_move: bool,
+        counter: bool,
     ) -> bool {
         let u = &self.database.unit_instances[atk_idx];
         let totsugeki = u.has_condition("突撃");
-        !combat::is_map_weapon(weapon)
+        let dist = combat::manhattan((u.x, u.y), target);
+        !(counter && weapon.class.contains('合'))
+            && self.combination_ok_vs(atk_idx, weapon, target)
+            && !combat::is_map_weapon(weapon)
             && combat::weapon_in_range(weapon, dist)
             && (u.charged || !combat::is_charge_weapon(weapon))
             && Self::weapon_usable_post_move(weapon, post_move, totsugeki)
@@ -291,7 +296,7 @@ impl App {
             return false;
         };
         let atk = &self.database.unit_instances[atk_idx];
-        let (atk_party, ax, ay) = (atk.party, atk.x, atk.y);
+        let atk_party = atk.party;
         let hostile = self
             .database
             .unit_instances
@@ -303,11 +308,10 @@ impl App {
         let Some((_, atk_unit)) = self.database.effective_combat_data(atk_idx) else {
             return false;
         };
-        let dist = combat::manhattan((ax, ay), target);
         atk_unit
             .weapons
             .iter()
-            .any(|w| self.weapon_usable_vs(atk_idx, w, dist, post_move))
+            .any(|w| self.weapon_usable_vs(atk_idx, w, target, post_move, false))
     }
 
     /// プレイヤー攻撃の後始末 (行動終了 / 行動終了・接触イベント / Browse 復帰)。
@@ -409,28 +413,27 @@ impl App {
     }
 
     /// 武器選択窓の行データを構築する (機体の武装順)。命中率は `forecast_strike`。
+    /// `counter` は反撃武器の選択。
     pub(crate) fn build_weapon_rows(
         &self,
         atk_idx: usize,
         def_idx: usize,
         post_move: bool,
+        counter: bool,
     ) -> Vec<crate::scene::weapon_select::WeaponSelectRow> {
         use crate::scene::weapon_select::WeaponSelectRow;
         let Some((_, atk_unit)) = self.database.effective_combat_data(atk_idx) else {
             return Vec::new();
         };
-        let (a, d) = (
-            &self.database.unit_instances[atk_idx],
-            &self.database.unit_instances[def_idx],
-        );
-        let dist = combat::manhattan((a.x, a.y), (d.x, d.y));
+        let d = &self.database.unit_instances[def_idx];
+        let target = (d.x, d.y);
         let atk_inst = &self.database.unit_instances[atk_idx];
         atk_unit
             .weapons
             .iter()
             .enumerate()
             .map(|(i, w)| {
-                let usable = self.weapon_usable_vs(atk_idx, w, dist, post_move);
+                let usable = self.weapon_usable_vs(atk_idx, w, target, post_move, counter);
                 let hit_pct = if usable {
                     self.forecast_strike(atk_idx, def_idx, w)
                         .map_or(0, |p| p.hit_chance.clamp(0, 100))
@@ -497,11 +500,7 @@ impl App {
             .effective_combat_data(atk_idx)
             .and_then(|(_, u)| u.weapons.get(widx.wrapping_sub(1)).cloned())
             .map(|w| {
-                let dist = {
-                    let a = &self.database.unit_instances[atk_idx];
-                    combat::manhattan((a.x, a.y), pws.target)
-                };
-                self.weapon_usable_vs(atk_idx, &w, dist, pws.post_move)
+                self.weapon_usable_vs(atk_idx, &w, pws.target, pws.post_move, pws.is_counter())
             })
             .unwrap_or(false);
         if widx == 0 || !usable {

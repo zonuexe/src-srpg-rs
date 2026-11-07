@@ -381,6 +381,10 @@ pub struct App {
     /// true の呼び出しは使用イベント再発火と 3回目の再攻撃を抑止する。
     #[serde(skip)]
     reattack_in_progress: bool,
+    /// 攻撃に加わっている合体技のパートナーの uid (原典 `SelectedPartners`)。攻撃の間だけ
+    /// 持ち、`Partner` / `CountPartner` 関数とダイアログの `@パートナー` が読む。transient。
+    #[serde(skip)]
+    selected_partners: Vec<String>,
     /// 逐次 AI 実行の進行状態 (animate_ai=true 時のみ)。transient。
     #[serde(skip)]
     ai_runner: Option<AiRunner>,
@@ -723,6 +727,7 @@ fn push_combat_feature_statuses(unit: &crate::UnitInstance, statuses: &mut Vec<S
 mod ai;
 mod battle;
 mod combat_rules;
+mod combination;
 mod debug;
 mod dialog;
 mod input;
@@ -785,6 +790,7 @@ impl App {
             wait_clock: 0.0,
             animate_ai: false,
             reattack_in_progress: false,
+            selected_partners: Vec::new(),
             ai_runner: None,
             animate_battle: false,
             battle_anim: None,
@@ -1461,6 +1467,11 @@ impl App {
     /// `Unit <name> <rank>` で生成したカレントユニットの `uid`。未設定なら空文字。
     pub fn selected_unit_for_event(&self) -> &str {
         &self.selected_unit_for_event
+    }
+
+    /// 攻撃に加わっている合体技のパートナーの uid (原典 `SelectedPartners`)。
+    pub fn selected_partners(&self) -> &[String] {
+        &self.selected_partners
     }
 
     /// カレントユニットの `uid` を設定 (`Unit` 短い形式が呼ぶ)。
