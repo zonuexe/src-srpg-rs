@@ -68,7 +68,7 @@ impl MessageData {
     }
 }
 
-/// [`select_message`] に渡す話し手と相手の情報。
+/// [`select_message`] / [`select_by_situation`] に渡す話し手と相手の情報。
 #[derive(Debug, Clone, Default)]
 pub struct SelectContext {
     /// 相手限定の指定 `(対…)` の候補。相手がいなければ `None`。
@@ -89,6 +89,28 @@ pub fn select_message(
     ctx: &SelectContext,
     dice: &mut dyn FnMut(usize) -> usize,
 ) -> Option<String> {
+    select_by_situation(
+        entries,
+        |e| &e.situation,
+        |_| true,
+        msg_situation,
+        ctx,
+        dice,
+    )
+    .map(|e| e.message.clone())
+}
+
+/// シチュエーションに合う項目を 1 つ選ぶ (原典 `MessageData.SelectMessage` と
+/// `DialogData.SelectDialog` の共通部分)。`situation_of` は項目のシチュエーション、
+/// `available` は候補に入れてよいか (ダイアログの話し手がしゃべれるか)。
+pub fn select_by_situation<'a, T>(
+    items: &'a [T],
+    situation_of: impl Fn(&T) -> &str,
+    available: impl Fn(&T) -> bool,
+    msg_situation: &str,
+    ctx: &SelectContext,
+    dice: &mut dyn FnMut(usize) -> usize,
+) -> Option<&'a T> {
     // `格闘` / `射撃` (サブシチュエーション付きを含む) は `攻撃` でも探す。
     let mut situations = vec![msg_situation.to_string()];
     for head in ["格闘", "射撃"] {
@@ -111,33 +133,33 @@ pub fn select_message(
         }
     }
 
-    // 第一次審査: シチュエーションで始まるもの。
-    let list0: Vec<&MessageEntry> = entries
+    // 第一次審査: シチュエーションで始まり、使えるもの。
+    let list0: Vec<&T> = items
         .iter()
         .filter(|e| {
-            situations
-                .iter()
-                .any(|s| e.situation.starts_with(s.as_str()))
+            let sit = situation_of(e);
+            situations.iter().any(|s| sit.starts_with(s.as_str())) && available(e)
         })
         .collect();
     if list0.is_empty() {
         return None;
     }
-    fn pick(list: &[&MessageEntry], dice: &mut dyn FnMut(usize) -> usize) -> String {
-        list[dice(list.len()) - 1].message.clone()
+    fn pick<'a, T>(list: &[&'a T], dice: &mut dyn FnMut(usize) -> usize) -> &'a T {
+        list[dice(list.len()) - 1]
     }
 
     // 相手限定のメッセージ。
     let mut selected = None;
     if let Some(subs) = &ctx.target_subs {
-        let list: Vec<&MessageEntry> = list0
+        let list: Vec<&T> = list0
             .iter()
             .copied()
-            .filter(|e| e.situation.contains("(対"))
+            .filter(|e| situation_of(e).contains("(対"))
             .filter(|e| {
+                let sit = situation_of(e);
                 situations
                     .iter()
-                    .any(|s| subs.iter().any(|sub| e.situation == format!("{s}{sub}")))
+                    .any(|s| subs.iter().any(|sub| sit == format!("{s}{sub}")))
             })
             .collect();
         if !list.is_empty() {
@@ -155,15 +177,13 @@ pub fn select_message(
             unit_subs.push(format!("({w})"));
         }
     }
-    let list: Vec<&MessageEntry> = list0
+    let list: Vec<&T> = list0
         .iter()
         .copied()
         .filter(|e| {
+            let sit = situation_of(e);
             situations.iter().any(|s| {
-                e.situation == *s
-                    || unit_subs
-                        .iter()
-                        .any(|sub| e.situation == format!("{s}{sub}"))
+                sit == s.as_str() || unit_subs.iter().any(|sub| sit == format!("{s}{sub}"))
             })
         })
         .collect();
