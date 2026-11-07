@@ -261,10 +261,6 @@ impl App {
         self.apply_defense_armor_mod(def_idx, &weapon.class, &mut def_unit);
         let def_hit_mod = self.database.terrain_hit_mod(terrain_id);
         let def_damage_mod = self.database.terrain_damage_mod(terrain_id);
-        // Ｃ 属性武器を使った場合、charged フラグを消費 (次回攻撃前に再 Charge 必要)。
-        if combat::is_charge_weapon(&weapon) {
-            self.database.unit_instances[atk_idx].charged = false;
-        }
         // SRC `使用 <unit> <device>:` (`使用イベント.md`) ─ `攻撃イベント` の前に発火。
         // 再攻撃 (VB5 `begin` ラベルは使用イベントより後ろ) では再発火しない。
         if !is_reattack {
@@ -287,7 +283,7 @@ impl App {
             atk_weapon_num.to_string(),
         );
         // 武器発射による EN・残弾消費 (撃破前=index 失効前に消費。命中の有無に依らない)。
-        self.consume_weapon_resources(atk_idx, atk_weapon_num - 1);
+        self.use_weapon(atk_idx, atk_weapon_num - 1);
         // 攻撃元 = 対象 / 攻撃先 = 相手。`攻撃イベント.md` の解説どおり、ユニットを
         // 陣営名で指定した場合に実ユニットを識別できるよう、パイロット名と
         // 一意 uid (`対象ユニットＩＤ` / `相手ユニットＩＤ`) を発火前に設定する。
@@ -700,7 +696,7 @@ impl App {
 
         // 合体技のパートナーも EN・弾数を使う (原典 `Unit.Attack` の本線攻撃の後)。
         if !is_reattack {
-            self.consume_partner_resources(&weapon);
+            self.consume_partner_resources(&atk_uid, &weapon);
         }
 
         // 再攻撃 (原典 `Unit.Attack` の `EndAttack`): 1 回の攻撃の中の繰り返しなので、
@@ -735,9 +731,13 @@ impl App {
             }
         }
 
+        // 自爆攻撃 (自)・ＨＰ消費攻撃 (失) で壊れた攻撃側には、反撃も援護攻撃も無い
+        // (原典 `Unit.Attack` の最後の「自爆攻撃」)。再攻撃のあと 1 回だけ判定する。
+        let atk_destroyed = !is_reattack && self.self_destruct_after_attack(&atk_uid, &weapon);
+
         // 同時援護攻撃 (統率) は本線攻撃の直後、反撃より前 (原典 `Command.bas`)。
         let mut support_uid = None;
-        if sync {
+        if sync && !atk_destroyed {
             support_uid = self.run_support_attack(
                 &atk_uid,
                 supporter_uid.as_deref(),
@@ -755,7 +755,11 @@ impl App {
         // ただし回避/防御を選んだ場合は反撃しない (SRC 反撃モード)。反撃 or 自動("")のみ。
         // 先制反撃 (preempted) 済みなら主攻撃後の通常反撃は行わない (SRC: def_mode="先制攻撃")。
         // 再攻撃は原典では `Unit.Attack` の中の繰り返しなので、反撃・援護攻撃は 1 回目だけ。
-        let allow_counter = !is_reattack && !preempted && def_mode != "回避" && def_mode != "防御";
+        let allow_counter = !is_reattack
+            && !preempted
+            && !atk_destroyed
+            && def_mode != "回避"
+            && def_mode != "防御";
         let still_alive_def = self
             .database
             .idx_by_uid(&def_inst.uid)
@@ -766,7 +770,7 @@ impl App {
             None
         };
         // 援護攻撃は反撃のあと (原典 `Command.bas`)。
-        if !sync {
+        if !sync && !atk_destroyed {
             support_uid = self.run_support_attack(
                 &atk_uid,
                 supporter_uid.as_deref(),
@@ -1005,7 +1009,7 @@ impl App {
         // 状態異常付与 (weapon_special_effects) と 気力減少 (脱/Ｄ) の双方が該当。
         let has_special_effect = !crate::combat::weapon_special_effects(&weapon.class).is_empty()
             || crate::combat::weapon_morale_reduction(&weapon.class).is_some()
-            || weapon.class.split_whitespace().any(|t| t == "即");
+            || combat::class_has(&weapon.class, "即");
         let sure = setup.sure_critical && preview.damage > 0;
         let critical = hit && (crit_roll < crit_chance || sure) && !has_special_effect;
         // クリティカルはダメージ 1.5 倍 (SRC)。その後、防御選択でさらに半減する。
@@ -1131,7 +1135,7 @@ impl App {
             })
             .unwrap_or_default();
         if let Some(wi) = atk_unit.weapons.iter().position(|w| w.name == weapon.name) {
-            self.consume_weapon_resources(atk_idx, wi);
+            self.use_weapon(atk_idx, wi);
         }
         let strike = self.resolve_strike(
             atk_idx,
@@ -1903,7 +1907,7 @@ impl App {
         let weapon = self.support_attack_weapon(sup_idx, def_idx)?;
         // 援護武器の EN・残弾消費 (撃破前=index 失効前に消費)。
         if let Some(wi) = sup_unit.weapons.iter().position(|w| w.name == weapon.name) {
-            self.consume_weapon_resources(sup_idx, wi);
+            self.use_weapon(sup_idx, wi);
         }
         let def_inst = self.database.unit_instances[def_idx].clone();
         let (def_pilot, mut def_unit) = self.database.effective_combat_data(def_idx)?;
@@ -1983,6 +1987,7 @@ impl App {
                     ..Default::default()
                 };
                 self.strike_result_messages(&sup_snap, &def_inst, &sup_ctx, &def_ctx, &report);
+                self.self_destruct_after_attack(&sup_uid, &weapon);
                 return Some(sup_uid);
             }
         }
@@ -2080,6 +2085,8 @@ impl App {
         );
         let def_now = self.unit_snapshot(&def_inst);
         self.strike_result_messages(&sup_snap, &def_now, &sup_ctx, &def_ctx, &report);
+        // 自爆技・ＨＰ消費攻撃で援護役が壊れる (原典の援護攻撃も `Unit.Attack`)。
+        self.self_destruct_after_attack(&sup_uid, &weapon);
         Some(sup_uid)
     }
 
@@ -2643,8 +2650,9 @@ impl App {
             .map(|i| i + 1)
             .unwrap_or(1);
         let weapon_name = weapon.name.clone();
+        let counter_uid = self.database.unit_instances[def_idx].uid.clone();
         // 反撃武器の EN・残弾消費 (撃破前=index 失効前に消費)。
-        self.consume_weapon_resources(def_idx, weapon_num - 1);
+        self.use_weapon(def_idx, weapon_num - 1);
         // 命中・クリティカル・即死・切り払い・防御特性は本線攻撃と同じ判定 (原典の反撃は
         // `Attack w, target, "", ""`)。反撃側 = defender (def_idx)、被弾側 = attacker (atk_idx)。
         // 攻撃の前の台詞。反撃側が話し手。
@@ -2829,6 +2837,10 @@ impl App {
                     self.counter_strike(dx, dy, target, true, false);
                 }
             }
+        }
+        // 自爆技・ＨＰ消費攻撃で反撃側が壊れる (再攻撃のあと 1 回だけ)。
+        if !second {
+            self.self_destruct_after_attack(&counter_uid, &weapon);
         }
         Some((weapon_name, weapon_num))
     }

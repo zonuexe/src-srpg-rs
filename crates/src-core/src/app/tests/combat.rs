@@ -5113,3 +5113,157 @@ fn combination_dialog_follows_partner() {
     assert!(buddy < hero, "{msgs:?}");
     assert!(!msgs.iter().any(|m| m.contains("違う")), "{msgs:?}");
 }
+
+/// Hero に属性 `class` の武器 Burst (武器番号 2) を足す。
+fn hero_weapon(app: &mut App, class: &str, en: i32) -> crate::data::unit::WeaponData {
+    let w = weapon_with_class(class, en);
+    app.database_mut()
+        .catalog
+        .units
+        .iter_mut()
+        .find(|u| u.name == "Hero")
+        .unwrap()
+        .weapons
+        .push(w.clone());
+    w
+}
+
+fn weapon_with_class(class: &str, en: i32) -> crate::data::unit::WeaponData {
+    crate::data::unit::WeaponData {
+        name: "Burst".to_string(),
+        power: 100,
+        min_range: 1,
+        max_range: 1,
+        precision: 100,
+        bullet: -1,
+        en_consumption: en,
+        necessary_morale: 0,
+        adaption: String::new(),
+        critical: 0,
+        class: class.to_string(),
+        extras: Vec::new(),
+    }
+}
+
+/// 原典 `UseWeapon`: 消 (消耗)・気 (気力)・失 (ＨＰ)・尽 (EN を使い切る) は撃った本人に効く。
+/// 属性は区切りなしで並ぶ。消耗したユニットは次のターンまで行動できない。
+#[test]
+fn weapon_use_pays_self_costs() {
+    let (mut app, hero, _, _) = setup_support_attack(1000, 1_000_000, 0);
+    hero_weapon(&mut app, "格消気L2失L1尽", 10);
+    let idx = app.database().idx_by_uid(&hero).unwrap();
+    let max_en = app
+        .database()
+        .effective_max_en(&app.database().unit_instances[idx]);
+    let morale = app.database().unit_instances[idx].morale;
+    app.selected_weapon_idx = 2;
+    app.map_cursor = Some((5, 6));
+    assert!(app.attack_resolve_and_run(Some((6, 6)), false, ""));
+    let u = app.database().unit_by_uid(&hero).unwrap();
+    assert!(u.has_condition("消耗"));
+    assert!(u.attack_disabled());
+    assert_eq!(u.morale, morale - 10);
+    assert_eq!(u.damage, 100, "最大ＨＰの 10%");
+    assert_eq!(u.en_consumed, max_en);
+}
+
+/// 自爆攻撃 (自) を使ったユニットは攻撃の後で壊れ、反撃を受けない。
+#[test]
+fn self_destruct_weapon_destroys_attacker() {
+    let (mut app, hero, _, foe) = setup_support_attack(1000, 1_000_000, 50);
+    hero_weapon(&mut app, "格自", 0);
+    app.selected_weapon_idx = 2;
+    app.map_cursor = Some((5, 6));
+    assert!(app.attack_resolve_and_run(Some((6, 6)), false, ""));
+    assert!(app.database().unit_by_uid(&hero).is_none());
+    assert!(app.database().unit_by_uid(&foe).unwrap().damage > 0);
+    let msgs = app.messages().to_vec();
+    assert!(!msgs.iter().any(|m| m.contains("反撃")), "{msgs:?}");
+}
+
+/// 自動チャージ (ＡL2) の武器は使うと 2 ターン「<武器名>充填中」になって使えない。
+#[test]
+fn auto_charge_weapon_waits_turns() {
+    let (mut app, hero, _, _) = setup_support_attack(1000, 1_000_000, 0);
+    let burst = hero_weapon(&mut app, "格ＡL2", 0);
+    let idx = app.database().idx_by_uid(&hero).unwrap();
+    assert!(app.weapon_firable(idx, &burst));
+    app.selected_weapon_idx = 2;
+    app.map_cursor = Some((5, 6));
+    assert!(app.attack_resolve_and_run(Some((6, 6)), false, ""));
+    let idx = app.database().idx_by_uid(&hero).unwrap();
+    let u = &app.database().unit_instances[idx];
+    assert!(u
+        .conditions
+        .iter()
+        .any(|c| c.name == "Burst充填中" && c.lifetime == 2));
+    assert!(!app.weapon_firable(idx, &burst));
+}
+
+/// 原典 `IsWeaponAvailable`: 霊力・属性使用不能・使用禁止・瀕死時限定・沈黙。
+#[test]
+fn weapon_availability_follows_class_and_state() {
+    let (mut app, hero, _, _) = setup_support_attack(1000, 1_000_000, 0);
+    let idx = app.database().idx_by_uid(&hero).unwrap();
+    let ok = |app: &App, class: &str| app.weapon_firable(idx, &weapon_with_class(class, 0));
+    // 霊力消費攻撃は霊力が 5×レベル 要る。
+    app.database_mut().unit_instances[idx].plana = 9;
+    assert!(!ok(&app, "射霊L2"));
+    app.database_mut().unit_instances[idx].plana = 10;
+    assert!(ok(&app, "射霊L2"));
+    let add = |app: &mut App, name: &str| {
+        app.database_mut().unit_instances[idx].add_condition(crate::Condition::new(name, 3));
+    };
+    add(&mut app, "霊力使用不能");
+    assert!(!ok(&app, "射霊L2"));
+    // 剋 で封じられた属性。
+    add(&mut app, "火属性使用不能");
+    assert!(!ok(&app, "射火"));
+    assert!(ok(&app, "射"));
+    // 使用禁止。
+    assert!(!ok(&app, "射禁"));
+    // 瀕死 (ＨＰが最大の 1/4 以下) のときだけ。
+    assert!(!ok(&app, "格瀕"));
+    app.database_mut().unit_instances[idx].damage = 750;
+    assert!(ok(&app, "格瀕"));
+    // 沈黙すると 術・音 が使えない。
+    add(&mut app, "沈黙");
+    assert!(!ok(&app, "術"));
+    assert!(!ok(&app, "射音"));
+    assert!(ok(&app, "射"));
+}
+
+/// 原典 `WeaponENConsumption`: 特殊能力「ＥＮ消費減少Lv*」で 10%/Lv 減る。
+#[test]
+fn en_saving_feature_reduces_weapon_cost() {
+    let (mut app, hero, _, _) = setup_support_attack(1000, 1_000_000, 0);
+    let idx = app.database().idx_by_uid(&hero).unwrap();
+    let w = weapon_with_class("射", 10);
+    assert_eq!(app.weapon_en_cost(idx, &w), 10);
+    app.database_mut().unit_instances[idx]
+        .active_features
+        .push(crate::feature::ActiveFeature::new("ＥＮ消費減少Lv2", ""));
+    assert_eq!(app.weapon_en_cost(idx, &w), 8);
+}
+
+/// 同名の武器を持たない合体技のパートナーも、技の代償 (気力) を払う。
+#[test]
+fn combination_partner_pays_weapon_penalties() {
+    let (mut app, _, sup, _, _) = setup_combination("合体技");
+    app.database_mut()
+        .catalog
+        .units
+        .iter_mut()
+        .find(|u| u.name == "Hero")
+        .unwrap()
+        .weapons
+        .last_mut()
+        .unwrap()
+        .class = "合気L1".into();
+    assert!(app.database_mut().move_unit(&sup, 6, 7));
+    let morale = app.database().unit_by_uid(&sup).unwrap().morale;
+    app.selected_weapon_idx = 2;
+    app.map_cursor = Some((5, 6));
+    assert!(app.attack_resolve_and_run(Some((6, 6)), false, ""));
+    assert_eq!(app.database().unit_by_uid(&sup).unwrap().morale, morale - 5);
+}

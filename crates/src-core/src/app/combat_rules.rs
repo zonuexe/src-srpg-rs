@@ -447,7 +447,7 @@ impl App {
         atk_pilot: &crate::data::pilot::PilotData,
         def_pilot: &crate::data::pilot::PilotData,
     ) -> bool {
-        if !weapon.class.split_whitespace().any(|t| t == "即") {
+        if !combat::class_has(&weapon.class, "即") {
             return false;
         }
         // ボスランク適用ユニットには無効 (BossRankコマンド.md)。
@@ -592,7 +592,7 @@ impl App {
         victim_value: i64,
         weapon: &crate::data::unit::WeaponData,
     ) -> Vec<String> {
-        if !weapon.class.split_whitespace().any(|t| t == "盗") {
+        if !combat::class_has(&weapon.class, "盗") {
             return Vec::new();
         }
         // 撃破側が味方 (Player) のときのみ。既に盗んだ相手からは再取得しない。
@@ -640,8 +640,8 @@ impl App {
         weapon: &crate::data::unit::WeaponData,
     ) -> Vec<String> {
         use crate::data::unit::Size;
-        let has_sha = weapon.class.split_whitespace().any(|t| t == "写");
-        let has_ka = weapon.class.split_whitespace().any(|t| t == "化");
+        let has_sha = combat::class_has(&weapon.class, "写");
+        let has_ka = combat::class_has(&weapon.class, "化");
         if !has_sha && !has_ka {
             return Vec::new();
         }
@@ -903,9 +903,28 @@ impl App {
         if wd.necessary_morale > 0 && u.morale < wd.necessary_morale {
             return false;
         }
-        // EN。
+        // EN (術・技・ＥＮ消費減少 で減った消費量)。
         let max_en = self.database.effective_max_en(u);
-        if max_en - u.en_consumed < wd.en_consumption {
+        if max_en - u.en_consumed < self.weapon_en_cost(unit_idx, wd) {
+            return false;
+        }
+        // 霊力消費攻撃は霊力が 5×レベル 以上必要。
+        let plana_need = combat::class_level(&wd.class, "霊")
+            .filter(|_| combat::class_has(&wd.class, "霊"))
+            .or_else(|| combat::class_level(&wd.class, "プ"))
+            .unwrap_or(0.0);
+        if f64::from(u.plana) < plana_need * 5.0 {
+            return false;
+        }
+        // 属性使用不能 (剋 属性・沈黙)・攻撃不能・瀕死時限定・使用禁止・自動チャージ中。
+        if !self.weapon_unsealed(unit_idx, wd) {
+            return false;
+        }
+        // 資金消費攻撃は資金が足りなければ使えない (味方のみ)。
+        if u.party == crate::Party::Player
+            && combat::class_has(&wd.class, "銭")
+            && self.money < self.weapon_money_cost(unit_idx, wd)
+        {
             return false;
         }
         // 残弾 (有限弾のみ)。武器を名前で unit_data → index 解決し、該当 UnitWeapon を見る。
@@ -950,38 +969,271 @@ impl App {
             .cloned()
     }
 
-    /// 武器発射時の資源消費 (EN・残弾)。`Unit.cs` 同様、命中の有無に関わらず発射で消費する。
+    /// 原典 `UseWeapon`: `unit_idx` が武器を使う (命中の有無に関わらず撃てば払う)。EN・弾数を
+    /// 消費し、使用時の効果 (消・尽・Ｃ・Ａ・気・霊・銭・失) を自分に及ぼす。自爆 (自) と
+    /// ＨＰ消費 (失) による破壊は攻撃の後 ([`Self::self_destruct_after_attack`])。
     /// `weapon_di` は `unit_data.weapons` でのインデックス (= `UnitWeapon.weapon_index`)。
-    /// EN コスト 0・無限弾 (bullet ≤ 0) の武器は実質無消費 (= テスト用武器へ無影響)。
-    pub(crate) fn consume_weapon_resources(&mut self, unit_idx: usize, weapon_di: usize) {
-        let (en_cost, bullet, name) = {
-            let u = &self.database.unit_instances[unit_idx];
-            match self
-                .database
-                .unit_by_name(&u.unit_data_name)
-                .and_then(|d| d.weapons.get(weapon_di))
-            {
-                Some(wd) => (wd.en_consumption, wd.bullet, wd.name.clone()),
-                None => return,
-            }
+    pub(crate) fn use_weapon(&mut self, unit_idx: usize, weapon_di: usize) {
+        let u = &self.database.unit_instances[unit_idx];
+        let Some(wd) = self
+            .database
+            .unit_by_name(&u.unit_data_name)
+            .and_then(|d| d.weapons.get(weapon_di))
+            .cloned()
+        else {
+            return;
         };
+        let en_cost = self.weapon_en_cost(unit_idx, &wd);
+        let money = self.weapon_money_cost(unit_idx, &wd);
+        let max_en = self.database.effective_max_en(u);
         let u = &mut self.database.unit_instances[unit_idx];
         if en_cost > 0 {
             u.en_consumed += en_cost;
         }
-        if bullet > 0 {
+        // 永続武器 (永) は弾数が減らない。
+        if wd.bullet > 0 && !combat::class_has(&wd.class, "永") {
             // 残弾の実行時状態は初めて撃ったときに満タンで作る (原典はユニット生成時に
             // 全武器の残弾を最大弾数で持つ)。
             let pos = match u.weapons.iter().position(|w| w.weapon_index == weapon_di) {
                 Some(p) => p,
                 None => {
-                    u.weapons
-                        .push(crate::UnitWeapon::from_data(name, weapon_di, bullet));
+                    u.weapons.push(crate::UnitWeapon::from_data(
+                        wd.name.clone(),
+                        weapon_di,
+                        wd.bullet,
+                    ));
                     u.weapons.len() - 1
                 }
             };
             u.weapons[pos].consume_bullet();
         }
+        // 尽: 残りの EN を使い切る。
+        if combat::class_has(&wd.class, "尽") {
+            u.en_consumed = u.en_consumed.max(max_en);
+        }
+        // Ａ: 自動チャージ。属性レベルのターン数だけ、同じ表示名の武器が使えない。
+        if let Some(turns) = combat::class_level(&wd.class, "Ａ").filter(|t| *t > 0.0) {
+            u.add_condition(crate::Condition::new(
+                format!("{}充填中", wd.name),
+                turns as i32,
+            ));
+        }
+        // 銭: 資金を消費する (味方のみ)。
+        if u.party == crate::Party::Player && combat::class_has(&wd.class, "銭") {
+            self.add_money(-money);
+        }
+        self.pay_weapon_penalties(unit_idx, &wd);
+    }
+
+    /// 武器を使ったときの代償のうち、合体技のパートナーが同名の武器を持たないときにも
+    /// 払うもの (原典 `UseWeapon` と `Unit.Attack` の「同名の武器がなかった場合」):
+    /// 消 (消耗)・Ｃ (チャージ解除)・気 (気力)・霊/プ (霊力)・失 (ＨＰ)。
+    pub(super) fn pay_weapon_penalties(&mut self, idx: usize, wd: &crate::data::unit::WeaponData) {
+        let class = &wd.class;
+        let level = |attr: &str| combat::class_level(class, attr).unwrap_or(0.0);
+        let max_hp = self
+            .database
+            .effective_max_hp(&self.database.unit_instances[idx]);
+        let u = &mut self.database.unit_instances[idx];
+        if combat::class_has(class, "消") {
+            u.add_condition(crate::Condition::new("消耗", 1));
+        }
+        if combat::is_charge_weapon(wd) {
+            u.charged = false;
+        }
+        if combat::class_has(class, "気") {
+            u.morale = (u.morale - (5.0 * level("気")) as i32).clamp(0, 150);
+        }
+        let plana = if combat::class_has(class, "霊") {
+            level("霊")
+        } else if combat::class_has(class, "プ") {
+            level("プ")
+        } else {
+            0.0
+        };
+        if plana > 0.0 {
+            u.plana = (u.plana - (5.0 * plana) as i32).max(0);
+        }
+        // 失: 最大ＨＰの 10×レベル% を失う (0 になったら攻撃の後で破壊される)。
+        if combat::class_has(class, "失") {
+            let loss = crate::util::number::round_half_to_even(max_hp as f64 * level("失")) as i64;
+            u.damage = (u.damage + loss / 10).min(max_hp);
+        }
+    }
+
+    /// 原典 `WeaponENConsumption`: 術・技 技能と特殊能力「ＥＮ消費減少」で減らした消費 EN。
+    pub(crate) fn weapon_en_cost(&self, idx: usize, wd: &crate::data::unit::WeaponData) -> i32 {
+        let base = wd.en_consumption;
+        if base <= 0 {
+            return base;
+        }
+        let cint = |x: f64| crate::util::number::round_half_to_even(x) as i32;
+        let u = &self.database.unit_instances[idx];
+        let mut cost = base;
+        if !u.pilot_name.is_empty() {
+            // 術 / 技 に該当する武器は、その技能レベルに合わせて消費量が減る (下限 5)。
+            for skill in ["術", "技"] {
+                let of_skill = combat::class_has(&wd.class, skill)
+                    || wd.necessary_skill().split_whitespace().any(|n| {
+                        n.trim_start_matches(['(', '!'])
+                            .split("Lv")
+                            .next()
+                            .is_some_and(|n| n == skill)
+                    });
+                if !of_skill {
+                    continue;
+                }
+                let rate = match self.main_pilot_skill_level(idx, skill) {
+                    2 => 0.9,
+                    3 => 0.8,
+                    4 => 0.7,
+                    5 => 0.6,
+                    6 => 0.5,
+                    7 => 0.45,
+                    8 => 0.4,
+                    9 => 0.35,
+                    l if l >= 10 => 0.3,
+                    _ => 1.0,
+                };
+                cost = cint(rate * f64::from(cost)).max(5).min(base);
+            }
+        }
+        let reduce: i32 = u
+            .active_features
+            .iter()
+            .filter(|f| {
+                f.is_active && crate::feature::feature_name_matches_base(&f.name, "ＥＮ消費減少")
+            })
+            .map(|f| {
+                crate::feature::feature_level(std::slice::from_ref(f), "ＥＮ消費減少").unwrap_or(1)
+            })
+            .sum();
+        let rate = (1.0 - 0.1 * f64::from(reduce)).max(0.1);
+        cint(rate * f64::from(cost))
+    }
+
+    /// 資金消費攻撃 (銭) で払う資金 (修理費の 10×レベル%、レベル省略は 10%)。
+    fn weapon_money_cost(&self, idx: usize, wd: &crate::data::unit::WeaponData) -> i64 {
+        let u = &self.database.unit_instances[idx];
+        let value = self
+            .database
+            .unit_by_name(&u.unit_data_name)
+            .map_or(0, |d| d.value);
+        let level = combat::class_level(&wd.class, "銭").unwrap_or(0.0).max(1.0);
+        (level * value as f64) as i64 / 10
+    }
+
+    /// 原典 `IsWeaponAvailable` のうち、状態と属性で使えなくなる条件を満たしていないか:
+    /// 属性使用不能 (剋 属性)・攻撃不能・沈黙 (術・音)・瀕死時限定 (瀕)・使用禁止 (禁)・
+    /// 自動チャージ中 (Ａ。同じ「共」レベルの武器・アビリティが充填中のときも)。
+    fn weapon_unsealed(&self, idx: usize, wd: &crate::data::unit::WeaponData) -> bool {
+        let u = &self.database.unit_instances[idx];
+        let class = &wd.class;
+        const SEALS: [(&str, &str); 8] = [
+            ("オーラ使用不能", "オ"),
+            ("超能力使用不能", "超"),
+            ("同調率使用不能", "シ"),
+            ("超感覚使用不能", "サ"),
+            ("知覚強化使用不能", "サ"),
+            ("霊力使用不能", "霊"),
+            ("術使用不能", "術"),
+            ("技使用不能", "技"),
+        ];
+        if SEALS
+            .iter()
+            .any(|(cond, attr)| u.has_condition(cond) && combat::class_has(class, attr))
+        {
+            return false;
+        }
+        if u.conditions.iter().any(|c| {
+            c.name
+                .strip_suffix("属性使用不能")
+                .is_some_and(|attr| !attr.is_empty() && combat::class_has(class, attr))
+        }) {
+            return false;
+        }
+        if u.has_condition("攻撃不能") {
+            return false;
+        }
+        let spell = combat::class_has(class, "術")
+            || wd
+                .necessary_skill()
+                .split_whitespace()
+                .any(|n| n.trim_start_matches(['(', '!']).starts_with('術'));
+        if u.has_condition("沈黙") && (spell || combat::class_has(class, "音")) {
+            return false;
+        }
+        if combat::class_has(class, "瀕") {
+            let max_hp = self.database.effective_max_hp(u);
+            if max_hp - u.damage > max_hp / 4 {
+                return false;
+            }
+        }
+        if combat::class_has(class, "禁") || u.has_condition(&format!("{}充填中", wd.name)) {
+            return false;
+        }
+        // 共: 同じレベルの共有武器・アビリティが充填中なら使えない。
+        if combat::class_has(class, "共") {
+            let lv = combat::class_level(class, "共");
+            let charging = |name: &str, c: &str| {
+                combat::class_has(c, "共")
+                    && combat::class_level(c, "共") == lv
+                    && u.has_condition(&format!("{name}充填中"))
+            };
+            if let Some(d) = self.database.unit_by_name(&u.unit_data_name) {
+                if d.weapons.iter().any(|w| charging(&w.name, &w.class))
+                    || d.abilities.iter().any(|a| charging(&a.name, &a.attributes))
+                {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// 原典 `Unit.Attack` の最後の「自爆攻撃」と「ＨＰ消費攻撃による自殺」: 自 属性の武器を
+    /// 使った、または 失 属性の武器で ＨＰ が 0 になったユニット `uid` を破壊する (復活も
+    /// 効かない)。パーツ分離 を持つユニットが自爆したときは、パーツだけ壊れて分離後の
+    /// 形態になる。破壊したら true。
+    pub(super) fn self_destruct_after_attack(
+        &mut self,
+        uid: &str,
+        wd: &crate::data::unit::WeaponData,
+    ) -> bool {
+        let Some(idx) = self.database.idx_by_uid(uid) else {
+            return false;
+        };
+        let u = &self.database.unit_instances[idx];
+        let self_destruct = combat::class_has(&wd.class, "自");
+        let hp_out =
+            combat::class_has(&wd.class, "失") && u.damage >= self.database.effective_max_hp(u);
+        if !self_destruct && !hp_out {
+            return false;
+        }
+        if self_destruct {
+            let parted = crate::feature::feature_value(&u.active_features, "パーツ分離")
+                .and_then(|v| v.split_whitespace().nth(1))
+                .map(str::to_string);
+            if let Some(form) = parted {
+                let nick = self
+                    .database
+                    .unit_by_name(&u.unit_data_name)
+                    .map_or_else(|| u.unit_data_name.clone(), |d| d.nickname.clone());
+                if self.set_unit_form(uid, &form) {
+                    if let Some(u) = self.database.unit_by_uid_mut(uid) {
+                        u.damage = 0;
+                        u.has_acted = true;
+                    }
+                    self.push_message(format!("{nick}は破壊されたパーツを分離させた。"));
+                    return false;
+                }
+            }
+        }
+        let u = &self.database.unit_instances[idx];
+        let (pilot, unit, party) = (u.pilot_name.clone(), u.unit_data_name.clone(), u.party);
+        self.database.remove_unit_at(idx);
+        self.fire_destruction_label(&pilot, &unit, party);
+        true
     }
 
     /// 命中/損傷/失敗/回避 時の気力増加スキルを適用する (`Unit.cs` 17078-17138)。

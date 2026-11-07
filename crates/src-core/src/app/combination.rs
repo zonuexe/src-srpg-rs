@@ -229,9 +229,14 @@ impl App {
     }
 
     /// 合体技のパートナーが EN・弾数を消費する (原典 `Unit.Attack` の「合体技のパートナーの
-    /// 弾数＆ＥＮの消費」)。同名の武器があればその武器を撃ったものとし、なければ技の
-    /// 消費 EN を払う。
-    pub(super) fn consume_partner_resources(&mut self, weapon: &WeaponData) {
+    /// 弾数＆ＥＮの消費」)。同名の武器があればその武器を使ったものとし、なければ使う
+    /// ユニット (`atk_uid`) の技の消費 EN と代償 (消・気・霊・失) を払う。自爆技・ＨＰ消費で
+    /// 壊れたパートナーはここで破壊する。
+    pub(super) fn consume_partner_resources(&mut self, atk_uid: &str, weapon: &WeaponData) {
+        let en_cost = self
+            .database
+            .idx_by_uid(atk_uid)
+            .map_or(weapon.en_consumption, |i| self.weapon_en_cost(i, weapon));
         for uid in self.selected_partners.clone() {
             let Some(i) = self.database.idx_by_uid(&uid) else {
                 continue;
@@ -239,14 +244,24 @@ impl App {
             let own = self
                 .database
                 .unit_by_name(&self.database.unit_instances[i].unit_data_name)
-                .and_then(|d| d.weapons.iter().position(|w| w.name == weapon.name));
-            match own {
-                Some(di) => self.consume_weapon_resources(i, di),
-                None if weapon.en_consumption > 0 => {
-                    self.database.unit_instances[i].en_consumed += weapon.en_consumption;
+                .and_then(|d| {
+                    let di = d.weapons.iter().position(|w| w.name == weapon.name)?;
+                    Some((di, d.weapons[di].clone()))
+                });
+            let used = match own {
+                Some((di, w)) => {
+                    self.use_weapon(i, di);
+                    w
                 }
-                None => {}
-            }
+                None => {
+                    if weapon.en_consumption > 0 {
+                        self.database.unit_instances[i].en_consumed += en_cost;
+                    }
+                    self.pay_weapon_penalties(i, weapon);
+                    weapon.clone()
+                }
+            };
+            self.self_destruct_after_attack(&uid, &used);
         }
     }
 

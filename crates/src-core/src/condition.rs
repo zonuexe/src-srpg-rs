@@ -113,7 +113,10 @@ impl Condition {
             ],
             // 踊り: 一切の行動が取れない (特殊効果攻撃属性 踊)。常に回避行動を取る
             // ニュアンス (被命中時の回避) は未モデルで、行動不能のみ反映。
-            "睡眠" | "行動不能" | "踊り" => vec![ConditionEffect::AttackDisabled],
+            // 消耗: 消 属性の武器を使った後の 1 ターン (原典 `MaxAction` が 0)。
+            "睡眠" | "行動不能" | "踊り" | "消耗" => {
+                vec![ConditionEffect::AttackDisabled]
+            }
             // 凍結 / 石化: 一切の行動が取れない (特殊効果攻撃属性 凍 / 石)。
             "凍結" | "石化" => vec![
                 ConditionEffect::AttackDisabled,
